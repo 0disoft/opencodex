@@ -592,7 +592,7 @@ provider's input. Object-identity metadata is recomputed per attempt.
 
 Compaction route identity excludes policy selectors and combos on either side; synthetic fast/effort
 suffixes are removed before identity checks. A stale selector resolved only through the default
-provider cannot establish the original serving identity and remains portable.
+provider cannot establish the original serving identity and remains portable. Queued distributed API-key bindings are revalidated after every pacing admission. A replacement releases the old permit before waiting for provider, model and key capacity; enabled round-robin performs this step even without a per-key cap. Once a turn has physically sent, a cooled binding is refused rather than rotated inside that turn.
 
 ## Anthropic Fast downgrade recovery
 

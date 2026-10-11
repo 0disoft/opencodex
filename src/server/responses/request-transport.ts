@@ -582,7 +582,8 @@ export async function prepareResponsesTransport(
       }
     } else {
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
-      if (!current && route.provider.requestPacing?.enabled && route.provider.requestPacing.keys) {
+      if (!current && route.provider.requestPacing?.enabled
+        && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")) {
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
@@ -634,7 +635,11 @@ export async function prepareResponsesTransport(
           pacingSlot: attemptSlot,
           turnScopedPacing: true,
           beforeDispatch: () => {
-            if (sent) return;
+            if (sent) {
+              if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+                && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
+              return;
+            }
             if (!selectionIsCurrent(binding)) {
               refused = true;
               throw new Error("Account selection changed before the first turn dispatch");
@@ -771,7 +776,8 @@ export async function prepareResponsesTransport(
         sameTargetToken = transportToken;
         destination = rebuilt.url;
         dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
-        pacingChanged = route.provider.requestPacing?.enabled === true && !!route.provider.requestPacing.keys;
+        pacingChanged = route.provider.requestPacing?.enabled === true
+          && (!!route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin");
         // A refreshed key must reacquire admission before the next synchronous send guard.
       }
       throw new Error("OAuth account selection changed repeatedly before dispatch");

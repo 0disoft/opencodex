@@ -93,6 +93,8 @@ credentials must never be replayed on the same token, and local runtimes have no
 preserve. It is opt-in: when the option is absent the feature is off; object presence enables
 it unless `enabled: false`.
 
+When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This does not change the saved active key. If a key cools after a turn has started, further sends in that turn are refused rather than switching its credential.
+
 ### Which account a request spends
 
 The question people ask before connecting an account is whether opencodex will draw on the

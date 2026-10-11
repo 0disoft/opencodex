@@ -8,6 +8,8 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
+import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-cooldowns";
+export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } from "./api-key-cooldowns";
 import { commitProviderApiKeySelection } from "./api-key-selection";
 import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { ProviderApiKeySelection } from "../types/provider";
@@ -24,10 +26,6 @@ import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
-
-interface KeyCooldown {
-  cooldownUntil: number;
-}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
@@ -338,11 +336,6 @@ const DEFAULT_RESET_REPLAY = {
 } as const satisfies Required<ResetReplayPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
-const keyCooldowns = new Map<string, KeyCooldown>();
-
-function cooldownKey(providerName: string, keyId: string): string {
-  return `${providerName}\0${keyId}`;
-}
 
 /**
  * Parse an upstream `Retry-After` header: numeric seconds (including `0`) or an HTTP-date.
@@ -370,16 +363,6 @@ function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): 
  * True while the given key is inside its 429 cooldown window (lazily evicting the entry once the
  * window expires). Used to skip keys that the upstream just rate-limited during failover.
  */
-function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return false;
-  if (entry.cooldownUntil <= now) {
-    keyCooldowns.delete(cooldownKey(providerName, keyId));
-    return false;
-  }
-  return true;
-}
-
 // ---- public API ----
 
 /**
@@ -722,7 +705,7 @@ export function recordDistributedKeyFailure(
   const delay = status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
     ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
   for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
-    keyCooldowns.set(cooldownKey(providerName, entry.id), { cooldownUntil: now + delay });
+    setKeyCooldown(providerName, entry.id, now + delay);
   }
   sweepExpiredOnWrite(now);
   return true;
@@ -807,7 +790,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
@@ -854,16 +837,6 @@ export function rotateKeyOn401(
   attemptedSelection?: ProviderApiKeySelection,
 ): OcxProviderConfig | null {
   return rotateKeyAfterFailure(config, providerName, 401, null, now, attemptedKey, attemptedSelection);
-}
-
-export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
-  let removed = 0;
-  for (const [key, cooldown] of keyCooldowns) {
-    if (cooldown.cooldownUntil > now) continue;
-    keyCooldowns.delete(key);
-    removed += 1;
-  }
-  return removed;
 }
 
 interface RotateProviderTransportOptions {
@@ -935,23 +908,4 @@ function applyRotatedTransport(
       : {}),
   };
   return resolveProviderTransport(providerName, retryProvider, promptCacheKey);
-}
-
-/** Clear cooldown state for a provider (e.g. after manual key management). */
-export function clearKeyCooldowns(providerName?: string): void {
-  if (!providerName) {
-    keyCooldowns.clear();
-    return;
-  }
-  const prefix = `${providerName}\0`;
-  for (const key of keyCooldowns.keys()) {
-    if (key.startsWith(prefix)) keyCooldowns.delete(key);
-  }
-}
-
-/** Visible-for-testing: get the cooldown-until timestamp for a key. */
-export function getKeyCooldownUntil(providerName: string, keyId: string, now = Date.now()): number | null {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return null;
-  return entry.cooldownUntil > now ? entry.cooldownUntil : null;
 }

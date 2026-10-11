@@ -539,7 +539,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         providerFetch(activeProvider, undefined, {
           providerName: route.providerName,
           modelId: route.modelId,
-          dispatchOverride: async (_input, init, execute) => {
+          dispatchOverride: async (_input, init, execute, reacquirePacing) => {
             if (oauthBinding) {
               if (!nativeOAuthRouteIsCurrent(oauthBinding)) throw new NativeOAuthSelectionChangedError();
               // The OAuth twin of the key check below: re-resolve through the same selection
@@ -556,12 +556,24 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 rebuildFor(oauthProvider(oauthBinding));
                 logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
               }
-            } else if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
-              const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-              if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
-                throw new Error("Provider key selection is no longer available for native Messages");
+            } else {
+              for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Messages dispatch");
+                let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+                if (!current && activeProvider._apiKeyAttempt?.distributed) {
+                  const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh);
+                }
+                if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
+                  throw new Error("Provider key selection is no longer available for native Messages");
+                }
+                rebuildFor(current);
+                if (current.requestPacing?.enabled
+                  && (current.requestPacing.keys || current.requestPacing.keySelection === "round-robin")) {
+                  if (!reacquirePacing) throw new Error("Refreshed native Messages dispatch requires pacing readmission");
+                  await reacquirePacing(current, route.modelId);
+                }
               }
-              rebuildFor(current);
             }
             // The retry closure may hold a pre-reselection request: send the current one whole.
             const wire = activeRequest;
@@ -652,6 +664,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
         now: Date.now(),
         attemptedKey: activeProvider.apiKey,
+        attemptedSelection: activeProvider._apiKeyAttempt,
       });
       if (!rotated) break;
       discard(response);

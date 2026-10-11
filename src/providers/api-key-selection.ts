@@ -1,3 +1,4 @@
+import { isKeyInCooldown } from "./api-key-cooldowns";
 import { randomUUID } from "node:crypto";
 import { mutatePersistedConfig } from "../config";
 import { publishAccountSelection } from "../lib/account-selection-events";
@@ -23,7 +24,7 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
   let row = configured;
   if (selection?.distributed) {
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
-    if (!entry || configured.apiKeySelectionRevision !== selection.revision
+    if (!entry || isKeyInCooldown(name, entry.id) || configured.apiKeySelectionRevision !== selection.revision
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
   }
