@@ -32,6 +32,16 @@ Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/oauth/oauth-anthropic-instance-registration.test.ts`, and
 `tests/oauth/oauth-anthropic-instance-refresh.test.ts`.
 
+## Subscription labels
+
+`src/oauth/anthropic-identity.ts` reads organization tiers from the authenticated profile
+without changing bearer-bound UUID proof. Browser login, refresh, local import and proven
+CLI rotation persist a validated display-only `plan`; both Anthropic instances project it
+through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_`, with organization
+kinds stripping `claude_` as fallback. Unknown tiers remain null and never come from quota
+percentages. Same-account refreshes retain an unobserved plan; observed unknown tiers clear it.
+An account replacement cannot inherit another account's label.
+
 ## Discovery credential ownership
 
 `src/oauth/model-discovery-auth.ts` checks the configured Pool 2 row before a

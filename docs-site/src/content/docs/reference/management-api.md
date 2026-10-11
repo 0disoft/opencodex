@@ -573,6 +573,11 @@ outcome fields from an older server do not establish successful recovery.
 
 ### OAuth accounts, provider keys, and data-plane keys
 
+OAuth account rows always include `plan`: a validated upstream subscription label or `null`
+when unknown. Anthropic profile tiers report labels such as `max_20x`, `max_5x`, or `pro`;
+Antigravity prefers the paid tier (for example `g1-pro-tier`) over the current tier.
+Labels are read on login/import or refresh, never inferred from quota percentages.
+
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/oauth/providers` | List providers with public OAuth login flows | — |
