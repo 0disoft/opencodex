@@ -16,6 +16,13 @@ const rows = (["ordinary", "native", "portable"] as const).flatMap(path =>
   (["key", "forward"] as const).flatMap(authMode =>
     [undefined, false, true].map(flag => ({ path, authMode, flag }))));
 
+function rejectsStrictPlaintextReplay(items: Record<string, unknown>[]): boolean {
+  return items.some(item => item.type === "reasoning" && (
+    "encrypted_content" in item || !Array.isArray(item.content)
+    || !item.content.some(part => part.type === "reasoning_text" && typeof part.text === "string" && part.text.length > 0)
+  ));
+}
+
 describe("native compact gateway serialization policy", () => {
   let home: string;
   let previousHome: string | undefined;
@@ -101,13 +108,52 @@ describe("native compact gateway serialization policy", () => {
     ]);
   });
 
-  test.each(["metadata", "null", "reasoning"])("strict gateway counterfactual rejects unsanitized %s", async defect => {
+  test.each(rows)("strict plaintext replay policy: $path $authMode $flag", async row => {
+    const plaintext = [{ type: "reasoning_text", text: "Existing plaintext fixture." }];
+    const input = [message,
+      { ...reasoning, encrypted_content: "opaque-replay-fixture", status: "completed" },
+      { type: "reasoning", summary: [], content: [], encrypted_content: "opaque-empty-fixture" },
+      { ...reasoning, content: plaintext, encrypted_content: "opaque-plaintext-fixture" },
+    ];
+    const strict = row.flag === true;
+    const items = await send(row, input, {
+      requiresAdjacentResponsesToolResults: true,
+      ...(row.flag === undefined ? {} : { preserveResponsesReasoningContent: row.flag }),
+    }, items => strict && rejectsStrictPlaintextReplay(items));
+    // Explicit wire expectations also pin ordinary and portable serialization to the native path.
+    expect(items[0]).toEqual(message);
+    expect(items.filter(item => item.type === "reasoning")).toEqual([
+      { type: "reasoning", summary: reasoning.summary, ...(strict
+        ? { content: [{ type: "reasoning_text", text: "Policy summary fixture." }] }
+        : { encrypted_content: "opaque-replay-fixture" }) },
+      { type: "reasoning", summary: [], content: strict ? [{ type: "reasoning_text", text: " " }] : [],
+        ...(!strict ? { encrypted_content: "opaque-empty-fixture" } : {}) },
+      { type: "reasoning", summary: reasoning.summary, content: strict ? plaintext : [],
+        ...(!strict ? { encrypted_content: "opaque-plaintext-fixture" } : {}) },
+    ]);
+  });
+
+  test.each((["key", "forward"] as const).flatMap(authMode =>
+    [undefined, false].map(adjacency => ({ authMode, adjacency }))))(
+    "plaintext preservation alone does not require plaintext replay: $authMode $adjacency", async row => {
+      const input = [{ ...reasoning, encrypted_content: "preservation-only-fixture" }];
+      const items = await send({ path: "native", flag: true, authMode: row.authMode }, input, {
+        preserveResponsesReasoningContent: true,
+        ...(row.adjacency === undefined ? {} : { requiresAdjacentResponsesToolResults: row.adjacency }),
+      }, () => false);
+      expect(items).toEqual([{ type: "reasoning", summary: reasoning.summary, encrypted_content: "preservation-only-fixture" }]);
+    });
+
+  test.each(["metadata", "null", "reasoning", "plaintext"])("strict gateway counterfactual rejects unsanitized %s", async defect => {
     const input = defect === "metadata" ? [{ ...message, [metadataKey]: { fixture_turn: "private" } }]
-      : defect === "null" ? [reasoning] : [{ type: "reasoning", summary: [] }];
+      : defect === "null" ? [reasoning] : defect === "plaintext"
+        ? [{ ...reasoning, content: [{ type: "reasoning_text", text: "Valid text with ciphertext fixture." }],
+          encrypted_content: "opaque-replay-fixture" }] : [{ type: "reasoning", summary: [] }];
     globalThis.fetch = (async (_url, init) => {
       const body = JSON.parse(String(init?.body));
-      const rejected = body.input.some((item: Record<string, unknown>) => defect === "metadata" ? metadataKey in item
-        : defect === "null" ? item.content === null : item.type === "reasoning");
+      const rejected = defect === "plaintext" ? rejectsStrictPlaintextReplay(body.input)
+        : body.input.some((item: Record<string, unknown>) => defect === "metadata" ? metadataKey in item
+          : defect === "null" ? item.content === null : item.type === "reasoning");
       return Response.json({}, { status: rejected ? 400 : 200 });
     }) as typeof fetch;
     const response = await fetch("https://gateway.example/v1/responses/compact", {
@@ -115,6 +161,31 @@ describe("native compact gateway serialization policy", () => {
     });
     expect(response.status).toBe(400);
     await response.text();
+  });
+
+  test.each([
+    { label: "canonical", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
+    { label: "official API", baseUrl: "https://api.openai.com/v1", authMode: "key" as const },
+  ])("strict custom replay flags do not change OpenAI compact policy: $label", async row => {
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ object: "response.compaction", output: [compactItem] });
+    }) as typeof fetch;
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses", ...row, apiKey: "canonical-key-fixture", supportsNativeCompactEndpoint: true,
+      preserveResponsesReasoningContent: true, requiresAdjacentResponsesToolResults: true,
+    };
+    const input = [{ ...reasoning, content: [{ type: "reasoning_text", text: "OpenAI plaintext fixture." }],
+      encrypted_content: "canonical-reasoning-policy-fixture" }];
+    const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({ input }), undefined, {
+      authorization: "Bearer caller-fixture",
+    }), config, { model: "", provider: "" });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(sent.input).toEqual([{ type: "reasoning", summary: reasoning.summary, content: [],
+      encrypted_content: "canonical-reasoning-policy-fixture" }]);
   });
 
   test.each([

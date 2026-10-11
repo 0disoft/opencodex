@@ -130,6 +130,7 @@ import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativ
 import { buildResponsesTransport, copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
 import { scrubOcxCompactionItems, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough } from "../../adapters/openai-responses/request-strips";
 import { dropResponsesReasoningInputItems } from "../../adapters/openai-responses/reasoning";
+import { requiresPlaintextReasoningReplay } from "../../adapters/openai-responses/passthrough";
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
@@ -918,6 +919,8 @@ export async function handleResponsesCompact(
       headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
+    const requireCompactPlaintextReasoning = !isOpenAiOperatedResponsesDestination(compactProvider)
+      && requiresPlaintextReasoningReplay(compactProvider);
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
     // so canonical reasoning stays blank and custom gateways honor their explicit plaintext policy.
@@ -929,6 +932,8 @@ export async function handleResponsesCompact(
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
           && compactProvider.preserveResponsesReasoningContent === true,
         dropNullContentChannel: !isOpenAiOperatedResponsesDestination(compactProvider),
+        stripEncryptedContent: requireCompactPlaintextReasoning,
+        requirePlaintextReasoning: requireCompactPlaintextReasoning,
       }),
     ) as typeof compactBodyRaw;
     {
@@ -1094,6 +1099,8 @@ export async function handleResponsesCompact(
         parsed: gatewayReplayParsed, providerName: route.providerName, provider: sendProvider,
         adapterName: sendProvider.adapter, codexAuthContext: sendAuthCtx, forwardHeaders: sendHeaders,
       });
+      const requireSendPlaintextReasoning = !isOpenAiOperatedResponsesDestination(sendProvider)
+        && requiresPlaintextReasoningReplay(sendProvider);
       let replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
         compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
         gatewayReplayParsed._stripReasoningEncryptedContent === true,
@@ -1101,8 +1108,9 @@ export async function handleResponsesCompact(
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(sendProvider)
           && sendProvider.preserveResponsesReasoningContent === true,
         dropNullContentChannel: !isOpenAiOperatedResponsesDestination(sendProvider),
-        stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true,
+        stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true || requireSendPlaintextReasoning,
         dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
+        requirePlaintextReasoning: requireSendPlaintextReasoning,
       }) : compactBody;
       if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.dropResponsesReasoningItems === true) {
         replayBody = dropResponsesReasoningInputItems(replayBody) as typeof replayBody;

@@ -179,6 +179,11 @@ OpenAI-operated compact destinations keep blanking even if the flag is set. Inte
 envelopes are always removed. Plaintext preservation is independent of the generation flags,
 native blob replay capability, and serving-identity checks.
 
+If the custom provider also requires adjacent tool results (`requiresAdjacentResponsesToolResults: true`),
+both ordinary Responses and native v1 remove opaque reasoning ciphertext and require plaintext replay.
+Missing `reasoning_text` is filled from the item's `summary_text`, or a minimal placeholder if no
+usable summary exists. Existing plaintext is preserved. OpenAI-operated compact keeps its own policy.
+
 For a gateway whose **v2 generation and replay** have both been verified, merge these fields into
 its existing provider configuration, retaining its real URL and configured authentication:
 
