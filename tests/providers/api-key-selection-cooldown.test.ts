@@ -104,6 +104,29 @@ describe("distributed selection cooldown validation", () => {
     expect(replacement._apiKeyAttempt?.entryId).toBe("b");
   });
 
+  test("a shorter concurrent 429 cannot undo a 401 cooldown, including duplicate references", () => {
+    const config = fixture();
+    config.providers[NAME]!.apiKeyPool!.splice(1, 0, { id: "a-duplicate", key: A });
+    const first = binding(config); const duplicate = binding(config, 1); const sibling = binding(config, 2);
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect(recordDistributedKeyFailure(config, NAME, first._apiKeyAttempt, 401, now)).toBe(true);
+      clock.mockReturnValue(now + 100);
+      expect(recordDistributedKeyFailure(config, NAME, duplicate._apiKeyAttempt, 429, now + 100, "1")).toBe(true);
+      expect(getKeyCooldownUntil(NAME, "a")).toBe(now + 600_000);
+      expect(getKeyCooldownUntil(NAME, "a-duplicate")).toBe(now + 600_000);
+      clock.mockReturnValue(now + 2_000);
+      rejected(config, first); rejected(config, duplicate); accepted(config, sibling);
+      expect(config.providers[NAME]!.apiKey).toBe(A);
+      expect(config.providers[NAME]!.apiKeySelectionRevision).toBe("revision-fixture");
+      clearKeyCooldowns(NAME);
+      accepted(config, first); accepted(config, duplicate);
+      expect(getKeyCooldownUntil(NAME, "a")).toBeNull();
+      expect(getKeyCooldownUntil(NAME, "a-duplicate")).toBeNull();
+    } finally { clock.mockRestore(); }
+  });
+
   test("a persistent binding keeps its existing validation semantics even when that entry is cooled", () => {
     const config = fixture(); const distributed = binding(config);
     cool(config, distributed);

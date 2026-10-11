@@ -6,7 +6,8 @@ function cooldownKey(providerName: string, keyId: string): string {
 }
 
 export function setKeyCooldown(providerName: string, keyId: string, cooldownUntil: number): void {
-  keyCooldowns.set(cooldownKey(providerName, keyId), { cooldownUntil });
+  const key = cooldownKey(providerName, keyId);
+  keyCooldowns.set(key, { cooldownUntil: Math.max(keyCooldowns.get(key)?.cooldownUntil ?? 0, cooldownUntil) });
 }
 
 export function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
