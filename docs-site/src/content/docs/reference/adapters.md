@@ -168,8 +168,8 @@ Responses compatibility alone is not evidence of native compaction support. Cust
 continue using portable text summaries unless the operator declares the relevant capability:
 
 - `supportsNativeCompactionTrigger: true` preserves v2 `compaction_trigger` requests and native output.
-- `supportsNativeCompactEndpoint: true` opts into the separate v1 compact endpoint. A gateway can
-  support v2 without implementing this endpoint; do not enable it just because v2 succeeds.
+- `supportsNativeCompactEndpoint: true` opts key/local/forward routes into the separate v1 endpoint.
+  OAuth retains routed compaction and its existing credential lifecycle. V2 support does not imply v1 support.
 - `decodesNativeCompactionBlobs: true` preserves native blobs on subsequent turns when there is
   no known serving-provider mismatch. Neither generation flag implies this replay capability.
 

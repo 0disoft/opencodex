@@ -677,7 +677,7 @@ conversation.
 | Route type | Behavior |
 | --- | --- |
 | Canonical ChatGPT or official OpenAI route | Tries the native `/responses/compact` endpoint with the resolved account and model authentication; HTTP 404 falls back to a regular Responses compaction turn |
-| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint using the provider's normal Responses URL, authentication, and client headers; HTTP 404 uses portable fallback |
+| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint for key/local/forward auth using the provider's normal Responses transport; HTTP 404 uses portable fallback; OAuth retains routed compaction and credential resolution |
 | Other routed model | Runs an internal, non-streaming, no-tools compaction turn with a `compaction_trigger`; requires exactly one synthetic `compaction` item whose `encrypted_content` is an `ocx1:` envelope; decodes that summary into v1 replacement history |
 
 The custom v1 endpoint capability is independent of v2 `supportsNativeCompactionTrigger`

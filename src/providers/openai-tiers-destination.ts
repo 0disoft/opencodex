@@ -75,7 +75,9 @@ export function supportsNativeResponsesCompactEndpoint(
   provider: OcxProviderConfig,
 ): boolean {
   if (isCanonicalOpenAiForwardProvider(provider)) return true;
-  if (provider.adapter === "openai-responses" && provider.supportsNativeCompactEndpoint === true) return true;
+  // Generic OAuth selection/refresh belongs to the routed Responses path, not this direct transport.
+  if (provider.adapter === "openai-responses" && provider.supportsNativeCompactEndpoint === true
+    && provider.authMode !== "oauth") return true;
   return providerName === OPENAI_API_PROVIDER_ID
     && provider.adapter === "openai-responses"
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;

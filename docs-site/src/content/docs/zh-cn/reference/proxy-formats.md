@@ -249,7 +249,7 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 | 路由类型 | 行为 |
 | --- | --- |
 | Canonical ChatGPT 或官方 OpenAI 路由 | 将请求转发到原生 `/responses/compact` 端点，并使用已解析的账号和模型认证 |
-| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint with the provider's normal Responses URL, authentication, and client headers; HTTP 404 uses portable fallback |
+| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint for key/local/forward auth using the provider's normal Responses transport; HTTP 404 uses portable fallback; OAuth retains routed compaction and credential resolution |
 | 其他路由模型 | 运行一次内部的、非流式、无工具的 compaction 轮次，并带 `compaction_trigger`；要求且只允许一个 synthetic `compaction` 项，其 `encrypted_content` 是一个 `ocx1:` 封装；把该摘要解码为 v1 替换历史 |
 
 The custom v1 capability is independent of v2 `supportsNativeCompactionTrigger` and
