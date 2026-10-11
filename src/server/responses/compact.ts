@@ -134,6 +134,7 @@ import { requiresPlaintextReasoningReplay } from "../../adapters/openai-response
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
+import { nativeCompactResponseSchema } from "../../responses/schema";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   isCodexReserveOptInMissing,
@@ -1481,8 +1482,15 @@ export async function handleResponsesCompact(
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
-      commitReasoningReplayServingIdentity(gatewayReplayParsed?._reasoningReplayScope);
-      inspectResponseLogJson(logCtx, await buffered.clone().text());
+      const compactText = await buffered.clone().text();
+      if (gatewayReplayParsed) {
+        try {
+          if (nativeCompactResponseSchema.safeParse(JSON.parse(compactText)).success) {
+            commitReasoningReplayServingIdentity(gatewayReplayParsed._reasoningReplayScope);
+          }
+        } catch { /* A malformed body cannot establish serving provenance. */ }
+      }
+      inspectResponseLogJson(logCtx, compactText);
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
     } else if (!options.compactionRoutingOverride && quotaFailure && !storedPool401ReplayAttempted) {
