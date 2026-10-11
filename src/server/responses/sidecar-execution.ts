@@ -1,4 +1,4 @@
-import { rotateAnthropicAccountOnResponse } from "../../oauth/anthropic-account-refusal";
+import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -35,7 +35,7 @@ import { persistKiroAccountState } from "../../providers/kiro-account-state-disk
 import { readDisplaySafeErrorText } from "./core-errors";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  getAnthropicPoolAccessSnapshot,
+  anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -48,6 +48,7 @@ import { normalizeLogConversationId } from "../request-log-conversation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
+import { createSidecarSendBudget } from "./sidecar-send-budget";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -70,12 +71,15 @@ export async function executeResponsesSidecars(
     | "genericFailoverLimit"
     | "replayOAuthCredentialSnapshot"
     | "applyFailoverSnapshot"
+    | "anthropicInstance"
+    | "currentAnthropicRouteDecision"
     | "anthropicRouteDecision"
     | "anthropicPoolAccountId"
     | "anthropicPoolFailovers"
     | "anthropicSessionKey"
     | "commitResolvedOAuthSelection"
     | "resolveSelectionAdapter"
+    | "resolveCopilotSelection"
     | "oauthDispatch"
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
@@ -88,16 +92,19 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "pendingHopPermit" | "noteAdapterPhysicalSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, requestState.route.providerName);
   const {
     applyFailoverSnapshot,
+    anthropicInstance,
+    currentAnthropicRouteDecision,
     anthropicSessionKey,
     commitResolvedOAuthSelection,
     resolveSelectionAdapter,
+    resolveCopilotSelection,
     oauthDispatch,
   } = transportState;
   const {
@@ -110,6 +117,7 @@ export async function executeResponsesSidecars(
   } = requestState;
   const { routedCompaction, openAiSidecar } = sidecarState;
   const { reserveCredentialHop } = sendBudgetState;
+  const sidecarBudget = createSidecarSendBudget(options, sendBudgetState, () => logCtx.usageLogInputTokens);
   const {
     commitReasoningReplayServingRoute,
     continuationStateForResponse,
@@ -190,6 +198,7 @@ export async function executeResponsesSidecars(
   // A single request may rotate once for a verification refusal. Keep this separate from the
   // broader OAuth failover count: a sidecar turn can also spend that count on rate-limit recovery.
   let antigravityValidationRotationAttempted = false;
+  /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
     responseHeaders?: Headers,
@@ -198,7 +207,7 @@ export async function executeResponsesSidecars(
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
     const antigravityValidationResponse = canRunWebSearch && route.providerName === "google-antigravity"
       && route.provider.authMode === "oauth" && originalResponse?.status === 403;
-    if (route.providerName !== "kiro" && !(route.providerName === "anthropic" && originalResponse?.status === 403)
+    if (route.providerName !== "kiro" && !(anthropicInstance && (originalResponse?.status === 403 || originalResponse?.status === 401))
       && !antigravityValidationResponse && originalResponse && originalResponse.status !== 429) return null;
     let antigravityVerification = false;
     if (antigravityValidationResponse) {
@@ -260,7 +269,8 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-403";
-      sendBudgetState.pendingHopPermit = hop.permit;
+      if (!options.comboInitialSend) sendBudgetState.pendingHopPermit = hop.permit;
+      else sidecarBudget.ownCredentialHop(hop.permit);
     }
     const rotated = !originalResponse || originalResponse.status === 429
       ? rotateProviderTransportOn429(config, route.providerName, route.provider, {
@@ -273,6 +283,8 @@ export async function executeResponsesSidecars(
       // `applyFailoverSnapshot` has already rebound the route to the sibling identity/project.
     } else if (rotated) {
       route.provider = rotated;
+      try { await resolveCopilotSelection(retryParsed ?? parsed); }
+      catch { return null; } // Keep the sidecar's original refusal when replacement negotiation fails.
     } else if (
       // A POSITIVE gate, not an early return. An early `return null` here made every later arm
       // unreachable: Anthropic never has a genericFailoverAccountId (isGenericFailoverProvider
@@ -319,13 +331,14 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-429";
-      if (canRunWebSearch && route.providerName === "google-antigravity") sendBudgetState.pendingHopPermit = hop.permit;
-      else hop.permit?.use();
+      if (!options.comboInitialSend && canRunWebSearch && route.providerName === "google-antigravity")
+        sendBudgetState.pendingHopPermit = hop.permit;
+      else sidecarBudget.ownCredentialHop(hop.permit);
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
       // the very same 429 on the main response path rotated.
-      transportState.anthropicPoolAccountId
+      anthropicInstance && transportState.anthropicPoolAccountId
     ) {
       // Same intersection for the Anthropic roster: its own per-request bound still applies,
       // and the shared budget decides whether this request may spend another send at all.
@@ -333,10 +346,10 @@ export async function executeResponsesSidecars(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
-      const nextAccountId = await rotateAnthropicAccountOnResponse(
+      const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
         originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
           config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, signal: options.abortSignal,
+          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
           allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
           canRetry: hop.allowed && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
         });
@@ -350,18 +363,18 @@ export async function executeResponsesSidecars(
         // carries none, and getAnthropicPoolAccessToken is what enforces its fail-closed
         // local-cli credential rule. Both existing Anthropic rotation sites apply the token the
         // same way.
-        const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
+        const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
         if (!admitted) throw new Error("OAuth selection changed during recovery");
         transportState.anthropicPoolAccountId = admitted.accountId;
         transportState.anthropicPoolFailovers += 1;
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
-        logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
+        logCtx.provider = formatAnthropicProviderForLog(anthropicInstance, admitted.accountId, config);
       } catch {
         hop.permit?.release();
         return null;
       }
-      recoveryKind = "anthropic-oauth-429";
-      hop.permit?.use();
+      recoveryKind = originalResponse?.status === 401 ? "oauth-401" : "anthropic-oauth-429";
+      sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
       // credential. The 429 is terminal for this sidecar turn.
@@ -447,11 +460,14 @@ export async function executeResponsesSidecars(
     const imageProviderFetch = providerFetch(
       route.provider,
       options.codexWsRuntimeIdentity,
-      { providerName: route.providerName, modelId: route.modelId },
+      { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
     );
     const imgResponse = await runWithImageBridge({
       parsed, adapter: transportState.adapter,
-      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget },
+      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta },
+      onProducerStart: sidecarBudget.takeProducerOwnership,
+      onProducerEnd: sidecarBudget.release,
+      onIterationEnd: sidecarBudget.releaseUnsentHop,
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: requestState.selectedForwardHeaders,
@@ -467,10 +483,10 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: config.stallTimeoutSec,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
-      fetchForRequest: (request, iterParsed) => {
+      fetchForRequest: (request, iterParsed, adapter) => {
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           dispatchOverride: oauthDispatch(request, iterParsed),
-          providerName: route.providerName, modelId: route.modelId,
+          providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
         });
         return fetch.unpacedFetch ?? fetch;
       },
@@ -537,12 +553,14 @@ export async function executeResponsesSidecars(
       providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         providerName: route.providerName,
         modelId: route.modelId,
+        ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const wsResponse = await runWithWebSearch({
       parsed, adapter: transportState.adapter,
-      fetchForRequest: (request, iterParsed) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+      onIterationEnd: sidecarBudget.releaseUnsentHop,
+      fetchForRequest: (request, iterParsed, adapter) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         dispatchOverride: oauthDispatch(request, iterParsed),
-        providerName: route.providerName, modelId: route.modelId,
+        providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
       }),
       incomingMeta: {
         headers: requestState.selectedForwardHeaders,
@@ -550,11 +568,11 @@ export async function executeResponsesSidecars(
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
-        ...(route.providerName === "google-antigravity" ? {
+        ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? {
           sendBudget: sendBudgetState.refundableAdapterDispatchBudget,
           onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) =>
             sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send),
-        } : {}),
+        } : sidecarBudget.incomingMeta),
       },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -587,7 +605,7 @@ export async function executeResponsesSidecars(
       stallTimeoutSec: wsPlan.stallTimeoutSec,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
-      ...(route.providerName === "google-antigravity" ? { onIterationEnd: () => {
+      ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? { onIterationEnd: () => {
         // The next Antigravity adapter dispatch claims this permit. If request construction,
         // admission or cancellation stopped it first, return the unused send allowance.
         const permit = sendBudgetState.pendingHopPermit;
