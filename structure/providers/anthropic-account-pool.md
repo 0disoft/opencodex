@@ -44,6 +44,14 @@ Refresh gives the profile read a 2-second deadline because a refresh can sit on 
 a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label.
 
+`src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
+to `currentTier.id` (paid accounts report `free-tier` there), alongside the discovered project
+on login and refresh. An unanswered `loadCodeAssist` observes nothing and keeps the stored label;
+only a parsed body can clear it. `src/oauth/plan.ts` accepts only trimmed lowercase labels of at
+most 64 characters in `[a-z0-9_.-]`. `src/oauth/store.ts` preserves this allowlisted metadata and
+`src/oauth/index.ts` projects validated stored labels for every provider, with explicit null for
+an unknown subscription. Subscription labels never establish identity, entitlement or quota capacity.
+
 ## Discovery credential ownership
 
 `src/oauth/model-discovery-auth.ts` checks the configured Pool 2 row before a
