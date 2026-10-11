@@ -570,9 +570,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Messages dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                if (!current && activeProvider._apiKeyAttempt?.distributed) {
+                if (!current && activeProvider.requestPacing?.enabled
+                  && (activeProvider.requestPacing.keys || activeProvider.requestPacing.keySelection === "round-robin")) {
                   const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
-                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh);
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
                   throw new Error("Provider key selection is no longer available for native Messages");

@@ -246,3 +246,37 @@ test("a synthetic non-replayable compact 429 never cools a distributed key", asy
   for (let index = 0; index < 3; index++) expect(getKeyCooldownUntil(NAME, `k${index + 1}`)).toBeNull();
   unchanged(config); noLeaks(config);
 });
+
+for (const cancel of [false, true]) test(`active manual key switch readmits the selected key (cancel=${cancel})`, async () => {
+  const config = fixture();
+  config.providers[NAME]!.requestPacing = { enabled: true, keys: { maxConcurrentRequests: 1 } };
+  saveConfig(config);
+  const heldA = await waitForProviderRequestSlot(NAME, config.providers[NAME]!);
+  const heldB = await waitForProviderRequestSlot(NAME, { ...config.providers[NAME]!, apiKey: KEYS[1] });
+  const abort = new AbortController();
+  const pending = start(config, abort);
+  try {
+    await queue(config, "k1");
+    config.providers[NAME]!.apiKey = KEYS[1];
+    config.providers[NAME]!.apiKeySelectionRevision = "manual-key-switch";
+    saveConfig(config);
+    heldA.release();
+    await queue(config, "k2");
+    expect(keyStatus(config, "k1")).toMatchObject({ queued: 0, inFlight: 0 });
+    expect(seen).toEqual([]);
+    if (cancel) abort.abort();
+    else heldB.release();
+    const result = await pending;
+    if (cancel) {
+      expect(result.response.status).toBe(499);
+      expect(seen).toEqual([]);
+      heldB.release();
+    } else { success(result, 1); }
+    const saved = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as OcxConfig;
+    expect(config.providers[NAME]!.apiKey).toBe(KEYS[1]);
+    expect(saved.providers[NAME]!.apiKey).toBe(KEYS[1]);
+    expect(saved.providers[NAME]!.apiKeySelectionRevision).toBe("manual-key-switch");
+    expect(saved.providers[NAME]!._apiKeyAttempt).toBeUndefined();
+    noLeaks(config);
+  } finally { abort.abort(); heldA.release(); heldB.release(); await pending.catch(() => undefined); }
+}, 10_000);

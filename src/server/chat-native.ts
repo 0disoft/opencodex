@@ -471,9 +471,10 @@ export async function runNativeChatAttempt(
                 if (outputDelivered) throw new Error("Provider key selection is unavailable during the native Chat turn");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Chat dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                if (!current && activeProvider._apiKeyAttempt?.distributed) {
+                if (!current && activeProvider.requestPacing?.enabled
+                  && (activeProvider.requestPacing.keys || activeProvider.requestPacing.keySelection === "round-robin")) {
                   const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
-                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh);
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
                   throw new Error("Provider key selection is no longer available for native Chat");

@@ -1091,9 +1091,10 @@ export async function handleResponsesCompact(
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before compact dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, sendProvider);
-                if (!current && sendProvider._apiKeyAttempt?.distributed) {
+                if (!current && sendProvider.requestPacing?.enabled
+                  && (sendProvider.requestPacing.keys || sendProvider.requestPacing.keySelection === "round-robin")) {
                   const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...sendProvider, _apiKeyAttempt: undefined });
-                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh);
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current?.apiKey || !supportsNativeResponsesCompactEndpoint(route.providerName, current)) {
                   throw new Error("Provider key selection is no longer available for compact");
