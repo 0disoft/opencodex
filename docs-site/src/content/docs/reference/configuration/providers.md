@@ -506,9 +506,10 @@ choose the model that reviews approval requests. The root `auto_review_model` se
 `$CODEX_HOME/config.toml` supplies Codex's fallback. The dashboard's global **Auto-review override**
 in Model settings stores `autoReviewOverride` in `~/.opencodex/config.json` and takes precedence
 over that fallback; the provider-scoped fields below still win on their own rows. The global setting
-must be enabled and name a model. An enabled setting with no model remains pending and leaves the
-Codex fallback in effect. The Models page reports when catalog refresh is pending; run `ocx sync`
-to retry. CLI users can read the setting with `ocx models auto-review status` or change it with
+must be enabled and name a model. An enabled setting with no model stays unapplied and leaves the
+Codex fallback in effect. A catalog refresh is a separate state: after a save it can stay pending,
+and the Models page reports it so you can retry with `ocx sync`. CLI users can read the setting with
+`ocx models auto-review status` or change it with
 `ocx models auto-review set <model|-> [--enabled <on|off>]`; use `-` to clear the model. CLI output
 recommends `ocx sync` when a refresh can be retried. If a refresh fails, the setting remains saved
 and the command exits 1. Resolve the failure before syncing. The [provider
