@@ -51,11 +51,11 @@ performs the physical send, after a dispatch override has selected or rebuilt th
 matching follows the URL sent on the wire rather than the URL supplied before credential
 revalidation; prepaid initial-send receipts follow the [spend contract](responses-spend.md#prepaid-initial-sends). At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
-The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
+Replacement-key pacing admission retains client cancellation but pauses the header deadline; the full header interval restarts after admission. The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport
 after the wrapper was built, and then calls that implementation instead of the executor. Both
-production overrides do this -- `oauthDispatch` in `request-transport.ts` and the native Chat
-key-revalidation override in `chat-native.ts` -- so both wrap the selected implementation rather
+production overrides do this -- `oauthDispatch` in `request-transport.ts`, native Chat in
+`chat-native.ts`, native Messages and keyed compact -- so they wrap the selected implementation rather
 than choosing between policy and provider transport. Reporting the executor as the boundary while
 the code let a provider-scoped transport past it is what #4992 recorded, and it is why a
 regression for this policy has to enter through `handleResponses` rather than through a

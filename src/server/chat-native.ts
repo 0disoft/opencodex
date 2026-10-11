@@ -278,8 +278,10 @@ export async function runNativeChatAttempt(
   const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget, finishLog } = execution;
   const { sendBudget } = execution;
   const { attempt } = attemptHandle;
-  const onFirstOutput = execution.onFirstOutput
+  let outputDelivered = false;
+  const notifyFirstOutput = execution.onFirstOutput
     ?? (logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined);
+  const onFirstOutput = () => { outputDelivered = true; notifyFirstOutput?.(); };
   const fail = (status: number, message: string, type?: string, code?: string | null): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
@@ -463,9 +465,15 @@ export async function runNativeChatAttempt(
             onPhysicalDispatch: comboReceipt
               ? () => { if (!physicalBudget.spendEnforced) settleNonEnforcedSend(request.url); }
               : undefined,
-            dispatchOverride: async (_input, init, execute) => {
-              if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
-                const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+            dispatchOverride: async (_input, init, execute, reacquirePacing) => {
+              for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (outputDelivered) throw new Error("Provider key selection is unavailable during the native Chat turn");
+                if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Chat dispatch");
+                let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
+                if (!current && activeProvider._apiKeyAttempt?.distributed) {
+                  const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+                  if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh);
+                }
                 if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
                   throw new Error("Provider key selection is no longer available for native Chat");
                 }
@@ -477,6 +485,11 @@ export async function runNativeChatAttempt(
                 activeRequest = buildActiveRequest();
                 try { retainRequest(activeRequest); }
                 catch (error) { activeRequest.releaseBodyObservation?.(); throw error; }
+                if (current.requestPacing?.enabled
+                  && (current.requestPacing.keys || current.requestPacing.keySelection === "round-robin")) {
+                  if (!reacquirePacing) throw new Error("Refreshed native Chat dispatch requires pacing readmission");
+                  await reacquirePacing(current, route.modelId);
+                }
               }
               // The retry closure may still hold a pre-pacing request. Replace its entire
               // wire shape, not just Authorization, and retain transport recovery flags.

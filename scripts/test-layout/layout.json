@@ -2,7 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicit": {
-    "api-key-selection-cooldown.test.ts": "providers", "messages-native-key-selection.test.ts": "claude-integration", "messages-request-id-headers.test.ts": "claude-integration",
+    "api-key-selection-cooldown.test.ts": "providers", "server-chat-native-key-selection.test.ts": "server", "compact-key-selection.test.ts": "responses", "messages-native-key-selection.test.ts": "claude-integration", "messages-request-id-headers.test.ts": "claude-integration",
     "messages-request-id-endpoint.test.ts": "claude-integration",
     "anthropic-revoked-token.test.ts": "adapters/anthropic",
     "messages-revoked-token.test.ts": "claude-integration",

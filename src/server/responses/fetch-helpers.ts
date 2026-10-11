@@ -49,6 +49,9 @@ const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
+// Replacement admission waits on the client signal, outside the response-header deadline.
+const HEADER_DEADLINE = Symbol("header-deadline");
+type HeaderDeadline = { clientSignal: AbortSignal; pause(): void; resume(): void };
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the
@@ -396,7 +399,11 @@ export function providerFetch(
       if (!options.providerName) throw new Error("Refreshed dispatch requires a named pacing owner");
       slot?.release();
       slot = undefined;
-      slot = await waitForProviderRequestSlot(providerName, refreshed, modelId, init?.signal ?? undefined);
+      const deadline = (init as Record<symbol, HeaderDeadline> | undefined)?.[HEADER_DEADLINE];
+      deadline?.pause();
+      try {
+        slot = await waitForProviderRequestSlot(providerName, refreshed, modelId, deadline?.clientSignal ?? init?.signal ?? undefined);
+      } finally { deadline?.resume(); }
     };
     try {
       const response = await unpaced(input, init, reacquirePacing);
@@ -496,9 +503,17 @@ export async function fetchWithHeaderTimeout(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new AbortController();
-    timer = setTimeout(() => {
-      if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
-    }, timeoutMs);
+    const deadline: HeaderDeadline = {
+      clientSignal: abortSignal,
+      pause() { if (timer) clearTimeout(timer); timer = undefined; },
+      resume() {
+        this.pause();
+        timer = setTimeout(() => {
+          if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
+        }, timeoutMs);
+      },
+    };
+    deadline.resume();
     const headers = new Headers(init.headers);
     // Compressed SSE can be held until the decompressor has a complete block. Streaming calls
     // default to identity for low-latency frame delivery, while an explicit caller choice wins.
@@ -512,6 +527,7 @@ export async function fetchWithHeaderTimeout(
       // Preserve the 3xx for the owner's existing response/health policy (#914, #1471).
       redirect: "manual" as const,
       signal: AbortSignal.any([abortSignal, timeout.signal]),
+      [HEADER_DEADLINE]: deadline,
       timeout: 0,
     };
     return pacing.fetchWithPacingSlot

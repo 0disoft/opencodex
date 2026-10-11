@@ -189,3 +189,74 @@ describe("#2567 the upstream fetch disables Bun's per-request idle timeout", () 
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+describe("replacement key admission excludes the response-header deadline", () => {
+  async function replacementFixture(physicalFetch: typeof fetch) {
+    const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+    const { waitForProviderRequestSlot, resetProviderRequestPacingForTest } = await import("../../src/providers/request-pacing");
+    resetProviderRequestPacingForTest();
+    const provider = { adapter: "openai-chat", baseUrl: "https://fixture.test/v1", authMode: "key", apiKey: "fixture-A",
+      apiKeyPool: [{ id: "a", key: "fixture-A", addedAt: 1 }, { id: "b", key: "fixture-B", addedAt: 2 }],
+      requestPacing: { enabled: true, keys: { maxConcurrentRequests: 1 } } } as import("../../src/types").OcxProviderConfig;
+    const replacement = { ...provider, apiKey: "fixture-B" };
+    const held = await waitForProviderRequestSlot("header-replacement", replacement);
+    let notify!: () => void;
+    const queued = new Promise<void>(resolve => { notify = resolve; });
+    const executor = providerFetch({ ...provider, fetch: physicalFetch } as typeof provider, undefined, { providerName: "header-replacement",
+      dispatchOverride: async (input, init, execute, reacquire) => {
+        notify();
+        await reacquire!(replacement);
+        return execute(input, init);
+      } });
+    return { executor, held, queued, resetProviderRequestPacingForTest };
+  }
+
+  test("a blocked replacement may wait beyond the header timeout and then send", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async () => { sends++; return new Response("ok"); }) as typeof fetch);
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, new AbortController().signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      await Bun.sleep(80);
+      expect(sends).toBe(0);
+      fixture.held.release();
+      expect(await (await pending).text()).toBe("ok");
+      expect(sends).toBe(1);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+
+  test("the fresh header deadline still aborts a stalled physical send", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async (_input, init) => {
+      sends++;
+      return new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) reject(init.signal.reason);
+        else init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+      });
+    }) as typeof fetch);
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, new AbortController().signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      await Bun.sleep(80);
+      fixture.held.release();
+      await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(sends).toBe(1);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+
+  test("client abort remains active while replacement admission waits", async () => {
+    let sends = 0;
+    const fixture = await replacementFixture((async () => { sends++; return new Response("ok"); }) as typeof fetch);
+    const controller = new AbortController();
+    const pending = fetchWithHeaderTimeout("https://fixture.test/v1/chat/completions", {}, controller.signal, 25, false, fixture.executor);
+    void pending.catch(() => {});
+    try {
+      await fixture.queued;
+      controller.abort(new DOMException("client cancelled", "AbortError"));
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(sends).toBe(0);
+    } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
+  });
+});

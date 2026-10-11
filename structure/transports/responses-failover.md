@@ -156,7 +156,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 
 ## Upstream key attempt accounting
 
-Key identity is sealed at guarded physical dispatch after queued selections are rebuilt. Distributed selections retain their request-local entry and revision. A rebuild after selection drift releases the old per-key lease and reacquires admission for the refreshed key; the send guard checks again after waiting. Turn-scoped adapters follow the same rule before invocation. Unpaced dispatch without a readmission owner fails closed. Replay notification errors release acquired slots before propagating, including pre-acquired-slot dispatch.
+Key identity is sealed at guarded physical dispatch after queued selections are rebuilt. Distributed selections retain their request-local entry and revision. A rebuild after selection drift releases the old per-key lease and reacquires admission for the refreshed key; the send guard checks again after waiting. Turn-scoped adapters follow the same rule before invocation. Native Chat, Messages and keyed compact all rebuild stale queued selections before dispatch. Replacement admission pauses the response-header deadline and retains client cancellation; the header deadline restarts once admission completes. Unpaced dispatch without a readmission owner fails closed. Replay notification errors release acquired slots before propagating, including pre-acquired-slot dispatch.
 Raw adapter terminal usage is recorded before continuation, search, or image loops merge it;
 repeated parsing of one physical response does not count it twice. Key changes preserve the
 previous attempt while retaining the active attempt object shared by streaming/combo callbacks.
