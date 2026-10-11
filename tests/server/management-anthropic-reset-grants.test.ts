@@ -286,6 +286,32 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
     expect(await consume(bDeps, body, "admin-token")).toMatchObject({ status: 403, json: { error: { code: "session_required" } } });
     expect(up.claims).toHaveLength(0);
   });
+
+  test("a journaled reset admits that account, and any other result does not", async () => {
+    const admitted: string[] = [];
+    const up = upstream();
+    const routeDeps = deps(up, { admitReset: async id => { admitted.push(id); } });
+    expect(await consume(routeDeps)).toMatchObject({ status: 200, json: { code: "reset", replayed: false } });
+    expect(await consume(routeDeps)).toMatchObject({ status: 200, json: { code: "reset", replayed: true } });
+    expect(admitted).toEqual(["acct-1", "acct-1"]);
+
+    const limited = upstream();
+    const limitedAdmitted: string[] = [];
+    limited.claim = () => new Response("", { status: 429 });
+    expect(await consume(
+      deps(limited, { admitReset: async id => { limitedAdmitted.push(id); } }),
+      { accountId: "acct-1", grantId: GRANT, operationId: OP2 },
+    )).toMatchObject({ status: 200, json: { code: "rate_limited" } });
+    expect(limitedAdmitted).toEqual([]);
+
+    const broken = upstream();
+    const brokenAdmitted: string[] = [];
+    const failed = await consume(deps(broken, {
+      admitReset: async () => { brokenAdmitted.push("called"); throw new Error("reread failed for " + EMAIL); },
+    }), { accountId: "acct-1", grantId: GRANT, operationId: "7b6e5d4c-3a29-4f80-9b71-2c4d6e8f0a11" });
+    expect(failed).toMatchObject({ status: 200, json: { code: "reset", replayed: false } });
+    expect(brokenAdmitted).toEqual(["called"]);
+  });
 });
 
 describe("default dependencies (no injected route deps)", () => {
