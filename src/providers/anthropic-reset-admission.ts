@@ -55,7 +55,9 @@ export async function admitAnthropicAccountAfterReset(
   if (outcome === "newer") return;
   // Move any usage read that started before the grant onto a stale generation
   // before dropping the cached row, so it cannot republish the pre-reset bars.
-  anthropicCooldownRecoveryFor(instance).noteAnthropicCooldownMutation(accountId);
+  // "cleared" and "uncovered" already advanced the generation in routing (an
+  // uncovered entry moved with it, so the reread below can still recover it).
+  if (outcome === "absent") anthropicCooldownRecoveryFor(instance).noteAnthropicCooldownMutation(accountId);
   forgetCachedProviderAccountQuota(instance, accountId);
   await fetchAnthropicAccountQuota(instance, accountId, true, undefined, true);
 }

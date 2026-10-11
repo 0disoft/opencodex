@@ -209,3 +209,29 @@ test("a reset reread sends its own usage request instead of joining an older one
   }
   expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
 });
+
+test("an uncovered reset-derived cooldown can still be recovered by the reset reread", async () => {
+  const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
+  const { projectStoredOAuthAccountHealth } = await import("../../src/oauth/health");
+  const now = Date.now();
+  const id = f.ids[0];
+  const resetAt = new Date(now + 86_400_000).toISOString();
+  let weekly = 100;
+  globalThis.fetch = (async () => Response.json({
+    five_hour: { utilization: 0, resets_at: resetAt }, seven_day: { utilization: weekly, resets_at: resetAt }, limits: [],
+  })) as typeof fetch;
+  const headers = new Headers({
+    "anthropic-ratelimit-unified-7d-status": "rejected",
+    "anthropic-ratelimit-unified-7d-reset": String(Math.floor((now + 86_400_000) / 1000)),
+  });
+  // No Retry-After: a reset-derived cooldown, which a fresh usage reading may release.
+  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccount429(f.config, id, null, now, headers);
+  const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
+  // The grant cleared only the five-hour window, so it cannot lift the weekly refusal itself.
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["five_hour"] });
+  expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("cooldown");
+  // A reread proving the weekly window has headroom recovers it through the existing path.
+  weekly = 0;
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["five_hour"] });
+  expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
+});

@@ -446,10 +446,14 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const entry = upstreamHealth.get(accountId);
     if (!entry) return "absent";
     if (entry.recordedAt >= claimedAt) return "newer";
-    if (entry.refusalStatus !== 429) return "uncovered";
     const named = entry.rejectedQuotaWindows?.length ? entry.rejectedQuotaWindows : entry.refusedQuotaWindows;
     const required: readonly AnthropicQuotaWindow[] = named.length ? named : ["five-hour", "weekly"];
-    if (!required.every(window => clearedWindows.has(window))) return "uncovered";
+    if (entry.refusalStatus !== 429 || !required.every(window => clearedWindows.has(window))) {
+      // Kept, but reads that started before the grant are now stale. Move the entry to the same
+      // new generation so a fresh usage read can still recover a reset-derived cooldown.
+      entry.cooldownGeneration = noteAnthropicCooldownMutation(accountId);
+      return "uncovered";
+    }
     upstreamHealth.delete(accountId);
     noteAnthropicCooldownMutation(accountId);
     return "cleared";
