@@ -67,7 +67,7 @@ Authorization: Bearer <admin-token>
 | `GET /api/grok/reset-coupons?accountId=...` | アクティブまたは指定された xAI アカウントの残り Grok 請求リセット トークンと有効期限ウィンドウを読む | 400 アカウントがありません; 401 未認証; 502 上流 gRPC-Web エラー |
 | `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 上流エラー; 503 台帳容量 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | 1 つの Anthropic OAuth アカウントの Claude 使用量上限リセット付与を読み取ります。対象資格、各付与の残り回数、有効期間、リセットされる使用量枠、再試行可能な未確定の試行が含まれます。 | 400 該当するアカウントなし; 401 再認証が必要; 502 上流を利用できません |
-| `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。ダッシュボードセッションが必要です。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
+| `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。ダッシュボードセッションが必要です。 確定した `reset` がアカウントのローカルなクールダウンを解除するのは、それが請求の初回ジャーナル記録より前に記録されたクォータ拒否で、付与がクリア済みと報告したウィンドウがその拒否の示したすべてのウィンドウ（示していなければ両方のウィンドウ）を覆う場合に限ります。請求の処理中に記録された拒否、エンタイトルメント拒否、覆われないウィンドウは、同じ ID での再送でも残ります。キャッシュ済みのクォータは破棄され、新しいリクエストで使用量を再取得するため、プールは元の期限より前にそのアカウントを選べます。モデルファミリーの除外は、その再取得でファミリーが拒否されなくなったと確認されるまで残ります。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
 | `POST /api/claude-desktop/apply` |保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。 400/500 書き込み失敗 |
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
@@ -236,6 +236,8 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 信頼できる初回モデル一覧が確定するまで、有効な `PUT /api/selected-models` と `PUT /api/model-presets` も HTTP 409 とコード `initial_model_selection_pending` を返します。`GET /api/models` などでモデル一覧を更新し、取得に成功してから再試行してください。
 
 ### OAuth アカウント、プロバイダー キー、およびデータプレーン キー
+
+OAuth アカウントの行には常に `plan` が含まれます。検証済みの上流サブスクリプションラベル、または不明な場合は `null` です。Anthropic のプロフィール tier は `max_20x`、`max_5x`、`pro` などのラベルで報告され、Antigravity は現在の tier より有料 tier（例: `g1-pro-tier`）を優先します。ラベルはログイン・インポート時または更新時に読み取り、クォータの割合からは推測しません。
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |

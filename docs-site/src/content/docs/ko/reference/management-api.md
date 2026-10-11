@@ -67,7 +67,7 @@ Authorization: Bearer <admin-token>
 | `GET /api/grok/reset-coupons?accountId=...` | 활성 또는 지정된 xAI 계정의 남은 Grok billing reset 토큰과 유효 기간을 읽습니다 | 400 누락된 account; 401 인증되지 않음; 502 upstream gRPC-Web 오류 |
 | `POST /api/grok/reset-coupons/consume` | 사용할 수 있는 reset coupon을 교환합니다. 본문은 `{ accountId?, tokenId?, operationId? }`. 선택적 `operationId`(UUIDv4)는 교환을 멱등하게 만듭니다 — 같은 id를 반복하면 이중 교환 없이 저장된 결과를 재생합니다. | 400 잘못된 JSON/UUID; 401 인증되지 않음; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream 오류; 503 ledger 용량 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | Anthropic OAuth 계정 하나의 Claude 사용량 리셋 grant를 읽습니다. 사용 가능 여부, grant별 남은 리셋 수와 유효 기간, 초기화하는 한도, 아직 다시 보낼 수 있는 미확인 시도를 함께 돌려줍니다 | 400 일치하는 계정 없음; 401 재로그인 필요; 502 upstream 응답 없음 |
-| `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `operationId`(UUIDv4)는 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도합니다. 대시보드 세션이 필요합니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
+| `POST /api/anthropic/reset-grants/consume` | 리셋 grant 하나를 사용합니다. 본문은 `{ accountId, grantId, operationId }`이고, `operationId`(UUIDv4)는 upstream 요청 ID로 그대로 전송되므로 같은 값을 다시 보내면 같은 요청을 재시도합니다. 대시보드 세션이 필요합니다. 정산된 `reset`은 그 쿨다운이 claim이 처음 저널에 기록되기 전에 기록된 할당량 거절이고, grant가 비웠다고 보고한 창이 그 거절이 지목한 모든 창(지목한 창이 없으면 두 창 모두)을 덮을 때에만 해당 계정의 로컬 쿨다운을 해제합니다. claim이 진행 중일 때 기록된 거절, 권한(entitlement) 거절, 덮이지 않은 창은 같은 ID로 다시 보내도 그대로 남습니다. 캐시된 할당량은 버리고 새 요청으로 사용량을 다시 읽으므로, 풀은 이전 기한 전에 그 계정을 고를 수 있습니다. 모델 계열 제외는 그 재조회가 해당 계열이 더 이상 거절되지 않는다고 확인할 때까지 유지됩니다. | 400 잘못된 본문; 401 재로그인 필요; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 저널 사용 중, 열 수 없음, 또는 가득 참 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop 라우팅/네이티브 프로필을 읽거나 저장합니다 | 400 잘못되었거나 사용할 수 없는 할당 |
 | `POST /api/claude-desktop/apply` | 저장된 프로필을 Claude Desktop의 관리형 구성에 기록합니다 | 400/500 기록 실패 |
 | `GET /api/claude-desktop/status` | 저장된 프로필과 적용된 프로필, Desktop 상태를 확인합니다 | 400 상태 읽기 실패 |
@@ -244,6 +244,8 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 신뢰할 수 있는 초기 모델 목록을 확보하기 전에는 유효한 `PUT /api/selected-models`와 `PUT /api/model-presets` 요청도 HTTP 409와 `initial_model_selection_pending` 코드를 반환합니다. `GET /api/models` 등으로 모델 목록을 정상적으로 갱신한 뒤 재시도하세요.
 
 ### OAuth 계정, provider key, 데이터 평면 키
+
+OAuth 계정 행에는 항상 `plan`이 들어갑니다. 검증된 upstream 구독 레이블이거나, 알 수 없으면 `null`입니다. Anthropic 프로필 tier는 `max_20x`, `max_5x`, `pro` 같은 레이블로 보고되고, Antigravity는 현재 tier보다 유료 tier(예: `g1-pro-tier`)를 우선합니다. 레이블은 로그인·가져오기 또는 갱신 때 읽으며, quota 비율에서 추정하지 않습니다.
 
 | HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |

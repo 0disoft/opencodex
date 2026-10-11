@@ -67,7 +67,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/grok/reset-coupons?accountId=...` | 讀取活躍或指定 xAI 帳號剩餘的 Grok 計費重置 token 與有效期間 | 400 缺失帳號；401 未認證；502 上游 gRPC-Web 錯誤 |
 | `POST /api/grok/reset-coupons/consume` | 兌換一個合格的 reset coupon。請求主體為 `{ accountId?, tokenId?, operationId? }`。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：重複相同 id 會重播持久化結果，而不會重複兌換。 | 400 無效的 JSON/UUID；401 未認證；409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`；502 上游錯誤；503 ledger 容量 / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | 讀取單一 Anthropic OAuth 帳號的 Claude 用量額度重設機會：資格、每次重設的剩餘次數、有效期間及可清除的用量視窗，以及任何尚未確認但仍可重試的使用嘗試 | 400 找不到相符帳號；401 需要重新認證；502 上游無法使用 |
-| `POST /api/anthropic/reset-grants/consume` | 使用一次重設機會。請求主體為 `{ accountId, grantId, operationId }`；`operationId` 是傳送至上游作為請求 ID 的 UUIDv4，重複傳送即可重試同一次使用請求。需要儀表板工作階段。 | 400 無效的請求主體；401 需要重新認證；403 `session_required`；409 `grant_not_usable`、`in_flight`、`unresolved_prior_operation`、`unknown_outcome_expired`、`operation_identity_mismatch`；500 `journal_write_failed`；502 `unknown_outcome`；503 日誌忙碌、無法使用或已滿 |
+| `POST /api/anthropic/reset-grants/consume` | 使用一次重設機會。請求主體為 `{ accountId, grantId, operationId }`；`operationId` 是傳送至上游作為請求 ID 的 UUIDv4，重複傳送即可重試同一次使用請求。需要儀表板工作階段。 已結算的 `reset` 只有在以下情況才會解除該帳號的本機冷卻：該冷卻是在請求首次寫入日誌之前記錄的配額拒絕，且授權回報已清除的視窗涵蓋該拒絕指出的所有視窗（若未指出任何視窗，則兩個視窗都須清除）。請求進行中記錄的拒絕、權限拒絕或未涵蓋的視窗都會保留，以相同 ID 重送時亦然。快取的配額會被捨棄，並以新的請求重新讀取用量，因此帳號池可以在原期限之前選用該帳號。模型系列排除會保留，直到這次重新讀取證明該系列不再被拒絕。 | 400 無效的請求主體；401 需要重新認證；403 `session_required`；409 `grant_not_usable`、`in_flight`、`unresolved_prior_operation`、`unknown_outcome_expired`、`operation_identity_mismatch`；500 `journal_write_failed`；502 `unknown_outcome`；503 日誌忙碌、無法使用或已滿 |
 | `GET, PUT /api/claude-desktop` | 讀取或持久化 Claude Desktop 路由／原生設定檔 | 400 無效或不可用指派 |
 | `POST /api/claude-desktop/apply` | 將儲存的設定檔寫入 Claude Desktop 的受管設定 | 400/500 寫入失敗 |
 | `GET /api/claude-desktop/status` | 檢查已儲存 vs 已套用設定檔與 Desktop 健康 | 400 狀態讀取失敗 |
@@ -229,6 +229,8 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 尚未確認可靠的初始模型清單時，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 請求也會回傳 HTTP 409 和代碼 `initial_model_selection_pending`。請使用 `GET /api/models` 等方式更新模型清單，成功後再重試。
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
+
+OAuth 帳號列一律包含 `plan`：經過驗證的上游訂閱標籤，未知時為 `null`。Anthropic 個人資料的等級以 `max_20x`、`max_5x` 或 `pro` 等標籤回報；Antigravity 優先採用付費等級（例如 `g1-pro-tier`），而非目前等級。標籤在登入、匯入或重新整理時讀取，絕不從配額百分比推斷。
 
 | 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
