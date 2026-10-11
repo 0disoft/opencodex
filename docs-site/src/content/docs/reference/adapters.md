@@ -173,6 +173,12 @@ continue using portable text summaries unless the operator declares the relevant
 - `decodesNativeCompactionBlobs: true` preserves native blobs on subsequent turns when there is
   no known serving-provider mismatch. Neither generation flag implies this replay capability.
 
+Custom native v1 also honors `preserveResponsesReasoningContent: true` for plaintext reasoning
+input, just like ordinary custom Responses requests. Absent or `false` keeps content blank;
+OpenAI-operated compact destinations keep blanking even if the flag is set. Internal `ocxr1:`
+envelopes are always removed. Plaintext preservation is independent of the generation flags,
+native blob replay capability, and serving-identity checks.
+
 For a gateway whose **v2 generation and replay** have both been verified, merge these fields into
 its existing provider configuration, retaining its real URL and configured authentication:
 

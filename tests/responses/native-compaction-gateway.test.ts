@@ -194,15 +194,66 @@ describe("native gateway transport", () => {
     expect(calls[3]!.input).not.toContainEqual(compactItem);
   });
 
+  test.each([
+    { authMode: "key" as const, preserve: true },
+    { authMode: "key" as const, preserve: false },
+    { authMode: "key" as const, preserve: undefined },
+    { authMode: "forward" as const, preserve: true },
+    { authMode: "forward" as const, preserve: false },
+    { authMode: "forward" as const, preserve: undefined },
+  ])("custom v1 honors plaintext reasoning policy: $authMode $preserve", async row => {
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ object: "response.compaction", output: [compactItem] });
+    }) as typeof fetch;
+    const provider = { ...gateway, authMode: row.authMode, supportsNativeCompactEndpoint: true,
+      ...(row.preserve === undefined ? {} : { preserveResponsesReasoningContent: row.preserve }),
+    };
+    const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
+    const content = [{ type: "reasoning_text", text: "Retained plaintext reasoning fixture." }];
+    const reasoning = { type: "reasoning", summary: [], content };
+    const internal = { ...reasoning, status: "completed", encrypted_content: "ocxr1:internal-signature-fixture" };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({
+      input: [reasoning, internal, compactItem],
+    })), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    const expectedReasoning = { ...reasoning, content: row.preserve === true ? content : [] };
+    expect(sent.input).toEqual([expectedReasoning, expectedReasoning, {
+      type: "message", role: "user", content: [{ type: "input_text", text: compactionItemToText(nativeBlob) }],
+    }]);
+    expect(JSON.stringify(sent)).not.toContain("ocxr1:");
+    await response.text();
+  });
+
+  test.each([true, false, undefined])("canonical v1 blanks plaintext reasoning despite preservation: %s", async preserve => {
+    let sent: Record<string, unknown> = {};
+    globalThis.fetch = (async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Response.json({ object: "response.compaction", output: [compactItem] });
+    }) as typeof fetch;
+    const provider = { ...gateway, baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const,
+      ...(preserve === undefined ? {} : { preserveResponsesReasoningContent: preserve }),
+    };
+    const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
+    const reasoning = { type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: "Canonical reasoning fixture." }] };
+    const response = await handleResponsesCompact(compactionRequest(baseCompactionBody({ input: [reasoning, {
+      ...reasoning, encrypted_content: "ocxr1:canonical-signature-fixture",
+    }] }), undefined, { authorization: "Bearer caller-fixture" }), config, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(sent.input).toEqual([{ ...reasoning, content: [] }, { ...reasoning, content: [] }]);
+    await response.text();
+  });
+
   test.each([true, false])("v1 sanitizes reasoning replay after a serving credential change: %s", async changed => {
     const calls: Record<string, unknown>[] = [];
-    const reasoning = { type: "reasoning", id: "rs_gateway_fixture", summary: [{ type: "summary_text", text: "Retained reasoning fixture." }], encrypted_content: "reasoning-ciphertext-fixture" };
+    const reasoning = { type: "reasoning", id: "rs_gateway_fixture", content: [{ type: "reasoning_text", text: "Credential-bound reasoning fixture." }], summary: [{ type: "summary_text", text: "Retained reasoning fixture." }], encrypted_content: "reasoning-ciphertext-fixture" };
     const idOnly = { type: "reasoning", id: "rs_id_only_fixture", summary: [] };
     globalThis.fetch = (async (_url, init) => {
       calls.push(JSON.parse(String(init?.body)));
       return Response.json({ id: "resp_reasoning_fixture", status: "completed", output: [reasoning, compactItem] });
     }) as typeof fetch;
-    const provider = { ...nativeProvider, supportsNativeCompactEndpoint: true };
+    const provider = { ...nativeProvider, supportsNativeCompactEndpoint: true, preserveResponsesReasoningContent: true };
     const config = { ...getDefaultConfig(), defaultProvider: "gw", providers: { gw: provider } };
     const headers = { "thread-id": `reasoning-replay-${changed}-fixture` };
     const first = await handleResponses(compactionRequest(baseCompactionBody(), undefined, headers), config, { model: "", provider: "" });
@@ -212,7 +263,7 @@ describe("native gateway transport", () => {
     expect((await compact.json()).output).toEqual([reasoning, compactItem]);
     expect(calls).toHaveLength(2);
     const input = calls[1]!.input as Record<string, unknown>[];
-    expect(input[0]).toEqual(changed ? { type: "reasoning", summary: reasoning.summary } : reasoning);
+    expect(input[0]).toEqual(changed ? { type: "reasoning", content: reasoning.content, summary: reasoning.summary } : reasoning);
     expect(input[1]).toEqual(changed ? { type: "reasoning", summary: [] } : idOnly);
     expect(input[2]).toEqual(changed ? {
       type: "message", role: "user", content: [{ type: "input_text", text: compactionItemToText(nativeBlob) }],

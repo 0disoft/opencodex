@@ -919,12 +919,15 @@ export async function handleResponsesCompact(
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
-    // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
+    // so canonical reasoning stays blank and custom gateways honor their explicit plaintext policy.
     // #5095: the compact endpoint forwards `raw` directly, so it needs the same legacy dotted
     // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
     // which is the request a long task depends on to keep going.
     const compactBody = repairLegacyDottedToolCallNames(
-      sanitizeReasoningInputContent(compactBodyRaw),
+      sanitizeReasoningInputContent(compactBodyRaw, {
+        preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
+          && compactProvider.preserveResponsesReasoningContent === true,
+      }),
     ) as typeof compactBodyRaw;
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
@@ -1093,6 +1096,8 @@ export async function handleResponsesCompact(
         compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
         gatewayReplayParsed._stripReasoningEncryptedContent === true,
       ), {
+        preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(sendProvider)
+          && sendProvider.preserveResponsesReasoningContent === true,
         stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true,
         dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
       }) : compactBody;
