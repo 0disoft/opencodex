@@ -604,7 +604,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
             const selection = activeProvider._apiKeyAttempt;
             const ownsDistributedKey = !selection?.distributed
-              || (headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
+              || (activeProvider.apiKeyTransport === "bearer"
+                ? headers.get("authorization") === `Bearer ${activeProvider.apiKey}` && !headers.has("x-api-key")
+                : headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,

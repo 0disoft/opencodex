@@ -23,7 +23,7 @@ let home: string;
 let previousHome: string | undefined;
 let releaseOwner: () => void;
 let upstream: ReturnType<typeof Bun.serve> | undefined;
-let seen: { key: string | null; path: string; body: unknown }[];
+let seen: { key: string | null; authorization?: string | null; path: string; body: unknown }[];
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -45,7 +45,7 @@ afterEach(async () => {
 
 function fixture(count = 2, rejectFirst = false, keyCap = true, statuses: number[] = []): OcxConfig {
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
-    seen.push({ key: req.headers.get("x-api-key"), path: new URL(req.url).pathname, body: await req.json() });
+    seen.push({ key: req.headers.get("x-api-key") ?? req.headers.get("authorization")?.replace(/^Bearer /, "") ?? null, authorization: req.headers.get("authorization"), path: new URL(req.url).pathname, body: await req.json() });
     const status = statuses[seen.length - 1] ?? (rejectFirst && seen.length === 1 ? 401 : 200);
     if (status !== 200) return Response.json({ type: "error",
       error: { type: status === 401 ? "authentication_error" : "rate_limit_error", message: "rejected fixture key" } },
@@ -298,4 +298,25 @@ describe("native Messages distributed key selection", () => {
       unchanged(config); noLeaks(config);
     } finally { abort.abort(); first.release(); second.release(); await pending.catch(() => undefined); }
   }, 10_000);
+});
+
+for (const statusCode of [401, 429]) for (const overridden of [false, true]) test(`Messages bearer ${statusCode} owns the configured key transport (override=${overridden})`, async () => {
+  const config = fixture(2, false, true, [statusCode, 200]);
+  provider(config).apiKeyTransport = "bearer";
+  saveConfig(config);
+  if (overridden) provider(config).headers = { Authorization: "Bearer fixture-bearer-override" };
+  const result = await start(config, new AbortController());
+  if (overridden) {
+    expect(result.response.status).toBe(statusCode);
+    expect(seen.map(entry => entry.key)).toEqual(["fixture-bearer-override"]);
+    expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+    expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+  } else {
+    nativeSuccess(result);
+    expect(seen.map(entry => entry.key)).toEqual(KEYS.slice(0, 2));
+    expect(seen.map(entry => entry.authorization)).toEqual(KEYS.slice(0, 2).map(key => `Bearer ${key}`));
+    expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
+    expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+  }
+  unchanged(config); noLeaks(config);
 });
