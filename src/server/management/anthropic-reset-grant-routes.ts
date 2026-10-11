@@ -75,8 +75,8 @@ export interface AnthropicResetGrantRouteDeps {
   listAccountIds: () => string[];
   activeAccountId: () => string | null;
   accessTokenFor: (accountId: string) => Promise<string>;
-  /** Lift local admission after a journaled reset. Tests omit it. */
-  admitReset?: (accountId: string) => Promise<void>;
+  /** Lift local admission after a journaled reset settled at `settledAt`. Tests omit it. */
+  admitReset?: (accountId: string, settledAt: number) => Promise<void>;
 }
 
 function defaultDepsFor(ctx: ManagementContext, provider: AnthropicInstanceId): AnthropicResetGrantRouteDeps | null {
@@ -112,7 +112,7 @@ function defaultDepsFor(ctx: ManagementContext, provider: AnthropicInstanceId): 
       if (!targetCurrent() || !owner) throw new Error("reset owner changed");
       return snapshot.accessToken;
     },
-    admitReset: accountId => admitAnthropicAccountAfterReset(provider, accountId),
+    admitReset: (accountId, settledAt) => admitAnthropicAccountAfterReset(provider, accountId, settledAt),
   };
 }
 
@@ -214,11 +214,12 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   if (deps.isCurrent?.() === false) return scopedFail(401, "auth_failed");
   const ledger = { journalPath: deps.journalPath, now: deps.now?.() };
   // Retry-after cooldowns survive a usage probe. A journaled reset, including a
-  // replay after the process died before admission, has to lift this account.
-  // A failed reread must not turn a spent grant into an error.
-  const admitJournaledReset = async (code: string): Promise<void> => {
+  // replay after the process died before admission, has to lift this account,
+  // but only cooldowns recorded before it settled. A failed reread must not
+  // turn a spent grant into an error.
+  const admitJournaledReset = async (code: string, settledAt: number): Promise<void> => {
     if (code !== "reset" || deps.isCurrent?.() === false) return;
-    try { await deps.admitReset?.(accountId); }
+    try { await deps.admitReset?.(accountId, settledAt); }
     catch { /* The grant is already spent. */ }
   };
 
@@ -254,7 +255,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   }
   switch (begin.kind) {
     case "replay":
-      await admitJournaledReset(begin.code);
+      await admitJournaledReset(begin.code, begin.settledAt);
       return jsonResponse(
         { provider, code: begin.code, replayed: true, resetsLeft: begin.resetsLeft, accountId, grantId, operationId },
         200, ctx.req, ctx.config,
@@ -291,7 +292,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   // Report what the journal holds. An overlapping same-id attempt may have
   // settled first; its answer is the canonical one.
   const replayed = settled.code !== answer.code || settled.resetsLeft !== answer.resetsLeft;
-  await admitJournaledReset(settled.code);
+  await admitJournaledReset(settled.code, deps.now?.() ?? Date.now());
   return jsonResponse(
     {
       provider,

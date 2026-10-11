@@ -115,3 +115,47 @@ test("a five-hour-only reset lifts the account cooldown without releasing a mode
   expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(f.modelQuota.anthropicFamilyRejected(id, "claude-fable-5", Date.now())).toBe(true);
 });
+
+test("a replayed reset leaves a refusal recorded after it settled", async () => {
+  const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
+  const { projectStoredOAuthAccountHealth } = await import("../../src/oauth/health");
+  const now = Date.now();
+  const id = f.ids[0];
+  let sends = 0;
+  globalThis.fetch = (async () => { sends += 1; return Response.json({ limits: [] }); }) as typeof fetch;
+  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccountRefusal(f.config, id, 403, "3600", now);
+  const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
+  await admitAnthropicAccountAfterReset("anthropic", id, now - 1);
+  expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
+  expect(sends).toBe(0);
+  await admitAnthropicAccountAfterReset("anthropic", id, now);
+  expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("healthy");
+});
+
+test("a reset reread sends its own usage request instead of joining an older one", async () => {
+  const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
+  const { fetchAnthropicAccountQuota } = await import("../../src/providers/quota/anthropic-account-quota");
+  const { getCachedProviderAccountQuota } = await import("../../src/providers/quota/account-cache");
+  const id = f.ids[0];
+  const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+  const usage = (utilization: number) => Response.json({
+    five_hour: { utilization, resets_at: resetAt }, seven_day: { utilization, resets_at: resetAt }, limits: [],
+  });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends += 1;
+    if (sends === 1) { await held; return usage(100); }
+    return usage(0);
+  }) as typeof fetch;
+  const older = fetchAnthropicAccountQuota("anthropic", id, true);
+  for (let i = 0; i < 200 && sends === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(sends).toBe(1);
+  await admitAnthropicAccountAfterReset("anthropic", id);
+  expect(sends).toBe(2);
+  expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
+  release();
+  await older;
+  expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
+});

@@ -10,7 +10,7 @@ import { refreshAntigravityToken } from "../../src/oauth/google-antigravity";
 import { mergeOAuthPlan } from "../../src/oauth/plan";
 import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME,
@@ -25,12 +25,18 @@ beforeEach(() => {
   writeFileSync(join(process.env.CLAUDE_CONFIG_DIR, ".credentials.json"), "{}");
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
 });
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  }
-  removeTreeWithRetry(home);
+  // Store writes start async config-dir hardening (icacls on Windows); drain it under the
+  // config dir before removing the tree, and restore the environment last.
+  await drainAndRemoveFixtureRoots({
+    roots: [{ path: join(home, "ocx"), remove: () => {} }, { path: home }],
+    restoreEnvironment: () => {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    },
+  });
 });
 function credential(overrides: Partial<OAuthCredentials> = {}): OAuthCredentials {
   return { access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3_600_000,
@@ -136,6 +142,14 @@ test("plan merging preserves unobserved metadata but never inherits across ident
   const after = credential({ access: "synthetic-new", anthropicIdentity: bindAnthropicIdentity("synthetic-new", "synthetic-other") });
   expect(mergeOAuthPlan(after, before)).toBeUndefined();
   expect(() => mergeAnthropicIdentity(after, before)).toThrow("Anthropic credential identity changed");
+});
+test("a same-account login whose tier read failed keeps the stored plan", async () => {
+  await saveCredential("anthropic", credential({ plan: "max_20x" }));
+  await saveCredential("anthropic", credential({ access: "synthetic-access-2" }));
+  expect(getLoginStatus("anthropic").accounts!).toHaveLength(1);
+  expect(getLoginStatus("anthropic").accounts![0]!.plan).toBe("max_20x");
+  await saveCredential("anthropic", credential({ access: "synthetic-access-3", plan: null }));
+  expect(getLoginStatus("anthropic").accounts![0]!.plan).toBeNull();
 });
 test("an explicit account replacement cannot inherit previous plan", async () => {
   await saveCredential("anthropic", credential({ plan: "max_20x" }));

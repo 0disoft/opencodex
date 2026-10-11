@@ -923,7 +923,10 @@ export async function saveCredentialWithReceipt(
     } else if (identity) {
       const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
-        existing.credential = safe;
+        // Same identity: a login whose tier read failed keeps the stored label (plan absent),
+        // while an observed unknown (plan null) still clears it.
+        const plan = mergeOAuthPlan(safe, existing.credential);
+        existing.credential = plan === undefined ? safe : { ...safe, plan };
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;

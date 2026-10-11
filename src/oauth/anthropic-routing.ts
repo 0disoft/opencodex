@@ -98,6 +98,8 @@ interface AccountHealth {
   rejectedQuotaWindows?: AnthropicQuotaWindow[];
   /** Monotonic fence so an older quota probe cannot erase a newer refusal. */
   cooldownGeneration: number;
+  /** When the refusal was recorded; a reset settled earlier must not lift it. */
+  recordedAt: number;
 }
 
 interface AffinityEntry {
@@ -286,6 +288,7 @@ type RoutingFacadeSymbol =
   | "settleAnthropicCooldownRecovery"
   | "getAnthropicAccountHealthSnapshot"
   | "clearAnthropicAccountCooldown"
+  | "clearAnthropicAccountCooldownRecordedBy"
   | "sweepExpiredAnthropicRoutingHealth"
   | "clearAnthropicAccountPoolState"
   | "anthropicSessionAffinitySizeForTests"
@@ -414,6 +417,16 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const cleared = upstreamHealth.delete(accountId);
     if (cleared) noteAnthropicCooldownMutation(accountId);
     return cleared;
+  }
+
+  /** Lift a cooldown recorded no later than `cutoff`; a refusal recorded after it stays. */
+  function clearAnthropicAccountCooldownRecordedBy(accountId: string, cutoff: number): "cleared" | "absent" | "newer" {
+    const entry = upstreamHealth.get(accountId);
+    if (!entry) return "absent";
+    if (entry.recordedAt > cutoff) return "newer";
+    upstreamHealth.delete(accountId);
+    noteAnthropicCooldownMutation(accountId);
+    return "cleared";
   }
 
   function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {
@@ -1093,6 +1106,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
         : resetDerived !== undefined ? "reset-derived" : "default",
       ...(resetDerived ? { rejectedQuotaWindows: resetDerived.rejectedQuotaWindows } : {}),
       cooldownGeneration,
+      recordedAt: now,
     });
     sweepExpiredOnWrite(now);
     clearAnthropicSessionAffinityForAccount(failedAccountId);
@@ -1272,7 +1286,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     instance, captureAnthropicManualSelectionGeneration, anthropicAccountPoolConfig,
     isAnthropicAccountPoolEnabled, anthropicAutoSwitchThreshold, anthropicAccountAutoSwitchThreshold,
     captureAnthropicCooldownRecovery, settleAnthropicCooldownRecovery, getAnthropicAccountHealthSnapshot,
-    clearAnthropicAccountCooldown, sweepExpiredAnthropicRoutingHealth, clearAnthropicAccountPoolState,
+    clearAnthropicAccountCooldown, clearAnthropicAccountCooldownRecordedBy, sweepExpiredAnthropicRoutingHealth, clearAnthropicAccountPoolState,
     anthropicSessionAffinitySizeForTests, getEligibleAnthropicAccounts, hasAnthropicFailoverQuorum,
     forgetAnthropicFailoverQuorum, getAnthropicPoolRetryAfterSeconds, pickAlternateAnthropicAccount,
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
@@ -1350,6 +1364,10 @@ export function getAnthropicAccountHealthSnapshot(
 
 export function clearAnthropicAccountCooldown(accountId: string): boolean {
   return anthropicRoutingFor("anthropic").clearAnthropicAccountCooldown(accountId);
+}
+
+export function clearAnthropicAccountCooldownRecordedBy(accountId: string, cutoff: number): "cleared" | "absent" | "newer" {
+  return anthropicRoutingFor("anthropic").clearAnthropicAccountCooldownRecordedBy(accountId, cutoff);
 }
 
 export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {

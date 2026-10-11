@@ -9,6 +9,12 @@
  *
  * Model-family exclusions are not cleared here. Only that reread may release
  * one, and only when its payload proves the family is no longer rejected.
+ *
+ * `settledAt` is when the journal recorded the reset. A replay of an old
+ * operation may only lift a cooldown recorded before that point; a refusal
+ * recorded afterwards is newer evidence than the grant and stays untouched.
+ * The reread always dispatches its own usage request: joining a read that
+ * started before the grant could republish the pre-reset bars.
  */
 import { anthropicRoutingFor } from "../oauth/anthropic-routing";
 import type { AnthropicInstanceId } from "./anthropic-instance";
@@ -19,11 +25,12 @@ import { anthropicCooldownRecoveryFor } from "./quota/anthropic-cooldown-recover
 export async function admitAnthropicAccountAfterReset(
   instance: AnthropicInstanceId,
   accountId: string,
+  settledAt: number = Date.now(),
 ): Promise<void> {
+  if (anthropicRoutingFor(instance).clearAnthropicAccountCooldownRecordedBy(accountId, settledAt) === "newer") return;
   // Move any usage read that started before the grant onto a stale generation
   // before dropping the cached row, so it cannot republish the pre-reset bars.
   anthropicCooldownRecoveryFor(instance).noteAnthropicCooldownMutation(accountId);
-  anthropicRoutingFor(instance).clearAnthropicAccountCooldown(accountId);
   forgetCachedProviderAccountQuota(instance, accountId);
-  await fetchAnthropicAccountQuota(instance, accountId, true);
+  await fetchAnthropicAccountQuota(instance, accountId, true, undefined, true);
 }
