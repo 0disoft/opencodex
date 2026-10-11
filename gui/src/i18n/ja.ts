@@ -1663,6 +1663,7 @@ export const ja: Record<TKey, string> = {
   "pws.saveSettings": "保存",
   "pws.keySelection": "API キーの選択",
   "pws.keyActive": "有効なキー優先（既存の動作）",
+  "pws.keyLimitInvalid": "キー別の制限は対応範囲内の正の値にし、間隔と同時リクエスト数は整数にしてください。",
   "pws.keyRoundRobin": "ラウンドロビン",
   "pws.keyLimits": "キーごとの制限",
   "pws.keySharedQuota": "プロバイダー全体の制限も適用されます。同じプロジェクトのキーは割当量を共有する場合があります。RPM はトークン数や日次上限を制御しません。",

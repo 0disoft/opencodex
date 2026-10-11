@@ -54,6 +54,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  rotateProviderTransportOn401,
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { fastPolicyForModel } from "../providers/service-tier";
@@ -432,7 +433,7 @@ export async function runNativeChatAttempt(
 
   const send = async (
     request: AdapterRequest,
-    recovery?: "rate-limit-429" | "key-429" | UpstreamSendRecovery,
+    recovery?: "rate-limit-429" | "key-429" | "key-401" | UpstreamSendRecovery,
     singleShot = false,
   ): Promise<Response> => {
     try {
@@ -575,8 +576,11 @@ export async function runNativeChatAttempt(
     }
     // Same reason as above, plus a second one: rotating here would write a cooldown against
     // a key that rate-limited nothing, and that false signal outlives the request.
-    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
-      const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
+    while ((response.status === 429 || (response.status === 401 && activeProvider._apiKeyAttempt?.distributed))
+      && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+      const failureStatus = response.status;
+      const rotate = failureStatus === 401 ? rotateProviderTransportOn401 : rotateProviderTransportOn429;
+      const rotated = rotate(config, route.providerName, activeProvider, {
         retryAfter: response.headers.get("retry-after"),
         now: Date.now(),
         attemptedKey: activeProvider.apiKey,
@@ -595,7 +599,7 @@ export async function runNativeChatAttempt(
       releaseRetainedRequest();
       activeRequest = buildActiveRequest();
       retainRequest(activeRequest);
-      response = await send(activeRequest, "key-429");
+      response = await send(activeRequest, failureStatus === 401 ? "key-401" : "key-429");
     }
   } catch (error) {
     releaseRetainedRequest();

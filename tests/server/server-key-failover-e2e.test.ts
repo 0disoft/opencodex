@@ -130,6 +130,48 @@ describe("server 429 key failover (end-to-end)", () => {
     expect(providerApiKeySelectionIsCurrent(config, "current", current)).toBe(true);
   });
 
+  test("Responses readmits a refreshed key and waits for its existing concurrency lease", async () => {
+    const seen: string[] = [];
+    upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+      seen.push(req.headers.get("authorization")!);
+      return Response.json({ id: "paced", object: "chat.completion", choices: [
+        { index: 0, message: { role: "assistant", content: "readmitted" }, finish_reason: "stop" },
+      ] });
+    } });
+    const config = { port: 0, defaultProvider: "paced", providers: { paced: {
+      adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+      authMode: "key", apiKey: "synthetic-first",
+      apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+      requestPacing: { enabled: true, keys: { maxConcurrentRequests: 1 } },
+    } } } as OcxConfig;
+    saveConfig(config);
+    const first = await waitForProviderRequestSlot("paced", config.providers.paced);
+    const second = await waitForProviderRequestSlot("paced", { ...config.providers.paced, apiKey: "synthetic-second" });
+    const server = startTrackedServer();
+    const abort = new AbortController();
+    try {
+      const pending = fetch(new URL("/v1/responses", server.url), { method: "POST", signal: abort.signal,
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "paced/test", input: "hello", stream: false }) });
+      await Bun.sleep(30);
+      const selected = await managementFetch(new URL("/api/providers/keys/active", server.url), {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "paced", id: "second" }),
+      });
+      expect(selected.status).toBe(200);
+      await selected.text();
+      first.release();
+      await Bun.sleep(30);
+      expect(seen).toEqual([]);
+      second.release();
+      const response = await pending;
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("readmitted");
+      expect(seen).toEqual(["Bearer synthetic-second"]);
+    } finally {
+      abort.abort(); first.release(); second.release(); await server.stop(true);
+      resetProviderRequestPacingForTest();
+    }
+  });
+
   test.each(["responses", "chat/completions"])("%s logs only the key selected after pacing", async surface => {
     resetUsageReadCacheForTests();
     let now = 0;

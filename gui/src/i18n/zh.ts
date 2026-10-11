@@ -2910,6 +2910,7 @@ export const zh: Record<TKey, string> = {
   "pws.saveSettings": "保存",
   "pws.keySelection": "API 密钥选择",
   "pws.keyActive": "活动密钥优先（现有行为）",
+  "pws.keyLimitInvalid": "每个密钥的限制必须为支持范围内的正数；间隔和并发数必须为整数。",
   "pws.keyRoundRobin": "轮询",
   "pws.keyLimits": "每个密钥的限制",
   "pws.keySharedQuota": "提供商限制仍对所有密钥合并生效。同一项目的密钥可能共享配额；RPM 不限制令牌或每日预算。",

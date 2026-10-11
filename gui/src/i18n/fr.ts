@@ -1742,6 +1742,7 @@ export const fr: Record<TKey, string> = {
   "pws.optionalPlaceholder": "Facultatif",
   "pws.keySelection": "Sélection de clé API",
   "pws.keyActive": "Clé active (comportement existant)",
+  "pws.keyLimitInvalid": "Les limites par clé doivent être positives et dans la plage autorisée ; l’intervalle et la simultanéité doivent être des entiers.",
   "pws.keyRoundRobin": "Tourniquet",
   "pws.keyLimits": "Limites par clé",
   "pws.keySharedQuota": "Les limites du fournisseur restent communes à toutes les clés. Un même projet peut partager ses quotas ; les RPM ne limitent ni les jetons ni le budget quotidien.",

@@ -151,7 +151,7 @@ import {
   UnsupportedContentEncodingError,
 } from "../request-decompress";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { hasKeyPoolFailover, recordDistributedKeyFailure, rotateProviderTransportOn429, selectProactiveApiKeyTransport } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
@@ -1152,6 +1152,7 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
+    if (upstream.status === 401) recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, 401);
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")

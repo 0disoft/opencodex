@@ -2890,6 +2890,7 @@ export const de: Record<TKey, string> = {
   "pws.saveSettings": "Speichern",
   "pws.keySelection": "API-Schlüsselauswahl",
   "pws.keyActive": "Aktiver Schlüssel (bisheriges Verhalten)",
+  "pws.keyLimitInvalid": "Grenzen pro Schlüssel müssen positiv und im unterstützten Bereich sein; Intervall und Parallelität müssen ganze Zahlen sein.",
   "pws.keyRoundRobin": "Round-Robin",
   "pws.keyLimits": "Limits pro Schlüssel",
   "pws.keySharedQuota": "Provider-Limits gelten weiterhin für alle Schlüssel. Schlüssel desselben Projekts können Kontingente teilen; RPM begrenzt keine Token- oder Tagesbudgets.",

@@ -159,6 +159,7 @@ test("invalid key limits block save and discard restores the stored distribution
   await setInput(numbers[2]!, "0");
   await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
   expect(patches).toEqual([]);
+  expect(container.textContent).toContain("Per-key limits must be positive");
   await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-ghost")!.click(); });
   expect(numbers[2]!.value).toBe("1"); expect(numbers[0]!.value).toBe("15");
   await act(async () => { container.unmount(); });

@@ -710,6 +710,24 @@ export function rateLimitRetryDelayMs(
  * rebuilds from this committed row, reapplies registry metadata, and retains only explicit
  * runtime transport state (`fetch` and generated OpenCode session affinity).
  */
+/** Record a request-local key failure without selecting or sending a replacement. */
+export function recordDistributedKeyFailure(
+  config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
+  status: 401 | 429, now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+): boolean {
+  const provider = config.providers[providerName];
+  if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
+  if (!failed || provider.apiKeySelectionRevision !== selection.revision) return false;
+  const delay = status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
+    ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
+  for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
+    keyCooldowns.set(cooldownKey(providerName, entry.id), { cooldownUntil: now + delay });
+  }
+  sweepExpiredOnWrite(now);
+  return true;
+}
+
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
@@ -725,12 +743,7 @@ function rotateKeyAfterFailure(
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
 
   if (attemptedSelection?.distributed) {
-    const failed = provider.apiKeyPool?.find(entry => entry.id === attemptedSelection.entryId && entry.key === attemptedSelection.reference);
-    if (!failed || provider.apiKeySelectionRevision !== attemptedSelection.revision) return null;
-    const delay = failureStatus === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
-      ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) keyCooldowns.set(cooldownKey(providerName, entry.id), { cooldownUntil: now + delay });
-    sweepExpiredOnWrite(now);
+    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
     if (!(provider.apiKeyPool ?? []).some(entry => !isKeyInCooldown(providerName, entry.id, now))) return null;
     return allocateDistributedKey(providerName, provider, now);
   }

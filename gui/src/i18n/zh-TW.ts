@@ -1459,6 +1459,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.saveSettings": "儲存",
   "pws.keySelection": "API 金鑰選擇",
   "pws.keyActive": "優先使用作用中金鑰（現有行為）",
+  "pws.keyLimitInvalid": "每個金鑰的限制必須為支援範圍內的正數；間隔和並行數必須為整數。",
   "pws.keyRoundRobin": "輪詢",
   "pws.keyLimits": "每個金鑰的限制",
   "pws.keySharedQuota": "供應商限制仍對所有金鑰合計生效。同一專案的金鑰可能共享配額；RPM 不限制權杖或每日預算。",

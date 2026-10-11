@@ -1781,6 +1781,7 @@ export const tr: Record<TKey, string> = {
   "pws.saveSettings": "Kaydet",
   "pws.keySelection": "API anahtarı seçimi",
   "pws.keyActive": "Etkin anahtar (mevcut davranış)",
+  "pws.keyLimitInvalid": "Anahtar sınırları pozitif ve desteklenen aralıkta olmalıdır; aralık ve eşzamanlılık tam sayı olmalıdır.",
   "pws.keyRoundRobin": "Sıralı dağıtım",
   "pws.keyLimits": "Anahtar başına sınırlar",
   "pws.keySharedQuota": "Sağlayıcı sınırları tüm anahtarlara uygulanır. Aynı projedeki anahtarlar kota paylaşabilir; RPM, token veya günlük bütçeyi sınırlamaz.",

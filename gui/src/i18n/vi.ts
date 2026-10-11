@@ -1765,6 +1765,7 @@ export const vi: Record<TKey, string> = {
   "pws.saveSettings": "Lưu",
   "pws.keySelection": "Chọn khóa API",
   "pws.keyActive": "Khóa đang hoạt động (hành vi hiện tại)",
+  "pws.keyLimitInvalid": "Giới hạn mỗi khóa phải dương và trong phạm vi hỗ trợ; khoảng thời gian và số yêu cầu đồng thời phải là số nguyên.",
   "pws.keyRoundRobin": "Luân phiên",
   "pws.keyLimits": "Giới hạn mỗi khóa",
   "pws.keySharedQuota": "Giới hạn nhà cung cấp vẫn áp dụng cho mọi khóa. Khóa cùng dự án có thể dùng chung hạn mức; RPM không giới hạn token hay ngân sách ngày.",

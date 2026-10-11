@@ -1795,6 +1795,7 @@ export const en = {
   "pws.saveSettings": "Save",
   "pws.keySelection": "API key selection",
   "pws.keyActive": "Active key (existing behavior)",
+  "pws.keyLimitInvalid": "Per-key limits must be positive and within the supported range; interval and concurrency must be whole numbers.",
   "pws.keyRoundRobin": "Round-robin",
   "pws.keyLimits": "Per-key limits",
   "pws.keySharedQuota": "Provider limits still apply across all keys. Keys in the same project may share quotas; RPM limits do not enforce token or daily budgets.",

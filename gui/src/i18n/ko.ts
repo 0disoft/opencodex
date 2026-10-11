@@ -2937,6 +2937,7 @@ export const ko: Record<TKey, string> = {
   "pws.saveSettings": "저장",
   "pws.keySelection": "API 키 선택 방식",
   "pws.keyActive": "활성 키 우선 (기존 동작)",
+  "pws.keyLimitInvalid": "키별 제한은 허용 범위의 양수여야 하며, 간격과 동시 요청 수는 정수여야 합니다.",
   "pws.keyRoundRobin": "라운드로빈",
   "pws.keyLimits": "키별 제한",
   "pws.keySharedQuota": "프로바이더 제한은 모든 키에 합산 적용됩니다. 같은 프로젝트의 키는 할당량을 공유할 수 있으며, RPM 제한은 토큰·일일 한도를 관리하지 않습니다.",

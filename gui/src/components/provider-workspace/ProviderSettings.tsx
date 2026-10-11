@@ -254,7 +254,7 @@ export default function ProviderSettings({
         || (field !== "requestsPerMinute" && !Number.isSafeInteger(value))
         || (field === "requestsPerMinute" && (value < 1 / 60 || value > 60_000))
         || (field === "minIntervalMs" && value > 3_600_000))) {
-        setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
+        setMsg({ ok: false, text: t("pws.keyLimitInvalid") }); return false;
       }
       if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models && !pacingDraft.keys && pacingDraft.keySelection !== "round-robin") {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;

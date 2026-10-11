@@ -29,7 +29,7 @@ import { readBoundedResponseBytes, type BoundedBytesResult } from "../lib/bounde
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
-import { selectProactiveApiKeyTransport } from "../providers/key-failover";
+import { recordDistributedKeyFailure, selectProactiveApiKeyTransport } from "../providers/key-failover";
 import { requestPacingOverloadResponse } from "./responses/pacing-overload";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
@@ -757,6 +757,7 @@ export async function handleImages(
     catch { console.error("[images] Failed to release probe lease"); }
   };
   let url: string;
+  let recordKey401 = () => {};
   // Each branch is re-checked as it is entered: the forward check is defence in
   // depth for the pre-filter above, and the keyed check runs before a key
   // rotation is committed.
@@ -814,6 +815,7 @@ export async function handleImages(
       throw error;
     }
     const provider = warmKeyProvider ?? candidates.keyed.provider;
+    recordKey401 = () => { recordDistributedKeyFailure(config, providerName, provider._apiKeyAttempt, 401); };
     // No fall back to the earlier snapshot once a pick has happened. The picker COMMITS its
     // choice before returning, so if the chosen reference will not resolve -- revoked keychain
     // entry, unset env var -- sending the previous key would authenticate a non-idempotent
@@ -872,6 +874,7 @@ export async function handleImages(
       // compact already set this; the credential-bearing sidecars did not.
       redirect: "manual",
     });
+    if (upstreamResponse.status === 401) recordKey401();
     const observed = await readImageResponseBytes(upstreamResponse, {
       maxBytes: IMAGES_RESPONSE_MAX_BYTES,
       signal: linkedSignal.signal,

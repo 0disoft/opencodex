@@ -17,6 +17,53 @@ import type { OcxProviderConfig } from "../../src/types";
 
 afterEach(() => resetProviderRequestPacingForTest());
 
+test("dispatch readmission observes the refreshed key interval and releases its replacement lease", async () => {
+  const clock = fakePacingClock();
+  setProviderRequestPacingRuntimeForTest(clock.runtime);
+  const row = { ...provider({ enabled: true, keys: { minIntervalMs: 100, maxConcurrentRequests: 1 } }), apiKey: "first" };
+  const refreshed = { ...row, apiKey: "second" };
+  (await waitForProviderRequestSlot("readmission", refreshed)).release();
+  const sends: number[] = [];
+  const physical = Object.assign(async () => { sends.push(clock.now()); return new Response("fixture"); }, { preconnect() {} }) as typeof fetch;
+  const executor = providerFetch({ ...row, fetch: physical }, undefined, { providerName: "readmission",
+    dispatchOverride: async (input, init, execute, reacquire) => {
+      await reacquire!(refreshed);
+      return execute(input, init);
+    },
+  });
+  const pending = fetchWithHeaderTimeout("https://example.test/v1/chat/completions", {}, new AbortController().signal, 5000, false, executor);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(sends).toEqual([]);
+  clock.advanceBy(100);
+  const response = await pending;
+  expect(sends).toEqual([100]);
+  await response.text();
+  const slot = await waitForProviderRequestSlot("readmission", row);
+  slot.release();
+});
+
+test("abort during refreshed-key admission releases the old lease without sending", async () => {
+  const row = { ...provider({ enabled: true, keys: { maxConcurrentRequests: 1 } }), apiKey: "first" };
+  const refreshed = { ...row, apiKey: "second" };
+  const held = await waitForProviderRequestSlot("readmission-abort", refreshed);
+  const controller = new AbortController();
+  let sends = 0;
+  const executor = providerFetch(row, undefined, { providerName: "readmission-abort",
+    dispatchOverride: async (_input, _init, _execute, reacquire) => {
+      await reacquire!(refreshed);
+      sends++;
+      return new Response("fixture");
+    },
+  });
+  const pending = executor("https://example.test/v1/chat/completions", { signal: controller.signal });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  controller.abort();
+  await expect(pending).rejects.toThrow();
+  expect(sends).toBe(0);
+  const slot = await waitForProviderRequestSlot("readmission-abort", row);
+  slot.release(); held.release();
+});
+
 function provider(requestPacing: OcxProviderConfig["requestPacing"]): OcxProviderConfig {
   return { adapter: "openai-chat", baseUrl: "https://example.test/v1", requestPacing };
 }
