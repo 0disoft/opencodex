@@ -16,13 +16,26 @@ import { invalidateClaudeCodeServedCatalog } from "./cli-catalog";
  *   env.HTTPS_PROXY         = http://opencodex:<token>@127.0.0.1:<proxy port>
  *   env.NODE_EXTRA_CA_CERTS = <configDir>/claude-intercept/ca.pem
  *
+ * A third key keeps loopback off that proxy. Claude Code otherwise sends local HTTP MCP traffic
+ * (`POST http://127.0.0.1:<port>/mcp`) through it, and the proxy only tunnels CONNECT to
+ * non-loopback hosts, so every loopback MCP server failed with a 405 (#6936):
+ *
+ *   env.NO_PROXY            = <user entries>,127.0.0.1,localhost,::1
+ *
  * Ownership is tracked by value, never by a marker key. The CA path is the anchor: it lives
  * under opencodex's own config directory, so only a block whose `NODE_EXTRA_CA_CERTS` names
  * that file is treated as ours. A user's own proxy or CA setting is left alone.
+ *
+ * `NO_PROXY` is shared with the user, so opencodex only appends the loopback entries that are
+ * missing, as one trailing run in canonical order, and leaves a `*` value alone. Removal strips
+ * exactly such a trailing run and drops the key only when nothing else is left in it.
  */
 
 export const CLAUDE_INTERCEPT_MANAGED_ENV = ["HTTPS_PROXY", "NODE_EXTRA_CA_CERTS"] as const;
 export type ClaudeInterceptManagedEnv = typeof CLAUDE_INTERCEPT_MANAGED_ENV[number];
+
+/** Loopback hosts Claude Code must reach directly, in the order opencodex appends them. */
+export const CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"] as const;
 
 export interface ClaudeInterceptEnv {
   HTTPS_PROXY: string;
@@ -79,6 +92,59 @@ function isOwnedCaPath(value: unknown, ownedCaPath: string): value is string {
   return typeof value === "string" && value.trim() === ownedCaPath;
 }
 
+/** Canonical index of a loopback bypass entry, or -1. `[::1]` is the bracketed form of `::1`. */
+function loopbackEntryIndex(entry: string): number {
+  const normalized = entry.trim().toLowerCase();
+  return CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY.indexOf(
+    (normalized === "[::1]" ? "::1" : normalized) as typeof CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY[number],
+  );
+}
+
+function noProxyEntries(value: string): string[] {
+  return value.split(/[,\s]+/).filter(entry => entry.length > 0);
+}
+
+/**
+ * The NO_PROXY value apply writes, or null when the current one already bypasses loopback
+ * (or is not a string opencodex can safely extend).
+ */
+export function mergeClaudeInterceptNoProxy(current: unknown): string | null {
+  if (current !== undefined && typeof current !== "string") return null;
+  const entries = noProxyEntries(current ?? "");
+  if (entries.includes("*")) return null;
+  const present = new Set(entries.map(loopbackEntryIndex));
+  const missing = CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY.filter((_, index) => !present.has(index));
+  if (missing.length === 0) return null;
+  const base = (current ?? "").replace(/[,\s]+$/, "");
+  return base.length === 0 ? missing.join(",") : `${base},${missing.join(",")}`;
+}
+
+/**
+ * Undo the append: drop a trailing run of loopback entries in canonical order. Returns the
+ * remaining value, undefined when the key should be deleted, or the input when there is
+ * nothing of ours to strip.
+ */
+export function stripClaudeInterceptNoProxy(current: unknown): unknown {
+  if (typeof current !== "string") return current;
+  const segments = current.split(",");
+  let end = segments.length;
+  let lastIndex: number = CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY.length;
+  while (end > 0) {
+    const index = loopbackEntryIndex(segments[end - 1]!);
+    if (index === -1 || index >= lastIndex) break;
+    lastIndex = index;
+    end -= 1;
+  }
+  if (end === segments.length) return current;
+  const rest = segments.slice(0, end).join(",");
+  return rest.trim().length === 0 ? undefined : rest;
+}
+
+function setOrDelete(env: Record<string, unknown>, key: string, value: unknown): void {
+  if (value === undefined) delete env[key];
+  else env[key] = value;
+}
+
 /** Classify the current settings env against the values this router would write. */
 export function inspectClaudeInterceptSettings(
   expected: ClaudeInterceptEnv,
@@ -91,7 +157,12 @@ export function inspectClaudeInterceptSettings(
   const proxy = env.HTTPS_PROXY;
   const ca = env.NODE_EXTRA_CA_CERTS;
   if (proxy === undefined && ca === undefined) return { kind: "absent" };
-  if (proxy === expected.HTTPS_PROXY && ca === expected.NODE_EXTRA_CA_CERTS) return { kind: "applied", env: expected };
+  // An owned block that still routes loopback into the proxy is stale, so the startup migrate
+  // and every reconcile repair installs written before the bypass existed.
+  const bypassesLoopback = mergeClaudeInterceptNoProxy(env.NO_PROXY) === null;
+  if (proxy === expected.HTTPS_PROXY && ca === expected.NODE_EXTRA_CA_CERTS && bypassesLoopback) {
+    return { kind: "applied", env: expected };
+  }
   const caOurs = isOwnedCaPath(ca, expected.NODE_EXTRA_CA_CERTS);
   const proxyOurs = proxy === undefined || isClaudeInterceptProxyUrl(proxy);
   if (caOurs && proxyOurs) {
@@ -137,6 +208,9 @@ export function captureClaudeInterceptSettingsRollback(
   const before = readSettings(path);
   if ("error" in before && before.error !== "missing") return () => false;
   const previous = "doc" in before ? { ...envRecord(before.doc) } : {};
+  // What apply writes over the captured value; rollback restores NO_PROXY only while it still
+  // holds exactly that, so a user edit made after the apply survives.
+  const appliedNoProxy = mergeClaudeInterceptNoProxy(previous.NO_PROXY) ?? previous.NO_PROXY;
   return () => {
     try {
       const target = typeof expected === "function" ? expected() : expected;
@@ -145,9 +219,9 @@ export function captureClaudeInterceptSettingsRollback(
       const env = envRecord(current.doc);
       if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== target[key])) return false;
       for (const key of CLAUDE_INTERCEPT_MANAGED_ENV) {
-        if (previous[key] === undefined) delete env[key];
-        else env[key] = previous[key];
+        setOrDelete(env, key, previous[key]);
       }
+      if (env.NO_PROXY === appliedNoProxy) setOrDelete(env, "NO_PROXY", previous.NO_PROXY);
       if (Object.keys(env).length === 0) delete current.doc.env;
       else current.doc.env = env;
       writeSettings(path, current.doc);
@@ -171,7 +245,9 @@ export function applyClaudeInterceptSettings(
   if (state.kind === "applied") return { ok: true, changed: false, path };
   const read = readSettings(path);
   const doc: SettingsDoc = "doc" in read ? read.doc : {};
-  doc.env = { ...envRecord(doc), ...env };
+  const current = envRecord(doc);
+  const noProxy = mergeClaudeInterceptNoProxy(current.NO_PROXY);
+  doc.env = { ...current, ...env, ...(noProxy === null ? {} : { NO_PROXY: noProxy }) };
   writeSettings(path, doc);
   return { ok: true, changed: true, path };
 }
@@ -195,7 +271,7 @@ export function migrateClaudeInterceptSettings(
   return applyClaudeInterceptSettings(env, configDir);
 }
 
-/** Remove the managed keys, but only the values opencodex owns. */
+/** Remove the managed keys and the loopback bypass, but only the values opencodex owns. */
 export function removeClaudeInterceptSettings(
   ownedCaPath: string,
   configDir = claudeConfigDir(),
@@ -209,6 +285,7 @@ export function removeClaudeInterceptSettings(
   if (!isOwnedCaPath(env.NODE_EXTRA_CA_CERTS, ownedCaPath)) return { ok: true, changed: false, path };
   delete env.NODE_EXTRA_CA_CERTS;
   if (isClaudeInterceptProxyUrl(env.HTTPS_PROXY)) delete env.HTTPS_PROXY;
+  setOrDelete(env, "NO_PROXY", stripClaudeInterceptNoProxy(env.NO_PROXY));
   if (Object.keys(env).length === 0) delete read.doc.env;
   else read.doc.env = env;
   writeSettings(path, read.doc);
