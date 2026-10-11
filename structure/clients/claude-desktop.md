@@ -120,7 +120,11 @@ and the auto-detect (WPAD) flag in `Connections\DefaultConnectionSettings`, and 
 a bypass, no covering proxy, or an undecidable PAC script or WPAD. A failed registry read is
 reported as unreadable, never as an absent value, and a stale settings env never earns an `ok`. It
 never prints the proxy value and never records a doctor failure, because the CLI and other clients
-still route. When picker mode is armed, Desktop uses its app-owned fixed egress proxy instead of this system-proxy path; the manual bypass observation above remains for picker-off or picker-pending installs.
+still route. An applied, selected picker profile uses Desktop's app-owned fixed egress proxy
+while that proxy is available, including when missing trust leaves the picker pending and
+`claude.ai` tunnels relay blindly. Missing trust preserves the profile and its selection.
+The system-proxy observation applies to picker-off installs and pending installs with no
+applied picker profile.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
@@ -184,6 +188,11 @@ before tunnel selection or dialing. Authentication and loopback refusal remain i
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
 Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
+
+Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on
+only within the chosen first-party mode: either an explicit Desktop integration `false` or
+`claudeCode.intercept.picker: false` disables it. Default intent does not install certificate
+trust; startup and status only inspect trust, and explicit activation owns installation.
 
 On macOS and Windows, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy

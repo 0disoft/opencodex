@@ -1,11 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
 import { connect } from "node:net";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps, hardenConfigDir } from "../../src/config/paths";
+import { resetHardenedStateForTests, setAsyncIcaclsRunnerForTests, setPlatformForTests } from "../../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { supportsDesktopPicker } from "../../src/claude/desktop-picker-platform";
 import { inspectDesktopPickerProfile } from "../../src/claude/desktop-picker-profile";
 import { createPickerRuntime, pickerDesired } from "../../src/claude/intercept/picker-runtime";
@@ -29,13 +32,26 @@ const priorHome = process.env.OPENCODEX_HOME;
 const priorDesktop = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
 const priorClaude = process.env.CLAUDE_CONFIG_DIR;
 
-afterEach(async () => {
-  for (const handle of handles.splice(0)) await handle?.stop();
-  for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+// Config reads may leave an ACL child holding a root open after intercept stop.
+// Drain hardening and reaps before retrying removal; retain failures and restore env.
+async function cleanupPickerWindows(remove: (dir: string) => void = removeTreeWithRetry): Promise<void> {
+  const failures: unknown[] = [];
+  for (const handle of handles.splice(0)) {
+    try { await handle?.stop(); } catch (error) { failures.push(error); }
+  }
+  for (const dir of roots.splice(0)) {
+    try {
+      await flushConfigDirHardeningAndReaps(dir);
+      remove(dir);
+    } catch (error) { failures.push(error); }
+  }
   if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
   if (priorDesktop === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR; else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = priorDesktop;
   if (priorClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = priorClaude;
-});
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "picker-windows cleanup failed");
+}
+afterEach(() => cleanupPickerWindows());
 
 const routes = async () => ({ nativeSlugs: [], routedModels: [] });
 
@@ -54,6 +70,79 @@ function setup(firstParty = true) {
   saveConfig(config);
   return { root, config };
 }
+
+test("Windows fixture cleanup waits for pending config-directory ACL hardening", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const { root } = setup();
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setAsyncIcaclsRunnerForTests(async () => {
+    started();
+    await blocked;
+    return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  });
+  let cleanup: Promise<void> | undefined;
+  try {
+    hardenConfigDir();
+    await entered;
+    cleanup = cleanupPickerWindows();
+    await Promise.resolve();
+    expect(existsSync(root)).toBe(true);
+    release();
+    await cleanup;
+    expect(existsSync(root)).toBe(false);
+    expect(process.env.OPENCODEX_HOME).toBe(priorHome);
+    expect(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR).toBe(priorDesktop);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(priorClaude);
+  } finally {
+    release();
+    try {
+      await flushConfigDirHardeningAndReaps(root);
+      await cleanup;
+    } finally {
+      setAsyncIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+    }
+  }
+});
+
+test("Windows fixture cleanup attempts every stop and root and preserves both failures", async () => {
+  const first = setup().root, second = setup().root;
+  let laterStops = 0;
+  const attempted: string[] = [];
+  const stopError = new Error("stop failed");
+  const removeError = new Error("EBUSY: resource busy or locked");
+  type Handle = Awaited<ReturnType<typeof startClaudeIntercept>>;
+  handles.push({ stop: async () => { throw stopError; } } as unknown as Handle);
+  handles.push({ stop: async () => { laterStops++; } } as unknown as Handle);
+  try {
+    let failure: unknown;
+    try {
+      await cleanupPickerWindows(dir => {
+        attempted.push(dir);
+        if (dir === first) throw removeError;
+        removeTreeWithRetry(dir);
+      });
+    } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([stopError, removeError]);
+    expect(laterStops).toBe(1);
+    expect(attempted).toEqual([first, second]);
+    expect(existsSync(second)).toBe(false);
+    expect(process.env.OPENCODEX_HOME).toBe(priorHome);
+    expect(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR).toBe(priorDesktop);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(priorClaude);
+  } finally {
+    await flushConfigDirHardeningAndReaps(first);
+    await flushConfigDirHardeningAndReaps(second);
+    removeTreeWithRetry(first);
+    removeTreeWithRetry(second);
+  }
+});
 
 // Synthetic Windows trust matching src/claude/intercept/picker-trust-windows.ts.
 // The runner receives powershell argv (exe resolved by the default runner, so
