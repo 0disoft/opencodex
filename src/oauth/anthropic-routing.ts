@@ -89,7 +89,7 @@ export class AnthropicAccountCooldownError extends Error {
  * `retry-after` would report a drained five-hour window as request-rate throttling.
  */
 type AnthropicCooldownSource = "retry-after" | "reset-derived" | "default";
-type AnthropicQuotaWindow = "five-hour" | "weekly";
+export type AnthropicQuotaWindow = "five-hour" | "weekly";
 
 interface AccountHealth {
   cooldownUntil: number;
@@ -100,6 +100,10 @@ interface AccountHealth {
   cooldownGeneration: number;
   /** When the refusal was recorded; a reset settled earlier must not lift it. */
   recordedAt: number;
+  /** 429 (shared quota) or 403 (entitlement); only a quota refusal can be lifted by a reset grant. */
+  refusalStatus: 429 | 403;
+  /** Windows a 429 reported as rejected, whatever set the deadline; empty when it named none. */
+  refusedQuotaWindows: AnthropicQuotaWindow[];
 }
 
 interface AffinityEntry {
@@ -127,6 +131,14 @@ function parseRetryAfterMs(value: string | null | undefined, now: number): numbe
     return delayUntil(now + Math.max(Math.ceil(seconds * 1000), 1), now);
   }
   return delayUntil(Date.parse(text), now);
+}
+
+/** Windows whose unified status a refusal reported as rejected, independent of any reset header. */
+function rejectedQuotaWindowsIn(headers: AnthropicRateLimitHeaders | null | undefined): AnthropicQuotaWindow[] {
+  if (!headers) return [];
+  return ([["5h", "five-hour"], ["7d", "weekly"]] as const)
+    .filter(([window]) => headers.get(`anthropic-ratelimit-unified-${window}-status`)?.trim() === "rejected")
+    .map(([, quotaWindow]) => quotaWindow);
 }
 
 function parseRateLimitReset(
@@ -288,7 +300,7 @@ type RoutingFacadeSymbol =
   | "settleAnthropicCooldownRecovery"
   | "getAnthropicAccountHealthSnapshot"
   | "clearAnthropicAccountCooldown"
-  | "clearAnthropicAccountCooldownRecordedBy"
+  | "clearAnthropicAccountCooldownForReset"
   | "sweepExpiredAnthropicRoutingHealth"
   | "clearAnthropicAccountPoolState"
   | "anthropicSessionAffinitySizeForTests"
@@ -420,13 +432,24 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
   }
 
   /**
-   * Lift a cooldown recorded strictly before `cutoff`. A refusal recorded at or after it stays:
-   * a tie within one clock tick cannot be ordered, so it is kept rather than erased.
+   * Lift a quota cooldown for a reset grant. `claimedAt` is when the claim was first journaled,
+   * before it was sent: a refusal recorded at or after it may already describe the post-reset
+   * account (a tie within one clock tick cannot be ordered, so it stays too). The windows the
+   * grant confirmed cleared must cover every window the refusal named; a refusal that named none
+   * needs both windows cleared, and an entitlement (403) refusal is never lifted by a reset.
    */
-  function clearAnthropicAccountCooldownRecordedBy(accountId: string, cutoff: number): "cleared" | "absent" | "newer" {
+  function clearAnthropicAccountCooldownForReset(
+    accountId: string,
+    claimedAt: number,
+    clearedWindows: ReadonlySet<AnthropicQuotaWindow>,
+  ): "cleared" | "absent" | "newer" | "uncovered" {
     const entry = upstreamHealth.get(accountId);
     if (!entry) return "absent";
-    if (entry.recordedAt >= cutoff) return "newer";
+    if (entry.recordedAt >= claimedAt) return "newer";
+    if (entry.refusalStatus !== 429) return "uncovered";
+    const named = entry.rejectedQuotaWindows?.length ? entry.rejectedQuotaWindows : entry.refusedQuotaWindows;
+    const required: readonly AnthropicQuotaWindow[] = named.length ? named : ["five-hour", "weekly"];
+    if (!required.every(window => clearedWindows.has(window))) return "uncovered";
     upstreamHealth.delete(accountId);
     noteAnthropicCooldownMutation(accountId);
     return "cleared";
@@ -1110,6 +1133,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       ...(resetDerived ? { rejectedQuotaWindows: resetDerived.rejectedQuotaWindows } : {}),
       cooldownGeneration,
       recordedAt: now,
+      refusalStatus: status,
+      refusedQuotaWindows: status === 429 ? rejectedQuotaWindowsIn(rateLimitHeaders) : [],
     });
     sweepExpiredOnWrite(now);
     clearAnthropicSessionAffinityForAccount(failedAccountId);
@@ -1289,7 +1314,7 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     instance, captureAnthropicManualSelectionGeneration, anthropicAccountPoolConfig,
     isAnthropicAccountPoolEnabled, anthropicAutoSwitchThreshold, anthropicAccountAutoSwitchThreshold,
     captureAnthropicCooldownRecovery, settleAnthropicCooldownRecovery, getAnthropicAccountHealthSnapshot,
-    clearAnthropicAccountCooldown, clearAnthropicAccountCooldownRecordedBy, sweepExpiredAnthropicRoutingHealth, clearAnthropicAccountPoolState,
+    clearAnthropicAccountCooldown, clearAnthropicAccountCooldownForReset, sweepExpiredAnthropicRoutingHealth, clearAnthropicAccountPoolState,
     anthropicSessionAffinitySizeForTests, getEligibleAnthropicAccounts, hasAnthropicFailoverQuorum,
     forgetAnthropicFailoverQuorum, getAnthropicPoolRetryAfterSeconds, pickAlternateAnthropicAccount,
     resolveAnthropicAccountForSession, resolveAnthropicDispatchAccountId, bindAnthropicSessionAffinity,
@@ -1369,8 +1394,12 @@ export function clearAnthropicAccountCooldown(accountId: string): boolean {
   return anthropicRoutingFor("anthropic").clearAnthropicAccountCooldown(accountId);
 }
 
-export function clearAnthropicAccountCooldownRecordedBy(accountId: string, cutoff: number): "cleared" | "absent" | "newer" {
-  return anthropicRoutingFor("anthropic").clearAnthropicAccountCooldownRecordedBy(accountId, cutoff);
+export function clearAnthropicAccountCooldownForReset(
+  accountId: string,
+  claimedAt: number,
+  clearedWindows: ReadonlySet<AnthropicQuotaWindow>,
+): "cleared" | "absent" | "newer" | "uncovered" {
+  return anthropicRoutingFor("anthropic").clearAnthropicAccountCooldownForReset(accountId, claimedAt, clearedWindows);
 }
 
 export function sweepExpiredAnthropicRoutingHealth(now = Date.now()): number {

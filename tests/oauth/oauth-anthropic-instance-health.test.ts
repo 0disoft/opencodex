@@ -65,7 +65,7 @@ test("a settled reset lifts a retry-after cooldown and replaces the cached bars"
     seven_day_fable: { utilization: 4, resets_at: resetAt },
     limits: [],
   })) as typeof fetch;
-  await admitAnthropicAccountAfterReset(instance, id, now + 1);
+  await admitAnthropicAccountAfterReset(instance, id, { claimedAt: now + 1, cleared: ["five_hour", "seven_day"] });
 
   expect(projectStoredOAuthAccountHealth(instance, account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(f.modelQuota.anthropicFamilyRejected(id, "claude-fable-5", Date.now())).toBe(false);
@@ -88,7 +88,7 @@ test("a failed usage reread still leaves the reset account eligible", async () =
   f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccount429(f.config, id, "3600", now, headers);
   setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: 100, weeklyPercent: 100, updatedAt: now });
   globalThis.fetch = (async () => { throw new Error("usage endpoint down"); }) as typeof fetch;
-  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["five_hour", "seven_day"] });
   const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
   expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(getCachedProviderAccountQuota("anthropic", id)?.weeklyPercent).not.toBe(100);
@@ -110,30 +110,72 @@ test("a five-hour-only reset lifts the account cooldown without releasing a mode
   globalThis.fetch = (async () => Response.json({
     five_hour: { utilization: 0, resets_at: new Date(now + 3_600_000).toISOString() },
   })) as typeof fetch;
-  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["five_hour", "seven_day"] });
   const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
   expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(f.modelQuota.anthropicFamilyRejected(id, "claude-fable-5", Date.now())).toBe(true);
 });
 
-test("a replayed reset leaves a refusal recorded after it settled", async () => {
+test("a refusal recorded once the claim was journaled survives the reset", async () => {
   const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
   const { projectStoredOAuthAccountHealth } = await import("../../src/oauth/health");
   const now = Date.now();
   const id = f.ids[0];
   let sends = 0;
   globalThis.fetch = (async () => { sends += 1; return Response.json({ limits: [] }); }) as typeof fetch;
-  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccountRefusal(f.config, id, 403, "3600", now);
+  const headers = new Headers({
+    "anthropic-ratelimit-unified-5h-status": "rejected",
+    "anthropic-ratelimit-unified-5h-reset": String(Math.floor((now + 3_600_000) / 1000)),
+  });
+  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccount429(f.config, id, "3600", now, headers);
   const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
-  await admitAnthropicAccountAfterReset("anthropic", id, now - 1);
+  const cleared = ["five_hour"];
+  // Recorded after the claim was journaled: another request was refused while the claim was in flight.
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now - 1, cleared });
   expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
   expect(sends).toBe(0);
-  // A refusal in the same clock tick as the settlement cannot be ordered, so it stays too.
-  await admitAnthropicAccountAfterReset("anthropic", id, now);
+  // A refusal in the same clock tick as the claim cannot be ordered, so it stays too.
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now, cleared });
   expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
   expect(sends).toBe(0);
-  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared });
   expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("healthy");
+});
+
+test("a reset lifts a quota cooldown only when its cleared windows cover the refused ones", async () => {
+  const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
+  const { projectStoredOAuthAccountHealth } = await import("../../src/oauth/health");
+  const now = Date.now();
+  const id = f.ids[0];
+  let sends = 0;
+  globalThis.fetch = (async () => { sends += 1; return Response.json({ limits: [] }); }) as typeof fetch;
+  const headers = new Headers({
+    "anthropic-ratelimit-unified-7d-status": "rejected",
+    "anthropic-ratelimit-unified-7d-reset": String(Math.floor((now + 86_400_000) / 1000)),
+  });
+  // Retry-After makes this a retry-after cooldown, which a usage reread cannot release by itself.
+  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccount429(f.config, id, "86400", now, headers);
+  const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
+  for (const cleared of [[], ["five_hour"], ["seven_day_overage_included"]]) {
+    await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared });
+    expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
+  }
+  // The reread still ran each time, so the bars reflect the reset.
+  expect(sends).toBe(3);
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["seven_day"] });
+  expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("healthy");
+});
+
+test("a reset never lifts an entitlement refusal", async () => {
+  const { admitAnthropicAccountAfterReset } = await import("../../src/providers/anthropic-reset-admission");
+  const { projectStoredOAuthAccountHealth } = await import("../../src/oauth/health");
+  const now = Date.now();
+  const id = f.ids[0];
+  globalThis.fetch = (async () => Response.json({ limits: [] })) as typeof fetch;
+  f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccountRefusal(f.config, id, 403, "3600", now);
+  await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: now + 1, cleared: ["five_hour", "seven_day"] });
+  const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
+  expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
 });
 
 test("a reset reread sends its own usage request instead of joining an older one", async () => {
@@ -158,7 +200,7 @@ test("a reset reread sends its own usage request instead of joining an older one
   const older = fetchAnthropicAccountQuota("anthropic", id, true);
   try {
     await olderEntered;
-    await admitAnthropicAccountAfterReset("anthropic", id);
+    await admitAnthropicAccountAfterReset("anthropic", id, { claimedAt: Date.now(), cleared: [] });
     expect(sends).toBe(2);
     expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
   } finally {

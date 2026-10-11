@@ -19,7 +19,7 @@ import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIs
 import { anthropicCooldownRecoveryFor } from "../../providers/quota/anthropic-cooldown-recovery";
 import { captureProviderAccountQuotaEpoch } from "../../providers/quota/account-cache";
 import { captureOAuthAccountSelection, getAccountSet, getAccountCredentialWithStatus, listAccounts } from "../../oauth/store";
-import { admitAnthropicAccountAfterReset } from "../../providers/anthropic-reset-admission";
+import { admitAnthropicAccountAfterReset, type AnthropicResetAdmissionEvidence } from "../../providers/anthropic-reset-admission";
 import {
   ANTHROPIC_RESET_GRANT_ID_RE,
   AnthropicResetGrantError,
@@ -75,8 +75,8 @@ export interface AnthropicResetGrantRouteDeps {
   listAccountIds: () => string[];
   activeAccountId: () => string | null;
   accessTokenFor: (accountId: string) => Promise<string>;
-  /** Lift local admission after a journaled reset settled at `settledAt`. Tests omit it. */
-  admitReset?: (accountId: string, settledAt: number) => Promise<void>;
+  /** Lift local admission after a journaled reset, bounded by its journal evidence. Tests omit it. */
+  admitReset?: (accountId: string, evidence: AnthropicResetAdmissionEvidence) => Promise<void>;
 }
 
 function defaultDepsFor(ctx: ManagementContext, provider: AnthropicInstanceId): AnthropicResetGrantRouteDeps | null {
@@ -112,7 +112,7 @@ function defaultDepsFor(ctx: ManagementContext, provider: AnthropicInstanceId): 
       if (!targetCurrent() || !owner) throw new Error("reset owner changed");
       return snapshot.accessToken;
     },
-    admitReset: (accountId, settledAt) => admitAnthropicAccountAfterReset(provider, accountId, settledAt),
+    admitReset: (accountId, evidence) => admitAnthropicAccountAfterReset(provider, accountId, evidence),
   };
 }
 
@@ -215,11 +215,12 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   const ledger = { journalPath: deps.journalPath, now: deps.now?.() };
   // Retry-after cooldowns survive a usage probe. A journaled reset, including a
   // replay after the process died before admission, has to lift this account,
-  // but only cooldowns recorded before it settled. A failed reread must not
-  // turn a spent grant into an error.
-  const admitJournaledReset = async (code: string, settledAt: number): Promise<void> => {
+  // but only refusals recorded before the claim was journaled and only for the
+  // windows the journal says were cleared. A failed reread must not turn a
+  // spent grant into an error.
+  const admitJournaledReset = async (code: string, evidence: AnthropicResetAdmissionEvidence): Promise<void> => {
     if (code !== "reset" || deps.isCurrent?.() === false) return;
-    try { await deps.admitReset?.(accountId, settledAt); }
+    try { await deps.admitReset?.(accountId, evidence); }
     catch { /* The grant is already spent. */ }
   };
 
@@ -255,7 +256,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   }
   switch (begin.kind) {
     case "replay":
-      await admitJournaledReset(begin.code, begin.settledAt);
+      await admitJournaledReset(begin.code, { claimedAt: begin.claimedAt, cleared: begin.cleared });
       return jsonResponse(
         { provider, code: begin.code, replayed: true, resetsLeft: begin.resetsLeft, accountId, grantId, operationId },
         200, ctx.req, ctx.config,
@@ -282,7 +283,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   let settled;
   try {
     settled = settleAnthropicResetOperation(
-      { operationId, code: answer.code, resetsLeft: answer.resetsLeft },
+      { operationId, code: answer.code, resetsLeft: answer.resetsLeft, cleared: answer.cleared },
       { journalPath: deps.journalPath, now: deps.now?.() },
     );
   } catch {
@@ -292,7 +293,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   // Report what the journal holds. An overlapping same-id attempt may have
   // settled first; its answer is the canonical one.
   const replayed = settled.code !== answer.code || settled.resetsLeft !== answer.resetsLeft;
-  await admitJournaledReset(settled.code, settled.settledAt);
+  await admitJournaledReset(settled.code, { claimedAt: settled.claimedAt, cleared: settled.cleared });
   return jsonResponse(
     {
       provider,

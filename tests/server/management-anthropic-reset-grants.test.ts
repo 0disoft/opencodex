@@ -289,17 +289,18 @@ describe("POST /api/anthropic/reset-grants/consume", () => {
 
   test("a journaled reset admits that account, and any other result does not", async () => {
     const admitted: string[] = [];
-    const settledStamps: number[] = [];
+    const evidence: Array<{ claimedAt: number; cleared: readonly string[] }> = [];
     const up = upstream();
-    const routeDeps = deps(up, { admitReset: async (id, settledAt) => { admitted.push(id); settledStamps.push(settledAt); } });
+    const routeDeps = deps(up, { admitReset: async (id, seen) => { admitted.push(id); evidence.push(seen); } });
     expect(await consume(routeDeps)).toMatchObject({ status: 200, json: { code: "reset", replayed: false } });
     expect(await consume(routeDeps)).toMatchObject({ status: 200, json: { code: "reset", replayed: true } });
     expect(admitted).toEqual(["acct-1", "acct-1"]);
-    // The replay passes the journal's settlement time, never "now", so it cannot
-    // outrank a refusal recorded after the original reset.
-    expect(settledStamps).toHaveLength(2);
-    expect(Number.isFinite(settledStamps[1])).toBe(true);
-    expect(settledStamps[1]!).toBeLessThanOrEqual(settledStamps[0]!);
+    // Both the settlement and the replay hand admission the journal's evidence: when the claim
+    // was first journaled and which windows it cleared, never "now" or the HTTP replay's [].
+    expect(evidence).toHaveLength(2);
+    expect(Number.isFinite(evidence[0]!.claimedAt)).toBe(true);
+    expect(evidence[1]).toEqual(evidence[0]!);
+    expect(evidence[0]!.cleared).toEqual(["five_hour", "seven_day"]);
 
     const limited = upstream();
     const limitedAdmitted: string[] = [];
