@@ -146,13 +146,28 @@ export function inspectClaudeInterceptSettings(
   };
 }
 
-function writeSettings(path: string, doc: SettingsDoc): void {
+const defaultPersist = (path: string, content: string): void => atomicWriteFile(path, content);
+let persistFile = defaultPersist;
+
+/** Replace the settings.json write in tests; the real-home guard still runs first. Returns a restore. */
+export function setClaudeSettingsPersistForTests(persist: (path: string, content: string) => void): () => void {
+  const before = persistFile;
+  persistFile = persist;
+  return () => { persistFile = before; };
+}
+
+/** Commit settings.json. Once this returns, the file on disk holds the new document. */
+function persistSettings(path: string, doc: SettingsDoc): void {
   // An armed test process must not rewrite the real Claude settings.json (#6775).
   assertNotRealClaudeConfigUnderTest(dirname(path), path);
   mkdirSync(dirname(path), { recursive: true });
   // The managed env embeds the proxy token, so the file must stay owner-only:
   // atomicWriteFile applies the real NTFS ACL on Windows where chmod is a no-op.
-  atomicWriteFile(path, `${JSON.stringify(doc, null, 2)}\n`);
+  persistFile(path, `${JSON.stringify(doc, null, 2)}\n`);
+}
+
+function writeSettings(path: string, doc: SettingsDoc): void {
+  persistSettings(path, doc);
   // Whether Claude Code reaches the proxy just changed, so its cached /model list is stale.
   invalidateClaudeCodeServedCatalog(dirname(path));
 }
@@ -271,12 +286,23 @@ export function removeClaudeInterceptSettings(
   const env = envRecord(read.doc);
   if (!isOwnedCaPath(env.NODE_EXTRA_CA_CERTS, ownedCaPath)) return { ok: true, changed: false, path };
   const receipt = readNoProxyReceipt(configDir);
+  const receiptBytes = readNoProxyReceiptBytes(configDir);
   delete env.NODE_EXTRA_CA_CERTS;
   if (isClaudeInterceptProxyUrl(env.HTTPS_PROXY)) delete env.HTTPS_PROXY;
   if (receipt && env.NO_PROXY === receipt.written) setOrDelete(env, "NO_PROXY", receipt.hadKey ? receipt.previous : undefined);
   if (!invalidateNoProxyReceipt(configDir)) return { ok: false, reason: "unreadable", path: noProxyReceiptPath(configDir) };
   if (Object.keys(env).length === 0) delete read.doc.env;
   else read.doc.env = env;
-  writeSettings(path, read.doc);
+  try {
+    persistSettings(path, read.doc);
+  } catch (error) {
+    // A removal that was not committed has not ended the episode, so its receipt stays valid. Only the
+    // persist step is covered: once settings.json changed, the receipt must not come back.
+    if (receiptBytes !== null) {
+      try { writeNoProxyReceiptBytes(configDir, receiptBytes); } catch { /* keep the original error */ }
+    }
+    throw error;
+  }
+  invalidateClaudeCodeServedCatalog(dirname(path));
   return { ok: true, changed: true, path };
 }

@@ -10,6 +10,7 @@ import {
   inspectClaudeInterceptSettings,
   migrateClaudeInterceptSettings,
   removeClaudeInterceptSettings,
+  setClaudeSettingsPersistForTests,
 } from "../../src/claude/intercept/settings";
 import { NO_PROXY_RECEIPT_FILE, setNoProxyReceiptIoForTests } from "../../src/claude/intercept/settings-no-proxy";
 
@@ -154,6 +155,38 @@ test("O11: an apply that starts a new episode drops a receipt left by an earlier
   expect(existsSync(receipt(configDir))).toBe(false);
   removeClaudeInterceptSettings(CA, configDir);
   expect(settings(configDir)).toEqual({ env: { NO_PROXY: LOOPBACK } });
+});
+
+function failingPersist(): void {
+  restores.push(setClaudeSettingsPersistForTests(() => { throw new Error("settings write failed"); }));
+}
+
+test("O14: an uncommitted removal keeps the episode, so a retry restores the user's value", () => {
+  const configDir = dir();
+  seed(configDir, { env: { NO_PROXY: "" } });
+  applyClaudeInterceptSettings(env, configDir);
+  const applied = bytes(configDir);
+  const proof = readFileSync(receipt(configDir), "utf8");
+  failingPersist();
+  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow("settings write failed");
+  expect(bytes(configDir)).toBe(applied);
+  expect(readFileSync(receipt(configDir), "utf8")).toBe(proof);
+  restores.pop()!();
+  expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
+  expect(settings(configDir)).toEqual({ env: { NO_PROXY: "" } });
+  expect(existsSync(receipt(configDir))).toBe(false);
+});
+
+test("O13: when the receipt cannot be put back either, the settings error still surfaces", () => {
+  const configDir = dir();
+  seed(configDir, { env: { NO_PROXY: "" } });
+  applyClaudeInterceptSettings(env, configDir);
+  const applied = bytes(configDir);
+  failingPersist();
+  failing("write");
+  expect(() => removeClaudeInterceptSettings(CA, configDir)).toThrow("settings write failed");
+  expect(bytes(configDir)).toBe(applied);
+  expect(existsSync(receipt(configDir))).toBe(false);
 });
 
 test("O6: a non-string NO_PROXY keeps the block stale and is never rewritten", () => {
