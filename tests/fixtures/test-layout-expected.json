@@ -932,7 +932,7 @@
   "request-log-served-model.test.ts": "usage", "request-log-model-filter.test.ts": "usage", "request-log-generation-window.test.ts": "usage",
   "request-log.test.ts": "usage", "request-outcome-agreement.test.ts": "usage",
   "upstream-failure-diagnostics.test.ts": "usage",
-  "request-pacing.test.ts": "usage", "reserve-auth-context.test.ts": "codex-integration",
+  "request-pacing.test.ts": "usage", "request-pacing-provenance.test.ts": "usage", "reserve-auth-context.test.ts": "codex-integration",
   "reserve-availability.test.ts": "codex-integration", "reserve-catalog-lifecycle.test.ts": "codex-integration",
   "reserve-catalog.test.ts": "codex-integration", "reserve-claude-policy.test.ts": "server",
   "reserve-dispatch-ws.test.ts": "responses", "reserve-dispatch.test.ts": "codex-integration",

@@ -51,7 +51,7 @@ performs the physical send, after a dispatch override has selected or rebuilt th
 matching follows the URL sent on the wire rather than the URL supplied before credential
 revalidation; prepaid initial-send receipts follow the [spend contract](responses-spend.md#prepaid-initial-sends). At this final HTTP boundary, native ChatGPT Responses and compact JSON strings of at least 1 MiB (UTF-8) become byte buffers to avoid Bun's large-string upload resets. Content, headers, abort signals and retry policy are preserved; WebSocket selection still receives the original string. Other destinations, small strings and existing byte/stream bodies retain their representation.
 
-Replacement-key pacing admission retains client cancellation but pauses the header deadline; the full header interval restarts after admission. The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
+Opt-in per-key pacing and round-robin use HTTP/SSE so their final dispatch override cannot be bypassed by a WebSocket upgrade. Transport-owned response markers and stage metadata survive owned pacing body rewraps. Replacement-key pacing admission retains client cancellation but pauses the header deadline; the full header interval restarts after admission. The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
 `route.provider.fetch` at send time, because reselection can install a different provider transport
 after the wrapper was built, and then calls that implementation instead of the executor. Both
 production overrides do this -- `oauthDispatch` in `request-transport.ts`, native Chat in

@@ -34,6 +34,12 @@ export const REQUEST_PACING_CONCURRENCY_RETRY_AFTER_SECONDS = 5;
 let maxQueueDepth = REQUEST_PACING_MAX_QUEUE_DEPTH;
 let maxQueueAgeMs = REQUEST_PACING_MAX_QUEUE_AGE_MS;
 
+// Optional owners register internal response markers; only this owned body rewrap carries them.
+const responseProvenance = new Set<WeakMap<Response, unknown>>();
+export function registerProviderResponseProvenance(markers: WeakMap<Response, unknown>): void {
+  responseProvenance.add(markers);
+}
+
 export type RequestPacingQueueOverloadReason = "queue_full" | "queue_expired" | "keys_exhausted";
 
 export class RequestPacingQueueOverloadError extends Error {
@@ -506,14 +512,13 @@ export async function waitForProviderRequestSlot(
  * means the exchange is already finished, so the lease returns immediately. A body that
  * is neither read nor cancelled for REQUEST_PACING_UNCONSUMED_BODY_MS releases its lease
  * and cancels the body, so a dropped Response cannot hold a slot forever. The returned
- * Response preserves status, statusText, headers, and the identity-based replay markers.
+ * Response preserves status, statusText, headers, replay markers, and registered provenance.
  */
 export function trackProviderRequestSlotBody(
   slot: ProviderRequestSlot | undefined,
   response: Response,
 ): Response {
-  // An unleased slot has nothing to return on body close, and rewrapping the Response
-  // would break identity-based markers (the eager WS relay registry is a WeakSet).
+  // An unleased slot has nothing to return on body close; preserve the response identity.
   if (!slot?.leased) return response;
   // Slots built outside waitForProviderRequestSlot (test doubles) satisfy only the public
   // ProviderRequestSlot shape; their bodies still own the release through the wrapper below.
@@ -636,6 +641,9 @@ export function trackProviderRequestSlotBody(
   // Retry helpers mark the response they return from, and recovery decisions key on these
   // identity markers; the rewrap must not make a non-replayable response look replayable.
   if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
+  for (const markers of responseProvenance) {
+    if (markers.has(response)) markers.set(wrapped, markers.get(response));
+  }
   return carryReplayRefusal(response, wrapped);
 }
 

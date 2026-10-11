@@ -342,11 +342,13 @@ export function providerFetch(
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
-      if (options.providerName && requestPacingMaxConcurrentRequests(provider, options.modelId) > 0) {
+      const keyedPacing = provider.requestPacing?.enabled
+        && (provider.requestPacing.keys || provider.requestPacing.keySelection === "round-robin");
+      if (keyedPacing || (options.providerName && requestPacingMaxConcurrentRequests(provider, options.modelId) > 0)) {
         if (!pacingWebsocketDowngradeWarned.has(providerName)
           && pacingWebsocketDowngradeWarned.size < EGRESS_DOWNGRADE_NOTICE_LIMIT) {
           pacingWebsocketDowngradeWarned.add(providerName);
-          console.warn(`[opencodex] provider ${JSON.stringify(redactSecretString(providerName))} has a request concurrency cap; serving over HTTP/SSE.`);
+          console.warn(`[opencodex] provider ${JSON.stringify(redactSecretString(providerName))} requires guarded request pacing; serving over HTTP/SSE.`);
         }
         return httpFetch(input, init, reacquirePacing);
       }

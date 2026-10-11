@@ -260,3 +260,39 @@ describe("replacement key admission excludes the response-header deadline", () =
     } finally { fixture.held.release(); fixture.resetProviderRequestPacingForTest(); }
   });
 });
+
+for (const policy of [
+  { enabled: true, keySelection: "round-robin", minIntervalMs: 1 },
+  { enabled: true, keys: { minIntervalMs: 1 } },
+] as const) test(`key pacing keeps WebSocket requests on the guarded HTTP path: ${JSON.stringify(policy)}`, async () => {
+  const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+  const { resetProviderRequestPacingForTest } = await import("../../src/providers/request-pacing");
+  const { BOUNDED_WS_RUNTIME } = await import("../helpers/ws-upstream-fixtures");
+  const previousSocket = globalThis.WebSocket;
+  let sockets = 0; let overrides = 0; const sentKeys: (string | null)[] = [];
+  globalThis.WebSocket = class { constructor() { sockets++; throw new Error("unexpected WebSocket dispatch"); } } as unknown as typeof WebSocket;
+  const physical = (async (_input, init) => {
+    sentKeys.push(new Headers(init?.headers).get("authorization"));
+    return new Response("fixture reply");
+  }) as typeof fetch;
+  const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1",
+    upstreamWebsocket: true, apiKey: "fixture-A", requestPacing: policy, fetch: physical,
+  } as import("../../src/types").OcxProviderConfig;
+  try {
+    const executor = providerFetch(provider, BOUNDED_WS_RUNTIME, { providerName: "ws-key-pacing",
+      dispatchOverride: async (input, init, execute, reacquire) => {
+        overrides++;
+        await reacquire!({ ...provider, apiKey: "fixture-B" });
+        return execute(input, { ...init, headers: { authorization: "Bearer fixture-B" } });
+      },
+    });
+    const response = await executor("https://api.openai.com/v1/responses", { method: "POST",
+      headers: { authorization: "Bearer fixture-A", "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture-model", stream: true, input: [] }),
+    });
+    expect(await response.text()).toBe("fixture reply");
+    expect(overrides).toBe(1);
+    expect(sockets).toBe(0);
+    expect(sentKeys).toEqual(["Bearer fixture-B"]);
+  } finally { globalThis.WebSocket = previousSocket; resetProviderRequestPacingForTest(); }
+});

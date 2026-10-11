@@ -6,6 +6,7 @@ import {
 } from "../../lib/upstream-retry";
 import type { RequestFailureCause, RequestFailureStage } from "../../lib/request-failure-model";
 import { packageVersion } from "../../lib/package-version";
+import { registerProviderResponseProvenance } from "../../providers/request-pacing";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
@@ -47,9 +48,12 @@ export const CODEX_WS_CREATE_FRAME_LIMIT_BYTES =
 /** Close code the backend uses for an oversized message (RFC 6455 "message too big"). */
 const WS_CLOSE_MESSAGE_TOO_BIG = 1009;
 
-const codexWsUpstreamResponses = new WeakSet<Response>();
-const quotaObservedResponses = new WeakSet<Response>();
-const codexWsPreludeProjections = new WeakSet<Response>();
+const codexWsUpstreamResponses = new WeakMap<Response, true>();
+const quotaObservedResponses = new WeakMap<Response, true>();
+const codexWsPreludeProjections = new WeakMap<Response, true>();
+registerProviderResponseProvenance(codexWsUpstreamResponses);
+registerProviderResponseProvenance(quotaObservedResponses);
+registerProviderResponseProvenance(codexWsPreludeProjections);
 
 /** Quota arrived directly at its captured account; do not replay old HTTP prelude headers. */
 export function isCodexWsQuotaObservedResponse(response: Response): boolean {
@@ -63,7 +67,7 @@ export function isCodexWsUpstreamResponse(response: Response): boolean {
 
 /** Pre-response projection; its headers retain the exchange's prelude snapshot. */
 export function markCodexWsPreludeProjection(response: Response): void {
-  codexWsPreludeProjections.add(response);
+  codexWsPreludeProjections.set(response, true);
 }
 
 export function isCodexWsPreludeProjection(response: Response): boolean {
@@ -71,8 +75,8 @@ export function isCodexWsPreludeProjection(response: Response): boolean {
 }
 
 export function markCodexWsResponse(response: Response, observed: boolean): void {
-  codexWsUpstreamResponses.add(response);
-  if (observed) quotaObservedResponses.add(response);
+  codexWsUpstreamResponses.set(response, true);
+  if (observed) quotaObservedResponses.set(response, true);
 }
 
 /**
@@ -110,6 +114,7 @@ export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
 };
 
 const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
+registerProviderResponseProvenance(codexWsStageByResponse);
 
 export function markCodexWsStage(response: Response, record: CodexWsStageRecord): void {
   const current = codexWsStageByResponse.get(response);
@@ -254,6 +259,7 @@ export function projectCodexWsFailure(
 }
 
 const socketDeathStages = new WeakMap<Response, RequestFailureStage>();
+registerProviderResponseProvenance(socketDeathStages);
 
 /**
  * Record that a pre-response settle came from the socket closing or failing under the send (#4191),
