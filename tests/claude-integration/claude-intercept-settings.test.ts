@@ -15,7 +15,7 @@ import { configSchema } from "../../src/config/schema/config-schema";
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
 const env = buildClaudeInterceptEnv(8846, CA, "test-token");
-const LOOPBACK = "127.0.0.1,localhost,::1";
+const LOOPBACK = "127.0.0.1,localhost,::1,0.0.0.0";
 /** What apply writes into a block that had no NO_PROXY of its own. */
 const written = { ...env, NO_PROXY: LOOPBACK };
 

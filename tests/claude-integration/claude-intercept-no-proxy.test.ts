@@ -18,7 +18,7 @@ import { NO_PROXY_RECEIPT_FILE, setNoProxyReceiptIoForTests } from "../../src/cl
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
 const env = buildClaudeInterceptEnv(8846, CA, "test-token");
-const LOOPBACK = "127.0.0.1,localhost,::1";
+const LOOPBACK = "127.0.0.1,localhost,::1,0.0.0.0";
 const restores: (() => void)[] = [];
 afterEach(() => { while (restores.length) restores.pop()!(); });
 
@@ -56,11 +56,11 @@ test("apply merges the bypass into a user value, is idempotent, and leaves a cov
   const configDir = dir();
   seed(configDir, { env: { NO_PROXY: "localhost, .corp.example" } });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(settings(configDir)).toEqual({ env: { NO_PROXY: "localhost, .corp.example,127.0.0.1,::1", ...env } });
+  expect(settings(configDir)).toEqual({ env: { NO_PROXY: "localhost, .corp.example,127.0.0.1,::1,0.0.0.0", ...env } });
   expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
   expect(inspectClaudeInterceptSettings(env, configDir).kind).toBe("applied");
 
-  for (const covering of ["LOCALHOST,[::1],127.0.0.1", "*", "*,::1"]) {
+  for (const covering of ["LOCALHOST,[::1],0.0.0.0,127.0.0.1", "*", "*,::1"]) {
     const covered = dir();
     seed(covered, { env: { NO_PROXY: covering } });
     applyClaudeInterceptSettings(env, covered);
@@ -73,6 +73,8 @@ test("O5: removal restores exactly the value the user had", () => {
   expect(roundTrip({ NO_PROXY: "127.0.0.1" })).toEqual({ NO_PROXY: "127.0.0.1" });
   expect(roundTrip({ NO_PROXY: ".corp.example,127.0.0.1" })).toEqual({ NO_PROXY: ".corp.example,127.0.0.1" });
   expect(roundTrip({ NO_PROXY: LOOPBACK })).toEqual({ NO_PROXY: LOOPBACK });
+  // A hand-written three-entry stopgap from before 0.0.0.0 was covered gets it appended, then back.
+  expect(roundTrip({ NO_PROXY: "127.0.0.1,localhost,::1" })).toEqual({ NO_PROXY: "127.0.0.1,localhost,::1" });
   expect(roundTrip({ NO_PROXY: "" })).toEqual({ NO_PROXY: "" });
   expect(roundTrip({ NO_PROXY: "*,::1" })).toEqual({ NO_PROXY: "*,::1" });
   expect(roundTrip({ NO_PROXY: null })).toEqual({ NO_PROXY: null });

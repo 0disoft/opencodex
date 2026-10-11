@@ -15,8 +15,14 @@ import { assertNotRealClaudeConfigUnderTest } from "../../lib/test-home-guard";
  * cannot. It holds only `NO_PROXY` values, never the proxy token.
  */
 
-/** Loopback hosts Claude Code must reach directly, in the order opencodex appends them. */
-export const CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"] as const;
+/**
+ * Local hosts Claude Code must reach directly, in the order opencodex appends them. The proxy
+ * refuses every loopback and unspecified target (connect-proxy.ts isLoopbackTarget); these are the
+ * forms a NO_PROXY entry can name. `localhost` also covers `*.localhost` because Claude Code's
+ * client suffix-matches entries. Other 127/8 addresses cannot be listed (NO_PROXY has no CIDR) and
+ * need their own entry; the proxy's 405 body says so.
+ */
+export const CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1", "0.0.0.0"] as const;
 
 export const NO_PROXY_RECEIPT_FILE = "opencodex-no-proxy.json";
 

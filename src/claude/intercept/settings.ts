@@ -33,7 +33,7 @@ export { CLAUDE_INTERCEPT_LOOPBACK_NO_PROXY, mergeClaudeInterceptNoProxy } from 
  * (`POST http://127.0.0.1:<port>/mcp`) through it, and the proxy only tunnels CONNECT to
  * non-loopback hosts, so every loopback MCP server failed with a 405 (#6936):
  *
- *   env.NO_PROXY            = <user entries>,127.0.0.1,localhost,::1
+ *   env.NO_PROXY            = <user entries>,127.0.0.1,localhost,::1,0.0.0.0
  *
  * Ownership is tracked by value, never by a marker key. The CA path is the anchor: it lives
  * under opencodex's own config directory, so only a block whose `NODE_EXTRA_CA_CERTS` names

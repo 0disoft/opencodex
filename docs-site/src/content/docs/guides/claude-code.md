@@ -242,13 +242,15 @@ working. OpenCodex only writes these variables into the `env` block of `~/.claud
   "env": {
     "HTTPS_PROXY": "http://opencodex:<per-install token>@127.0.0.1:10200",
     "NODE_EXTRA_CA_CERTS": "<home>/.opencodex/claude-intercept/ca.pem",
-    "NO_PROXY": "127.0.0.1,localhost,::1"
+    "NO_PROXY": "127.0.0.1,localhost,::1,0.0.0.0"
   }
 }
 ```
 
-`NO_PROXY` keeps loopback traffic, such as a local HTTP MCP server on `127.0.0.1`, off the
-proxy, which only tunnels HTTPS to remote hosts. If you already set `NO_PROXY`, OpenCodex appends
+`NO_PROXY` keeps loopback traffic, such as a local HTTP MCP server on `127.0.0.1`, `localhost`,
+a `*.localhost` name, `::1` or `0.0.0.0`, off the proxy, which only tunnels HTTPS to remote
+hosts. A server on another `127.x` address needs that address added to `NO_PROXY` yourself.
+If you already set `NO_PROXY`, OpenCodex appends
 only the missing loopback entries and records its change in `opencodex-no-proxy.json` next to
 `settings.json`; turning first-party off puts your original value back, and a value you edited
 in the meantime is left as it is.
