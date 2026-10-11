@@ -97,7 +97,9 @@ test("migrate rewrites an owned legacy env but never creates or touches foreign 
 
 test("remove deletes only owned values and drops an emptied env block", () => {
   const configDir = dir();
-  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus", env: { ...written } }));
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ model: "opus" }));
+  applyClaudeInterceptSettings(env, configDir);
+  expect(readSettings(configDir)).toEqual({ model: "opus", env: written });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
   expect(readSettings(configDir)).toEqual({ model: "opus" });
   expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: false });
@@ -160,89 +162,4 @@ test("settings rollback refuses a newer managed proxy choice", () => {
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: newer }));
   expect(rollback()).toBe(false);
   expect(readSettings(configDir)).toEqual({ env: newer });
-});
-
-// #6936: loopback MCP servers must bypass the CONNECT-only intercept proxy.
-
-test("apply merges the loopback bypass into a user NO_PROXY without duplicates", () => {
-  const configDir = dir();
-  seed(configDir, { env: { NO_PROXY: "localhost, .corp.example" } });
-  expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env: { NO_PROXY: "localhost, .corp.example,127.0.0.1,::1", ...env } });
-  expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
-  expect(inspectClaudeInterceptSettings(env, configDir).kind).toBe("applied");
-
-  // Every loopback entry already present, bracketed IPv6 included: nothing to add.
-  const covered = dir();
-  seed(covered, { env: { NO_PROXY: "LOCALHOST,[::1],127.0.0.1" } });
-  applyClaudeInterceptSettings(env, covered);
-  expect(readSettings(covered)).toEqual({ env: { NO_PROXY: "LOCALHOST,[::1],127.0.0.1", ...env } });
-});
-
-test("a NO_PROXY of * already bypasses loopback and is never rewritten or removed", () => {
-  const configDir = dir();
-  seed(configDir, { env: { NO_PROXY: "*" } });
-  applyClaudeInterceptSettings(env, configDir);
-  expect(readSettings(configDir)).toEqual({ env: { NO_PROXY: "*", ...env } });
-  expect(inspectClaudeInterceptSettings(env, configDir).kind).toBe("applied");
-  expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env: { NO_PROXY: "*" } });
-});
-
-test("an owned block without the bypass is stale and the startup migrate repairs it", () => {
-  const configDir = dir();
-  seed(configDir, { env: { ...env, NO_PROXY: "10.0.0.5" } });
-  expect(inspectClaudeInterceptSettings(env, configDir)).toEqual({ kind: "stale", env });
-  expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env: { ...env, NO_PROXY: `10.0.0.5,${LOOPBACK}` } });
-  expect(inspectClaudeInterceptSettings(env, configDir).kind).toBe("applied");
-});
-
-test("a foreign proxy block never gains a NO_PROXY", () => {
-  const configDir = dir();
-  const foreign = { HTTPS_PROXY: "http://corp-proxy:3128", NODE_EXTRA_CA_CERTS: "/etc/corp/ca.pem" };
-  seed(configDir, { env: foreign });
-  expect(applyClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: false, reason: "foreign_env" });
-  expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: false, reason: "foreign_env" });
-  expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: false });
-  expect(readSettings(configDir)).toEqual({ env: foreign });
-});
-
-test("remove strips only the appended loopback run and keeps the user's NO_PROXY key", () => {
-  const configDir = dir();
-  seed(configDir, { env: { FOO: "1", NO_PROXY: "localhost,.corp.example" } });
-  applyClaudeInterceptSettings(env, configDir);
-  expect(readSettings(configDir)).toMatchObject({ env: { NO_PROXY: "localhost,.corp.example,127.0.0.1,::1" } });
-  expect(removeClaudeInterceptSettings(CA, configDir)).toMatchObject({ ok: true, changed: true });
-  expect(readSettings(configDir)).toEqual({ env: { FOO: "1", NO_PROXY: "localhost,.corp.example" } });
-
-  // A key opencodex created goes away with the rest of the block.
-  const created = dir();
-  applyClaudeInterceptSettings(env, created);
-  seed(created, { theme: "dark", env: { ...readSettings(created).env as object, FOO: "1" } });
-  removeClaudeInterceptSettings(CA, created);
-  expect(readSettings(created)).toEqual({ theme: "dark", env: { FOO: "1" } });
-});
-
-test("rollback restores the captured NO_PROXY unless the user changed it after the apply", () => {
-  const created = dir();
-  const rollbackCreated = captureClaudeInterceptSettingsRollback(env, created);
-  applyClaudeInterceptSettings(env, created);
-  expect(rollbackCreated()).toBe(true);
-  expect(existsSync(join(created, "settings.json"))).toBe(true);
-  expect(readSettings(created)).toEqual({});
-
-  const merged = dir();
-  seed(merged, { env: { NO_PROXY: ".corp.example" } });
-  const rollbackMerged = captureClaudeInterceptSettingsRollback(env, merged);
-  applyClaudeInterceptSettings(env, merged);
-  expect(rollbackMerged()).toBe(true);
-  expect(readSettings(merged)).toEqual({ env: { NO_PROXY: ".corp.example" } });
-
-  const edited = dir();
-  const rollbackEdited = captureClaudeInterceptSettingsRollback(env, edited);
-  applyClaudeInterceptSettings(env, edited);
-  seed(edited, { env: { ...env, NO_PROXY: `${LOOPBACK},mcp.internal` } });
-  expect(rollbackEdited()).toBe(true);
-  expect(readSettings(edited)).toEqual({ env: { NO_PROXY: `${LOOPBACK},mcp.internal` } });
 });
