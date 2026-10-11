@@ -128,7 +128,8 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { buildResponsesTransport, copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
-import { scrubOcxCompactionItems, stripCanonicalOnlyTopLevelFields } from "../../adapters/openai-responses/request-strips";
+import { scrubOcxCompactionItems, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough } from "../../adapters/openai-responses/request-strips";
+import { dropResponsesReasoningInputItems } from "../../adapters/openai-responses/reasoning";
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { commitReasoningReplayServingIdentity } from "../../responses/reasoning-replay-cache";
@@ -927,6 +928,7 @@ export async function handleResponsesCompact(
       sanitizeReasoningInputContent(compactBodyRaw, {
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
           && compactProvider.preserveResponsesReasoningContent === true,
+        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(compactProvider),
       }),
     ) as typeof compactBodyRaw;
     {
@@ -1092,15 +1094,22 @@ export async function handleResponsesCompact(
         parsed: gatewayReplayParsed, providerName: route.providerName, provider: sendProvider,
         adapterName: sendProvider.adapter, codexAuthContext: sendAuthCtx, forwardHeaders: sendHeaders,
       });
-      const replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
+      let replayBody = gatewayReplayParsed ? sanitizeReasoningInputContent(scrubOcxCompactionItems(
         compactBody, destinationDecodesNativeCompactionBlob(sendProvider),
         gatewayReplayParsed._stripReasoningEncryptedContent === true,
       ), {
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(sendProvider)
           && sendProvider.preserveResponsesReasoningContent === true,
+        dropNullContentChannel: !isOpenAiOperatedResponsesDestination(sendProvider),
         stripEncryptedContent: gatewayReplayParsed._stripReasoningEncryptedContent === true,
         dropForeignItemId: gatewayReplayParsed._dropForeignReasoningItemIds === true,
       }) : compactBody;
+      if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.dropResponsesReasoningItems === true) {
+        replayBody = dropResponsesReasoningInputItems(replayBody) as typeof replayBody;
+      }
+      if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.preserveResponsesMessageMetadata !== true) {
+        replayBody = stripInternalChatMessageMetadataPassthrough(replayBody) as typeof replayBody;
+      }
       const sendBody = isOpenAiOperatedResponsesDestination(sendProvider)
         ? replayBody : stripCanonicalOnlyTopLevelFields(replayBody);
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
