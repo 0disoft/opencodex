@@ -144,14 +144,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke>",
+    usage: "ocx link <port|issue|status|revoke|reconnect>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
-      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
+      "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
   {
@@ -245,8 +246,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "hub",
-    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]",
-    summary: "Hub-side commands. `invite` prints a ready-to-run `ocx connect` line for one more machine.",
+    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]\n  ocx hub disable [--revoke-clients --client-key <id> ...] [--json]",
+    summary: "Invite another machine, or disable hub mode in one validated config write.",
     details: [
       "Topology: a hub serves ONE port. Remote machines dial `hostname:port` with their own per-client",
       "key; the hub's own local processes dial `127.0.0.1:<same port>` with no credential, through the",
@@ -606,18 +607,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "commandcode",
-    usage: "ocx commandcode [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    usage: "ocx commandcode [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
     summary: "Connect Command Code CLI to the proxy via its managed provider.",
     details: [
       "Alias of ocx integration client <sub> --client commandcode.",
-      "enable writes the managed provider.opencodex block into ~/.commandcode/providers.json; disable removes only that block.",
+      "enable manages the opencodex block under the existing provider or providers root in ~/.commandcode/providers.json; disable removes only that block.",
       "Command Code reads providers on startup.",
       "`restore --op <opId>` replays the exact previous managed block; take the id from `ocx commandcode history`.",
     ],
   },
   {
     name: "cmd",
-    usage: "ocx cmd [status|show|list|enable|disable|history|restore --op <opId>] [--json]",
+    usage: "ocx cmd [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
     summary: "Alias of ocx commandcode.",
   },
   {

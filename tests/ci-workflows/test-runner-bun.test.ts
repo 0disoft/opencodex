@@ -120,7 +120,7 @@ describe("pinned test runner Bun", () => {
 
   test("GUI package uses the pinned wrapper, preserving cwd, filters and failures", () => {
     const guiPackage = JSON.parse(readFileSync(repoPath("gui", "package.json"), "utf8"));
-    expect(guiPackage.scripts.test).toBe("bun ../scripts/test-with-pinned-bun.ts tests");
+    expect(guiPackage.scripts.test).toBe("bun ../scripts/test-with-pinned-bun.ts --isolate tests");
     const root = mkdtempSync(join(tmpdir(), "ocx-gui-test-runner-"));
     const file = join(root, "runner.test.ts");
     const cwd = repoPath("gui");
@@ -153,13 +153,14 @@ test("excluded failure", () => { throw new Error("fixture failure"); });
     const pidFile = join(root, "child.pid");
     const signalFile = join(root, "child.signal");
     writeFileSync(file, `import { test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 test("sleep until interrupted", async () => {
   process.on("SIGTERM", () => {
     writeFileSync(${JSON.stringify(signalFile)}, "SIGTERM");
     setTimeout(() => process.exit(0), 75);
   });
-  writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+  writeFileSync(${JSON.stringify(pidFile + ".tmp")}, String(process.pid));
+  renameSync(${JSON.stringify(pidFile + ".tmp")}, ${JSON.stringify(pidFile)});
   await new Promise(() => {});
 }, 60_000);
 `);

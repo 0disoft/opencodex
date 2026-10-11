@@ -27,6 +27,12 @@ function carriesTranslatableWords(value: string): boolean {
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   "nav.claude", // Product name.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
+  // The vendor name, and the Pool 2 label that de and pt also keep: "pool" is the French UI term here.
+  "sidecar.poolA",
+  "sidecar.poolB",
+  "provider.name.anthropic2",
+  // A token count ("200k") reads the same in French; the 1M choice carries the translated "par défaut".
+  "claude.contextAccounting200k",
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
   "uptime.hour",

@@ -34,7 +34,7 @@ and image order are preserved; image detail `original` maps to `high`.
 Empty content, malformed or opaque parts, file-id-only images and partial envelopes
 remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
-additional permissions. Native passthrough and compaction retain their raw-body rules.
+additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
 
 ## `openai-chat`
 
@@ -122,6 +122,10 @@ be configured on a separately named custom or self-hosted Ollama provider with
   is refused rather than mis-sent, and remote image URLs are not fetched.
 - **Tools:** declared in Ollama's native shape, streamed tool calls are whole-call records with
   object-valued `arguments`, and tool-result replay is paired strictly by call id and tool name.
+  Valid native call IDs distinguish calls even when the provider repeats a function index.
+  Repeated IDs update the same call's arguments; ID-less entries fall back to index, then position.
+  Calls retain first-seen order. With `parallel_tool_calls: false`, a second distinct provider call
+  still fails the turn closed before any tool call is emitted.
   Codex may record assistant commentary before a pending call's results. Text/thinking with no
   new tool calls is deferred until the batch is settled, so genuine results remain beside their
   originating calls. A new tool-call batch still settles the preceding one; missing results retain
@@ -129,6 +133,11 @@ be configured on a separately named custom or self-hosted Ollama provider with
   output arriving after its batch settles is preserved as explicitly attributed conversation
   text, after any pending call/result pair. Unknown call IDs and mismatched tool identities remain
   invalid; this does not create or execute another tool call.
+  Generated attribution for late outputs shares a 256 KiB per-request JSON-byte budget. Exceeding
+  that budget refuses the request with HTTP 413 `request_too_large` instead of truncating tool identities or output.
+  The error message names the cause and the limit. To continue, start a new thread: compacting on
+  the same Ollama route resends the same history and is refused again, unless compaction is routed
+  to a different provider.
   `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
   closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
 - **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured
@@ -321,6 +330,10 @@ MiMo model Command Code serves.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
+  At `message_stop`, the translated stream emits its terminal outcome and ends without waiting for
+  upstream EOF. Later pings or comments do not turn that completed message into a web-search stream
+  error. Pings and comments before `message_stop` still keep long thinking turns alive; refusals
+  remain non-retryable incomplete outcomes and upstream error stop reasons remain failures.
 - For routed Anthropic Responses turns with client tools, a bounded terminal guard detects the
   high-confidence case where the user requested an action but Claude ends with an execution claim
   and no tool call. It performs at most one internal continuation; normal answers, clarification
