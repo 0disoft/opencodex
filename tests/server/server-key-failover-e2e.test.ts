@@ -27,7 +27,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { managementFetch } from "../helpers/management-auth";
 import { resolveContextPrincipal } from "../../src/server/auth-cors";
-import { resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
+import { providerRequestPacingStatus, resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
@@ -152,7 +152,8 @@ describe("server 429 key failover (end-to-end)", () => {
     try {
       const pending = fetch(new URL("/v1/responses", server.url), { method: "POST", signal: abort.signal,
         headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "paced/test", input: "hello", stream: false }) });
-      await Bun.sleep(30);
+      for (let i = 0; i < 200 && providerRequestPacingStatus("paced", config.providers.paced).queued === 0; i++) await Bun.sleep(5);
+      expect(providerRequestPacingStatus("paced", config.providers.paced).queued).toBe(1);
       const selected = await managementFetch(new URL("/api/providers/keys/active", server.url), {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "paced", id: "second" }),
       });
