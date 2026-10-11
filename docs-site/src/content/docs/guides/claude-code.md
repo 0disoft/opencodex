@@ -234,17 +234,26 @@ default; choose first-party only if you accept that risk.
 
 Desktop itself is not reconfigured: it stays
 signed in to claude.ai, and the Chat tab, connectors, cloud sessions and remote control keep
-working. OpenCodex only writes two variables into the `env` block of `~/.claude/settings.json`
+working. OpenCodex only writes these variables into the `env` block of `~/.claude/settings.json`
 (honoured by `CLAUDE_CONFIG_DIR`):
 
 ```json
 {
   "env": {
     "HTTPS_PROXY": "http://opencodex:<per-install token>@127.0.0.1:10200",
-    "NODE_EXTRA_CA_CERTS": "<home>/.opencodex/claude-intercept/ca.pem"
+    "NODE_EXTRA_CA_CERTS": "<home>/.opencodex/claude-intercept/ca.pem",
+    "NO_PROXY": "127.0.0.1,localhost,::1,0.0.0.0"
   }
 }
 ```
+
+`NO_PROXY` keeps loopback traffic, such as a local HTTP MCP server on `127.0.0.1`, `localhost`,
+a `*.localhost` name, `::1` or `0.0.0.0`, off the proxy, which only tunnels HTTPS to remote
+hosts. A server on another `127.x` address needs that address added to `NO_PROXY` yourself.
+If you already set `NO_PROXY`, OpenCodex appends
+only the missing loopback entries and records its change in `opencodex-no-proxy.json` next to
+`settings.json`; turning first-party off puts your original value back, and a value you edited
+in the meantime is left as it is.
 
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 

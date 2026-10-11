@@ -60,7 +60,9 @@ mutually exclusive on one machine:
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
   writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
-  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
+  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`), plus a
+  loopback `NO_PROXY` bypass (`127.0.0.1,localhost,::1,0.0.0.0`) merged into any user value so local HTTP MCP servers
+  never reach the CONNECT-only proxy (#6936; removal restores the prior value from `opencodex-no-proxy.json`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
