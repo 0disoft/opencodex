@@ -446,6 +446,9 @@ export function storedPoolReplayDispatchNotifier(
     notified = true;
     onDispatch();
   };
+  const notifyWithSlot = (slot: ProviderRequestSlot | undefined): void => {
+    try { notifyOnce(); } catch (error) { slot?.release(); throw error; }
+  };
   const unpacedSource = executor.unpacedFetch ?? executor;
   const unpaced = Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -457,7 +460,7 @@ export function storedPoolReplayDispatchNotifier(
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     if (executor.fetchWithPacingSlot) {
       const slot = await executor.waitForPacing?.(init?.signal ?? undefined);
-      notifyOnce();
+      notifyWithSlot(slot);
       return executor.fetchWithPacingSlot(slot, input, init);
     }
     return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
@@ -467,7 +470,7 @@ export function storedPoolReplayDispatchNotifier(
     waitForPacing: executor.waitForPacing,
     unpacedFetch: unpaced,
     ...(executor.fetchWithPacingSlot ? { fetchWithPacingSlot: (slot: ProviderRequestSlot | undefined, input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-      notifyOnce();
+      notifyWithSlot(slot);
       return executor.fetchWithPacingSlot!(slot, input, init);
     } } : {}),
   }) as ProviderFetch;

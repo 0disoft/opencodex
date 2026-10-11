@@ -613,7 +613,8 @@ export async function prepareResponsesTransport(
       ? (options.sendBudget as import("../../lib/request-execution-budget").RequestExecutionBudget).beginSpendProducer?.() : undefined;
     try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (!selectionIsCurrent(adapterBindings.get(selectedAdapter))) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      const selectionRefreshed = !selectionIsCurrent(adapterBindings.get(selectedAdapter));
+      if (selectionRefreshed) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
       const binding = adapterBindings.get(selectedAdapter);
       const run = rawRunTurns.get(selectedAdapter);
       if (!run) throw new Error("Selected provider no longer supports this turn transport");
@@ -623,8 +624,10 @@ export async function prepareResponsesTransport(
       // Both main and image-loop callers already acquired the initial pacing slot.
       // Subsequent physical messages retain this adapter/credential and are paced normally.
       try {
-        attemptSlot = attempt === 0
-          ? incoming.pacingSlot ?? await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal)
+        // A pre-acquired lease belongs to the original selection, never its replacement.
+        if (attempt === 0 && selectionRefreshed) releaseProviderRequestSlot(incoming.pacingSlot);
+        attemptSlot = attempt === 0 && !selectionRefreshed && incoming.pacingSlot
+          ? incoming.pacingSlot
           : await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal);
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
@@ -640,7 +643,7 @@ export async function prepareResponsesTransport(
             sent = true;
           },
         });
-        await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
