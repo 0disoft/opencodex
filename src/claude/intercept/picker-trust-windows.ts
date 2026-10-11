@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -224,7 +225,8 @@ export function buildWindowsTrustInstallScript(caPath: string, wantSha1: string)
 }
 
 /**
- * Remove script: deletes every Root entry with the exact thumbprint, then re-checks.
+ * Remove script: verifies picker identity for every exact-thumbprint Root entry before
+ * deleting any of them, then re-checks. Legacy picker roots need not match the new install profile.
  * Removal from Root raises OS confirmation like an install, so this runs on the
  * interactive prefix with a bounded 30s budget: predecessor cleanup also runs in headless
  * removal may prompt, mirroring the macOS keychain prompt on migration cleanup.
@@ -235,10 +237,15 @@ export function buildWindowsTrustRemoveScript(wantSha1: string): string {
   return [
     "$ErrorActionPreference='Stop'",
     `$want=${psLiteral(want, "picker CA fingerprint")}`,
+    `$pickerName=${psLiteral(PICKER_CA_COMMON_NAME, "picker CA common name")}`,
     "try {",
     `$store=${currentUserRootStore()}`,
     "$store.Open('ReadWrite')",
-    "try { $found=@($store.Certificates | Where-Object { $_.Thumbprint -eq $want }); foreach($c in $found) { $store.Remove($c) } } finally { $store.Close() }",
+    "try { $found=@($store.Certificates | Where-Object { $_.Thumbprint -eq $want });",
+    "foreach($c in $found) {",
+    `if($c.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false) -ne $pickerName) { Write-Output '${TRUST_MARKER}ERROR'; exit 2 }`,
+    "}",
+    "foreach($c in $found) { $store.Remove($c) } } finally { $store.Close() }",
     `$check=${currentUserRootStore()}`,
     "$check.Open('ReadOnly')",
     "try { $left=@($check.Certificates | Where-Object { $_.Thumbprint -eq $want });",
@@ -306,10 +313,21 @@ export async function trustPickerCaWindows(
 export async function untrustPickerCaWindows(
   fingerprintSha1: string,
   run?: WindowsTrustRunner,
+  cert?: { pem: string },
 ): Promise<{ ok: boolean }> {
   const exec = run ?? defaultWindowsPowerShellRunner;
   if (normalizePickerTrustSha1(fingerprintSha1) === null) return { ok: false };
   try {
+    // Public recovery state is not removal authority. Accept legacy picker roots,
+    // but reject foreign certificates before invoking even an injected runner.
+    if (cert) {
+      const root = new X509Certificate(cert.pem);
+      const names = root.subject.split("\n");
+      if (!root.ca || !names.includes(`CN=${PICKER_CA_COMMON_NAME}`)
+        || names.filter(name => name.startsWith("CN=")).length !== 1
+        || root.issuer !== root.subject || !root.verify(root.publicKey)
+        || pickerCaFingerprints(cert.pem).sha1 !== normalizePickerTrustSha1(fingerprintSha1)) return { ok: false };
+    }
     const result = await exec(powershellArgs(buildWindowsTrustRemoveScript(fingerprintSha1), true), {
       timeoutMs: WINDOWS_TRUST_UNTRUST_TIMEOUT_MS,
     });

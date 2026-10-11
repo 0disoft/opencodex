@@ -210,6 +210,9 @@ test("windows untrust removes by exact thumbprint and reports failures", async (
   assertScriptShape(script, []);
   expect(script).toContain(SHA1);
   expect(script).toContain("Thumbprint -eq");
+  expect(script).toContain(`$pickerName='${PICKER_CA_COMMON_NAME}'`);
+  expect(script).toContain("GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false) -ne $pickerName");
+  expect(script.indexOf("GetNameInfo")).toBeLessThan(script.indexOf("$store.Remove"));
   expect(await untrustPickerCaWindows(SHA1, capture(result("OCX_PICKER_TRUST=ERROR\n", 1)).run))
     .toEqual({ ok: false });
   const idle: WindowsTrustRunner = async () => { throw new Error("runner must stay idle"); };
@@ -235,8 +238,31 @@ test("the shared entry point dispatches win32 to the windows adapter", async () 
     .toEqual({ ok: true });
   expect(installed.argv[0]!.slice(0, -1)).toEqual([...WINDOWS_TRUST_POWERSHELL_INTERACTIVE_PREFIX]);
   const removed = capture(result("OCX_PICKER_TRUST=REMOVED\n", 0));
-  expect(await untrustPickerCa(LEAF, SHA1, removed.run, "win32")).toEqual({ ok: true });
+  const dir = mkdtempSync(join(tmpdir(), "ocx-picker-win-remove-"));
+  try {
+    const pem = mintPickerCa(PICKER_CA_COMMON_NAME), path = join(dir, "ca.pem");
+    writeFileSync(path, pem);
+    expect(await untrustPickerCa(path, pickerCaFingerprints(pem).sha1, removed.run, "win32")).toEqual({ ok: true });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
   expect(removed.argv[0]!.slice(0, -1)).toEqual([...WINDOWS_TRUST_POWERSHELL_INTERACTIVE_PREFIX]);
+});
+
+test("Windows removal refuses foreign recovery certificates but supports legacy picker roots", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-picker-win-remove-identity-"));
+  const path = join(dir, "ca.pem");
+  const foreign = createCertificateAuthority({ commonName: "Foreign application root" }).certPem;
+  const legacy = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME }).certPem;
+  const idle = capture(result("OCX_PICKER_TRUST=REMOVED\n", 0));
+  try {
+    writeFileSync(path, foreign);
+    expect(await untrustPickerCa(path, pickerCaFingerprints(foreign).sha1, idle.run, "win32")).toEqual({ ok: false });
+    expect(idle.argv).toHaveLength(0);
+    writeFileSync(path, legacy);
+    expect(await untrustPickerCa(path, SHA1, idle.run, "win32")).toEqual({ ok: false });
+    expect(idle.argv).toHaveLength(0);
+    expect(await untrustPickerCa(path, pickerCaFingerprints(legacy).sha1, idle.run, "win32")).toEqual({ ok: true });
+    expect(idle.argv).toHaveLength(1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 const FAKE_TRUSTED_POWERSHELL =

@@ -125,6 +125,7 @@ while that proxy is available, including when missing trust leaves the picker pe
 `claude.ai` tunnels relay blindly. Missing trust preserves the profile and its selection.
 The system-proxy observation applies to picker-off installs and pending installs with no
 applied picker profile.
+Doctor verifies the selected profile's loopback CONNECT relay directly, independently of picker trust or effectiveness. Off, absent, unselected, unreadable, stale-settings and unavailable-relay cases retain the registry diagnostic; a credential-bearing main intercept proxy does not count as Desktop's egress relay.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
@@ -186,6 +187,7 @@ The shared CONNECT primitive accepts optional `allowedTargets` authorities. It s
 normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
 before tunnel selection or dialing. Authentication and loopback refusal remain in force.
 Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+Windows trust removal in `src/claude/intercept/picker-trust-windows.ts` requires the exact picker common name and fingerprint before deleting a current-user Root entry. Public recovery certificates are verified as self-signed picker roots before removal; legacy roots may be removed without matching the current installation extension profile.
 Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 

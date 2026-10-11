@@ -131,7 +131,10 @@ export async function untrustPickerCa(
   platform: NodeJS.Platform = process.platform,
 ): Promise<{ ok: boolean }> {
   if (platform === "win32") {
-    return untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run);
+    try {
+      return await untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
+        { pem: readFileSync(caPath, "utf8") });
+    } catch { return { ok: false }; }
   }
   if (platform !== "darwin") return { ok: false };
   const keychain = loginKeychainPath();

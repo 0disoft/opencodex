@@ -260,10 +260,13 @@ entries, is kept.
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 
 :::note[Windows system proxy (Clash, v2rayN, corporate proxies)]
-When a Windows system proxy is on, Claude Desktop hands it to the Code tab as `HTTPS_PROXY`, and
+For picker-off installs or pending installs with no applied picker profile, a Windows system proxy
+is handed to the Code tab as `HTTPS_PROXY`, and
 that value takes precedence over the OpenCodex proxy in `~/.claude/settings.json`. The Code tab
 then goes around OpenCodex and routed models fail there, while the standalone CLI keeps working.
-Once picker mode is active, Desktop uses its app-owned fixed egress proxy instead of the system proxy. Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
+An applied selected picker profile uses Desktop's fixed egress proxy while it is available, even when
+missing trust leaves the picker pending and `claude.ai` relays blindly. System-proxy bypass advice
+applies when there is no selected available picker profile. Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
 `system_proxy_bypass`), then fully quit and reopen Claude Desktop. `ocx doctor` reports this
 under "Claude Desktop first-party vs Windows system proxy". It cannot evaluate a PAC script or
 automatic proxy detection (WPAD, "Automatically detect settings"), so it reports those as unknown;
