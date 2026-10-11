@@ -580,8 +580,9 @@ Preflight heartbeat retention keeps `replayUnsafe` sticky in the replayed tail, 
 ## OAuth subscription labels
 
 `src/oauth/google-antigravity.ts` persists `loadCodeAssist`'s `paidTier.id`, falling back
-to `currentTier.id`, alongside the discovered project on login and refresh. `src/oauth/plan.ts`
-accepts only trimmed lowercase labels of at most 64 characters in `[a-z0-9_.-]`.
+to `currentTier.id`, alongside the discovered project on login and refresh. An unanswered
+`loadCodeAssist` observes nothing and keeps the stored label; only a parsed body can clear it.
+`src/oauth/plan.ts` accepts only trimmed lowercase labels of at most 64 characters in `[a-z0-9_.-]`.
 `src/oauth/store.ts` preserves this allowlisted metadata and `src/oauth/index.ts` projects
 validated stored labels for every provider, with explicit null for an unknown subscription.
 Anthropic profile labels follow the [account-pool contract](providers/anthropic-account-pool.md#subscription-labels).

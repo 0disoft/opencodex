@@ -147,10 +147,11 @@ export async function discoverAntigravityProject(accessToken: string, signal?: A
   return (await discoverAntigravityAccount(accessToken, signal)).projectId;
 }
 
-async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan: string | null }> {
+async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan?: string | null }> {
   const account = await loadCodeAssistProject(accessToken, signal);
   const projectId = account?.projectId ?? await onboardProject(accessToken, signal);
-  return { projectId, plan: account?.plan ?? null };
+  // An unanswered loadCodeAssist observed nothing; only a parsed body may clear a stored label.
+  return { projectId, ...(account ? { plan: account.plan } : {}) };
 }
 
 function credentialsFromPayload(payload: GoogleTokenPayload, refreshFallback = ""): OAuthCredentials {

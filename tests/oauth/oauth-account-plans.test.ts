@@ -156,6 +156,18 @@ test("Antigravity prefers paidTier, falls back to currentTier, and keeps plan th
     expect(getLoginStatus("google-antigravity").accounts![0]!.plan).toBe(expected);
   }
 });
+test("an unanswered loadCodeAssist leaves the stored Antigravity plan in place", async () => {
+  globalThis.fetch = (async (url) => {
+    if (String(url).endsWith("/token")) return Response.json({ access_token: "synthetic-access", expires_in: 3600 });
+    if (String(url).endsWith(":onboardUser")) return Response.json({ done: true,
+      response: { projectId: "synthetic-project" } });
+    return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  const fresh = await refreshAntigravityToken("synthetic-refresh");
+  expect(fresh.projectId).toBe("synthetic-project");
+  expect(fresh.plan).toBeUndefined();
+  expect(mergeOAuthPlan(fresh, credential({ accountId: undefined, plan: "g1-pro-tier" }))).toBe("g1-pro-tier");
+});
 test("failed profile and project reads keep an unknown plan null", async () => {
   anthropicFetch({}, true);
   await saveCredential("anthropic", await refreshAnthropicToken("synthetic-refresh"));

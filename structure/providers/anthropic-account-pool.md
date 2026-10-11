@@ -40,6 +40,8 @@ CLI rotation persist a validated display-only `plan`; both Anthropic instances p
 through `src/oauth/index.ts`. Rate-limit tiers strip `default_claude_`, with organization
 kinds stripping `claude_` as fallback. Unknown tiers remain null and never come from quota
 percentages. Same-account refreshes retain an unobserved plan; observed unknown tiers clear it.
+Refresh gives the profile read a 2-second deadline because a refresh can sit on a request path;
+a missed read leaves the stored label in place.
 An account replacement cannot inherit another account's label.
 
 ## Discovery credential ownership

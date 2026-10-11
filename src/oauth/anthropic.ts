@@ -12,6 +12,8 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
+/** Profile enrichment budget on token refresh; login paths keep the resolver's own deadline. */
+const REFRESH_PROFILE_TIMEOUT_MS = 2_000;
 const SCOPES = "org:create_api_key user:profile user:inference";
 
 // ── OAuth-request requirements applied by the anthropic adapter when authMode==="oauth" ──
@@ -228,5 +230,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     client_id: CLIENT_ID,
     refresh_token: refreshToken,
   });
-  return withAccountProfile(credsFrom(parseTokenResponse(responseBody), refreshToken));
+  // Refresh can sit on a request path, so the profile enrichment gets a short deadline. A
+  // missed read leaves plan unobserved and the stored label survives through mergeOAuthPlan.
+  return withAccountProfile(credsFrom(parseTokenResponse(responseBody), refreshToken), AbortSignal.timeout(REFRESH_PROFILE_TIMEOUT_MS));
 }
