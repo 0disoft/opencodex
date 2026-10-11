@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
-import { clearKeyCooldowns, forgetApiKeyRotationCursor, recordDistributedKeyFailure } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor, getKeyCooldownUntil, recordDistributedKeyFailure } from "../../src/providers/key-failover";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -193,3 +193,37 @@ test("chat refuses after three queued rebuilds without spending a physical send"
     unchanged(config); noLeaks(config);
   } finally { abort.abort(); for (const slot of held) slot.release(); await pending.catch(() => undefined); }
 }, 10_000);
+
+for (const statusCode of [401, 429]) test(`chat wire override ${statusCode} does not reject unused distributed pool keys`, async () => {
+  const config = fixture();
+  config.providers[NAME]!.headers = { Authorization: "Bearer fixture-key-override" };
+  globalThis.fetch = (async (input, init) => {
+    seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)) });
+    return Response.json({ error: { type: statusCode === 401 ? "authentication_error" : "rate_limit_error", message: "fixture overridden credential refusal" } }, { status: statusCode });
+  }) as typeof fetch;
+  const result = await start(config, new AbortController());
+  expect(result.response.status).toBe(statusCode);
+  expect(result.text).toContain("fixture overridden credential refusal");
+  expect(seen.map(entry => entry.key)).toEqual(["Bearer fixture-key-override"]);
+  for (let index = 0; index < KEYS.length; index++) expect(getKeyCooldownUntil(NAME, `k${index + 1}`)).toBeNull();
+  unchanged(config); noLeaks(config);
+});
+
+test("chat owned 401 rotates the rejected distributed credential before output", async () => {
+  const config = fixture();
+  const reply = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (seen.length === 0) {
+      seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)) });
+      return Response.json({ error: { type: "authentication_error", message: "fixture selected credential refusal" } }, { status: 401 });
+    }
+    return reply(input, init);
+  }) as typeof fetch;
+  const result = await start(config, new AbortController());
+  expect(result.response.status).toBe(200);
+  expect(result.text).toContain("fixture reply");
+  expect(seen.map(entry => entry.key)).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[1]}`]);
+  expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
+  expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+  unchanged(config); noLeaks(config);
+});
