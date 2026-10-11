@@ -149,7 +149,11 @@ export async function discoverAntigravityProject(accessToken: string, signal?: A
 
 async function discoverAntigravityAccount(accessToken: string, signal?: AbortSignal): Promise<{ projectId?: string; plan?: string | null }> {
   const account = await loadCodeAssistProject(accessToken, signal);
-  const projectId = account?.projectId ?? await onboardProject(accessToken, signal);
+  // Once loadCodeAssist answered, an onboarding failure must not discard its tier observation;
+  // a missing project still fails login, and cancellation still propagates.
+  const projectId = account?.projectId ?? await (account
+    ? onboardProject(accessToken, signal).catch(error => { if (signal?.aborted) throw error; return undefined; })
+    : onboardProject(accessToken, signal));
   // An unanswered loadCodeAssist observed nothing; only a parsed body may clear a stored label.
   return { projectId, ...(account ? { plan: account.plan } : {}) };
 }

@@ -292,7 +292,7 @@ async function handleConsume(ctx: ManagementContext, injected?: AnthropicResetGr
   // Report what the journal holds. An overlapping same-id attempt may have
   // settled first; its answer is the canonical one.
   const replayed = settled.code !== answer.code || settled.resetsLeft !== answer.resetsLeft;
-  await admitJournaledReset(settled.code, deps.now?.() ?? Date.now());
+  await admitJournaledReset(settled.code, settled.settledAt);
   return jsonResponse(
     {
       provider,

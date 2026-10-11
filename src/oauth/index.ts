@@ -1627,7 +1627,10 @@ export async function runLogin(
       if (!identityMatches) {
         throw new OAuthReauthIdentityMismatchError();
       }
-      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred, {
+      // Proven same account: a reauth whose tier read failed keeps the stored label.
+      const reauthPlan = mergeOAuthPlan(cred, existing);
+      const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
+      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
       });

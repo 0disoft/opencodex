@@ -65,7 +65,7 @@ test("a settled reset lifts a retry-after cooldown and replaces the cached bars"
     seven_day_fable: { utilization: 4, resets_at: resetAt },
     limits: [],
   })) as typeof fetch;
-  await admitAnthropicAccountAfterReset(instance, id);
+  await admitAnthropicAccountAfterReset(instance, id, now + 1);
 
   expect(projectStoredOAuthAccountHealth(instance, account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(f.modelQuota.anthropicFamilyRejected(id, "claude-fable-5", Date.now())).toBe(false);
@@ -88,7 +88,7 @@ test("a failed usage reread still leaves the reset account eligible", async () =
   f.routing.anthropicRoutingFor("anthropic").recordAnthropicAccount429(f.config, id, "3600", now, headers);
   setCachedProviderAccountQuotaForTests("anthropic", id, { fiveHourPercent: 100, weeklyPercent: 100, updatedAt: now });
   globalThis.fetch = (async () => { throw new Error("usage endpoint down"); }) as typeof fetch;
-  await admitAnthropicAccountAfterReset("anthropic", id);
+  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
   const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
   expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(getCachedProviderAccountQuota("anthropic", id)?.weeklyPercent).not.toBe(100);
@@ -110,7 +110,7 @@ test("a five-hour-only reset lifts the account cooldown without releasing a mode
   globalThis.fetch = (async () => Response.json({
     five_hour: { utilization: 0, resets_at: new Date(now + 3_600_000).toISOString() },
   })) as typeof fetch;
-  await admitAnthropicAccountAfterReset("anthropic", id);
+  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
   const account = f.store.getAccountSet("anthropic")!.accounts.find(row => row.id === id)!;
   expect(projectStoredOAuthAccountHealth("anthropic", account, Date.now(), { observeOnly: true }).status).toBe("healthy");
   expect(f.modelQuota.anthropicFamilyRejected(id, "claude-fable-5", Date.now())).toBe(true);
@@ -128,7 +128,11 @@ test("a replayed reset leaves a refusal recorded after it settled", async () => 
   await admitAnthropicAccountAfterReset("anthropic", id, now - 1);
   expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
   expect(sends).toBe(0);
+  // A refusal in the same clock tick as the settlement cannot be ordered, so it stays too.
   await admitAnthropicAccountAfterReset("anthropic", id, now);
+  expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("cooldown");
+  expect(sends).toBe(0);
+  await admitAnthropicAccountAfterReset("anthropic", id, now + 1);
   expect(projectStoredOAuthAccountHealth("anthropic", account, now, { observeOnly: true }).status).toBe("healthy");
 });
 
@@ -143,19 +147,23 @@ test("a reset reread sends its own usage request instead of joining an older one
   });
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const olderEntered = new Promise<void>(resolve => { entered = resolve; });
   let sends = 0;
   globalThis.fetch = (async () => {
     sends += 1;
-    if (sends === 1) { await held; return usage(100); }
+    if (sends === 1) { entered(); await held; return usage(100); }
     return usage(0);
   }) as typeof fetch;
   const older = fetchAnthropicAccountQuota("anthropic", id, true);
-  for (let i = 0; i < 200 && sends === 0; i++) await new Promise(resolve => setTimeout(resolve, 5));
-  expect(sends).toBe(1);
-  await admitAnthropicAccountAfterReset("anthropic", id);
-  expect(sends).toBe(2);
-  expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
-  release();
-  await older;
+  try {
+    await olderEntered;
+    await admitAnthropicAccountAfterReset("anthropic", id);
+    expect(sends).toBe(2);
+    expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
+  } finally {
+    release();
+    await older;
+  }
   expect(getCachedProviderAccountQuota("anthropic", id)).toMatchObject({ fiveHourPercent: 0, weeklyPercent: 0 });
 });

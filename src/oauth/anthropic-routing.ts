@@ -419,11 +419,14 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     return cleared;
   }
 
-  /** Lift a cooldown recorded no later than `cutoff`; a refusal recorded after it stays. */
+  /**
+   * Lift a cooldown recorded strictly before `cutoff`. A refusal recorded at or after it stays:
+   * a tie within one clock tick cannot be ordered, so it is kept rather than erased.
+   */
   function clearAnthropicAccountCooldownRecordedBy(accountId: string, cutoff: number): "cleared" | "absent" | "newer" {
     const entry = upstreamHealth.get(accountId);
     if (!entry) return "absent";
-    if (entry.recordedAt > cutoff) return "newer";
+    if (entry.recordedAt >= cutoff) return "newer";
     upstreamHealth.delete(accountId);
     noteAnthropicCooldownMutation(accountId);
     return "cleared";

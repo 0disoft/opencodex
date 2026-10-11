@@ -232,6 +232,8 @@ export function beginAnthropicResetOperation(
 export interface AnthropicResetSettlement {
   code: string;
   resetsLeft: number | null;
+  /** When the canonical (first) settlement was journaled, not when this caller arrived. */
+  settledAt: number;
 }
 
 /**
@@ -250,14 +252,16 @@ export function settleAnthropicResetOperation(
     const journal = readJournal(filePath);
     const existing = journal.operations[settlement.operationId];
     if (!existing) throw new AnthropicResetLedgerError("unavailable");
-    if (existing.status === "settled") return { code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null };
+    if (existing.status === "settled") {
+      return { code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null, settledAt: existing.updatedAt };
+    }
     existing.status = "settled";
     existing.code = settlement.code;
     existing.resetsLeft = settlement.resetsLeft;
     existing.leaseUntil = 0;
     existing.updatedAt = now;
     writeJournal(filePath, journal, now);
-    return { code: settlement.code, resetsLeft: settlement.resetsLeft };
+    return { code: settlement.code, resetsLeft: settlement.resetsLeft, settledAt: now };
   });
 }
 

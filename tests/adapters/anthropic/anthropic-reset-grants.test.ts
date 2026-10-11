@@ -233,9 +233,10 @@ describe("reset-grant journal", () => {
   test("the first settlement wins and a later settle gets the stored one back", () => {
     beginAnthropicResetOperation(id(OP), { journalPath, now: T0 });
     expect(settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0 }, { journalPath, now: T0 + 1 }))
-      .toEqual({ code: "reset", resetsLeft: 0 });
+      .toEqual({ code: "reset", resetsLeft: 0, settledAt: T0 + 1 });
+    // A late answer gets the canonical settlement time too, so it cannot outrank a later refusal.
     expect(settleAnthropicResetOperation({ operationId: OP, code: "unavailable", resetsLeft: null }, { journalPath, now: T0 + 2 }))
-      .toEqual({ code: "reset", resetsLeft: 0 });
+      .toEqual({ code: "reset", resetsLeft: 0, settledAt: T0 + 1 });
     expect(beginAnthropicResetOperation(id(OP), { journalPath, now: T0 + 3 })).toMatchObject({ kind: "replay", code: "reset" });
   });
 
