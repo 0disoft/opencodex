@@ -288,7 +288,7 @@ Cursor, one lease spans the whole turn: RunSSE and BidiAppend may overlap inside
 turns wait at the cap. Follow-up sends still obey start intervals. The turn owner returns its lease
 after `runTurn` settles, so RunSSE body completion cannot admit another turn early. A capped
 canonical Codex WebSocket turn uses HTTP/SSE because the socket has no response-body lifecycle.
-Capacity waits use the same bounded queue and retryable queue-overload errors as interval waits.
+Capacity waits use the same bounded queue and retryable queue-overload errors as interval waits. Optional `requestPacing.keys` adds a shared cross-model limit for each credential reference; duplicate references share capacity, but distinct references resolving to one upstream project do not imply separate quota. `keySelection: round-robin` assigns request-local healthy keys without mutating persisted selection, skips known cooldowns, and refuses exhausted pools with retryable 429. Provider, model and key gates reserve atomically; key counters and the allocation cursor are process-local, not token or billing balances. OAuth and forwarded credentials retain their existing selection.
 
 Command Code effort defaults in `src/providers/command-code-efforts.ts` combine public-profile
 facts with the live API measurements from #5096. Both presets share the exact per-model rows;

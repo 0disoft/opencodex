@@ -200,6 +200,7 @@ import {
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { requestPacingOverloadResponse } from "./pacing-overload";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { linkRequestSessionLane, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
@@ -905,7 +906,13 @@ export async function handleResponsesCompact(
       // codexAccountMode cases, and the picker returns null for them anyway.
       // Transport variant, for the same reason as the Responses core: the persisted row has no
       // registry backfills, and compactProvider is read for its transport fields below.
-      const warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider);
+      let warmKeyProvider;
+      try { warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider); }
+      catch (error) {
+        const refusal = requestPacingOverloadResponse(error);
+        if (refusal) return refusal;
+        throw error;
+      }
       if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
       headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
     }

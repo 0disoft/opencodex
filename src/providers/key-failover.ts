@@ -9,6 +9,7 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { commitProviderApiKeySelection } from "./api-key-selection";
+import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
@@ -408,9 +409,11 @@ const keyRotationCursor = new Map<string, string>();
 export function forgetApiKeyRotationCursor(providerName?: string): void {
   if (!providerName) {
     keyRotationCursor.clear();
+    dispatchKeyCursor.clear();
     return;
   }
   keyRotationCursor.delete(providerName);
+  dispatchKeyCursor.delete(providerName);
 }
 
 /** The pool entry shape is inline on OcxProviderConfig; name it once rather than re-spelling it. */
@@ -556,9 +559,31 @@ export function selectProactiveApiKeyTransport(
   promptCacheKey?: string,
   now = Date.now(),
 ): OcxProviderTransport | null {
+  const configured = config.providers[providerName];
+  if (configured?.requestPacing?.enabled && configured.requestPacing.keySelection === "round-robin"
+    && hasKeyPoolFailover(configured)) {
+    return applyRotatedTransport(providerName, routedProvider, allocateDistributedKey(providerName, configured, now), promptCacheKey);
+  }
   const committed = selectProactiveApiKey(config, providerName, now);
   if (!committed) return null;
   return applyRotatedTransport(providerName, routedProvider, committed, promptCacheKey);
+}
+
+const dispatchKeyCursor = new Map<string, string>();
+function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
+  const pool = (provider.apiKeyPool ?? []).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
+  const previous = dispatchKeyCursor.get(providerName);
+  const start = pool.findIndex(entry => entry.id === previous);
+  for (let offset = 1; offset <= pool.length; offset++) {
+    const entry = pool[(start + offset) % pool.length]!;
+    if (isKeyInCooldown(providerName, entry.id, now)) continue;
+    dispatchKeyCursor.set(providerName, entry.id);
+    return { ...provider, apiKey: entry.key, _apiKeyAttempt: {
+      entryId: entry.id, reference: entry.key, revision: provider.apiKeySelectionRevision, distributed: true,
+    } };
+  }
+  const next = Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000));
+  throw new RequestPacingQueueOverloadError(providerName, "keys_exhausted", Math.max(1, Math.ceil((next - now) / 1000)));
 }
 
 /**
@@ -698,6 +723,17 @@ function rotateKeyAfterFailure(
   const provider = config.providers[providerName];
   if (!provider) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
+
+  if (attemptedSelection?.distributed) {
+    const failed = provider.apiKeyPool?.find(entry => entry.id === attemptedSelection.entryId && entry.key === attemptedSelection.reference);
+    if (!failed || provider.apiKeySelectionRevision !== attemptedSelection.revision) return null;
+    const delay = failureStatus === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
+      ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+    for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) keyCooldowns.set(cooldownKey(providerName, entry.id), { cooldownUntil: now + delay });
+    sweepExpiredOnWrite(now);
+    if (!(provider.apiKeyPool ?? []).some(entry => !isKeyInCooldown(providerName, entry.id, now))) return null;
+    return allocateDistributedKey(providerName, provider, now);
+  }
 
   const failedKey = attemptedSelection?.reference ?? attemptedKey ?? provider.apiKey;
   type Rotation =

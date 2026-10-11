@@ -62,6 +62,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
@@ -433,8 +434,16 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     }
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
-    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
-    if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    try {
+      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+      if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    } catch (error) {
+      cleanupAbort(); upstream.abort();
+      if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+      const refusal = fail(429, error.message, "rate_limit_error");
+      refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+      return refusal;
+    }
   }
   let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
@@ -720,6 +729,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof RequestPacingQueueOverloadError) {
+      const refusal = fail(429, sendError.message, "rate_limit_error");
+      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      return refusal;
+    }
     if (sendError instanceof SendBudgetExhaustedError) return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");
     if (sendError instanceof NativeMessagesSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);

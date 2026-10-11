@@ -30,6 +30,7 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
 import { selectProactiveApiKeyTransport } from "../providers/key-failover";
+import { requestPacingOverloadResponse } from "./responses/pacing-overload";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
@@ -805,7 +806,13 @@ export async function handleImages(
     //
     // Transport variant: this branch reads `provider.baseUrl` and `provider.headers` to build
     // the URL and the request, and it comes back with the credential already resolved.
-    const warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider);
+    let warmKeyProvider;
+    try { warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider); }
+    catch (error) {
+      const refusal = requestPacingOverloadResponse(error);
+      if (refusal) return refusal;
+      throw error;
+    }
     const provider = warmKeyProvider ?? candidates.keyed.provider;
     // No fall back to the earlier snapshot once a pick has happened. The picker COMMITS its
     // choice before returning, so if the chosen reference will not resolve -- revoked keychain

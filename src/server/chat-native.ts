@@ -57,6 +57,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { fastPolicyForModel } from "../providers/service-tier";
+import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
@@ -313,8 +314,16 @@ export async function runNativeChatAttempt(
   // assigned before the transport pin in core.ts.
   // Transport variant: the bare picker answers with the persisted row, which for a built-in
   // provider carries no adapter id or base URL until routedProviderConfig backfills it.
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
-  if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  try {
+    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+    if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  } catch (error) {
+    cleanupAbort(); upstream.abort();
+    if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+    const refusal = fail(429, error.message, "rate_limit_error");
+    refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
+    return refusal;
+  }
   let activeProvider: OcxProviderConfig = route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
@@ -594,6 +603,11 @@ export async function runNativeChatAttempt(
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof RequestPacingQueueOverloadError) {
+      const refusal = fail(429, sendError.message, "rate_limit_error");
+      refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
+      return refusal;
+    }
     if (sendError instanceof SendBudgetExhaustedError) {
       // A decision this process made, answered as the Responses path answers it: 429, not 502.
       return fail(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);

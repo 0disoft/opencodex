@@ -17,10 +17,17 @@ function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeyS
     && current.revision === expected.revision;
 }
 
-function currentKeyProvider(config: OcxConfig, name: string): OcxProviderConfig | null {
+function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection): OcxProviderConfig | null {
   const configured = config.providers[name];
   if (!configured || configured.disabled) return null;
-  const current = routedProviderConfig(name, { ...configured, _apiKeyAttempt: undefined });
+  let row = configured;
+  if (selection?.distributed) {
+    const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
+    if (!entry || configured.apiKeySelectionRevision !== selection.revision
+      || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
+    row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
+  }
+  const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()) return null;
   return current;
@@ -32,10 +39,10 @@ export function providerApiKeySelectionIsCurrent(
   name: string,
   routedProvider: OcxProviderConfig,
 ): boolean {
-  const current = currentKeyProvider(config, name);
   const expected = routedProvider._apiKeyAttempt;
+  const current = currentKeyProvider(config, name, expected);
   return current !== null && expected !== undefined
-    && matchesSelection(config.providers[name]!, expected)
+    && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode
     && current.baseUrl === routedProvider.baseUrl;
@@ -47,7 +54,11 @@ export function resolveCurrentProviderApiKeyTransport(
   name: string,
   routedProvider: OcxProviderConfig,
 ): OcxProviderConfig | null {
-  const current = currentKeyProvider(config, name);
+  // A permit acquired for one key cannot authorize a different key after a manual edit.
+  if (routedProvider.requestPacing?.enabled && routedProvider.requestPacing.keys
+    && routedProvider._apiKeyAttempt && config.providers[name]
+    && !routedProvider._apiKeyAttempt.distributed && !matchesSelection(config.providers[name]!, routedProvider._apiKeyAttempt)) return null;
+  const current = currentKeyProvider(config, name, routedProvider._apiKeyAttempt);
   if (!current) return null;
   const runtime = routedProvider as OcxProviderTransport;
   const headers = { ...current.headers };
