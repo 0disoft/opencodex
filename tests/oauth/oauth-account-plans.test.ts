@@ -142,6 +142,11 @@ test("plan merging preserves unobserved metadata but never inherits across ident
   const after = credential({ access: "synthetic-new", anthropicIdentity: bindAnthropicIdentity("synthetic-new", "synthetic-other") });
   expect(mergeOAuthPlan(after, before)).toBeUndefined();
   expect(() => mergeAnthropicIdentity(after, before)).toThrow("Anthropic credential identity changed");
+  // Identifiers compare kind for kind: an email-only reauth of an account stored with an id and
+  // the same email is the same account, while a different email is not.
+  const stored = credential({ accountId: "synthetic-google-id", email: "user@example.test", plan: "g1-pro-tier" });
+  expect(mergeOAuthPlan(credential({ accountId: undefined, email: "USER@example.test" }), stored)).toBe("g1-pro-tier");
+  expect(mergeOAuthPlan(credential({ accountId: undefined, email: "other@example.test" }), stored)).toBeUndefined();
 });
 test("a same-account login whose tier read failed keeps the stored plan", async () => {
   await saveCredential("anthropic", credential({ plan: "max_20x" }));
@@ -181,6 +186,16 @@ test("an unanswered loadCodeAssist leaves the stored Antigravity plan in place",
   expect(fresh.projectId).toBe("synthetic-project");
   expect(fresh.plan).toBeUndefined();
   expect(mergeOAuthPlan(fresh, credential({ accountId: undefined, plan: "g1-pro-tier" }))).toBe("g1-pro-tier");
+});
+test("an onboarding failure keeps the tier loadCodeAssist already reported", async () => {
+  globalThis.fetch = (async (url) => {
+    if (String(url).endsWith("/token")) return Response.json({ access_token: "synthetic-access", expires_in: 3600 });
+    if (String(url).endsWith(":onboardUser")) throw new Error("synthetic onboarding failure");
+    return Response.json({ paidTier: { id: "g1-ultra-lite-tier" } });
+  }) as typeof fetch;
+  const fresh = await refreshAntigravityToken("synthetic-refresh");
+  expect(fresh.plan).toBe("g1-ultra-lite-tier");
+  expect(fresh.projectId).toBeUndefined();
 });
 test("failed profile and project reads keep an unknown plan null", async () => {
   anthropicFetch({}, true);
