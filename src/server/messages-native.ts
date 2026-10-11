@@ -67,6 +67,7 @@ import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
+  recordDistributedKeyFailure,
   rotateProviderTransportOn401,
   rotateProviderTransportOn429,
   selectProactiveApiKeyTransport,
@@ -522,6 +523,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       && nativeMessagesDeclineReason({ ...route, provider: routed }, body, config, selector) === undefined;
   };
 
+  // Keep the actual failed wire identity if a later recovery is refused before sending.
+  // A 429 remains eligible for explicit same-key retries until that ladder is finished.
+  let pendingDistributedFailure: (() => void) | undefined;
+  let distributedResponseOwnsKey = true;
+  const settleDistributedFailure = () => {
+    const record = pendingDistributedFailure;
+    pendingDistributedFailure = undefined;
+    record?.();
+  };
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
@@ -592,6 +602,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             }
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+            const selection = activeProvider._apiKeyAttempt;
+            const ownsDistributedKey = !selection?.distributed
+              || (headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
@@ -635,6 +648,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
+            distributedResponseOwnsKey = ownsDistributedKey;
+            const failureStatus = dispatched.status;
+            pendingDistributedFailure = selection?.distributed && ownsDistributedKey && (failureStatus === 401 || failureStatus === 429)
+              && !isNonReplayableResponse(dispatched)
+              ? () => { recordDistributedKeyFailure(config, route.providerName, selection, failureStatus,
+                Date.now(), dispatched.headers.get("retry-after")); }
+              : undefined;
             if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
             return dispatched;
           },
@@ -659,51 +679,65 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   let response: Response;
   try {
     response = await send();
-    // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
-    while (response.status === 401 && hasKeyPoolFailover(activeProvider) && transientSendAvailable()) {
-      const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
-        now: Date.now(),
-        attemptedKey: activeProvider.apiKey,
-        attemptedSelection: activeProvider._apiKeyAttempt,
-      });
-      if (!rotated) break;
-      discard(response);
-      rebuildFor(rotated);
-      response = await send("key-401");
-    }
-    const retryPolicy = oauthBinding ? undefined : rateLimitRetryPolicyFor(activeProvider);
+    let retryPolicy: ReturnType<typeof rateLimitRetryPolicyFor> | undefined;
     let retries = 0;
-    // A refusal this proxy synthesized for a reset replay is not a provider rate limit.
-    while (
-      response.status === 429
-      && !isNonReplayableResponse(response)
-      && retryPolicy
-      && retries < retryPolicy.attempts
-      && transientSendAvailable()
-    ) {
-      retries += 1;
-      for await (const _ of prepareSameTarget429Wait({
-        body: response.body,
-        signal: upstream.signal,
-        delayMs: rateLimitRetryDelayMs(retryPolicy, response.headers.get("retry-after"), Date.now()),
-      })) { /* pre-stream wait */ }
-      if (upstream.signal.aborted) throw upstream.signal.reason;
-      response = await send("rate-limit-429");
+    const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
+    for (let pass = 0; pass < recoveryPasses; pass++) {
+      const priorResponse = response;
+      // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
+      while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && transientSendAvailable()) {
+        const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
+          now: Date.now(),
+          attemptedKey: activeProvider.apiKey,
+          attemptedSelection: activeProvider._apiKeyAttempt,
+        });
+        pendingDistributedFailure = undefined; // Rotation already records this physical failure.
+        if (!rotated) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-401");
+      }
+      if (pass === 0) retryPolicy = oauthBinding ? undefined : rateLimitRetryPolicyFor(activeProvider);
+      // A refusal this proxy synthesized for a reset replay is not a provider rate limit.
+      while (
+        response.status === 429
+        && distributedResponseOwnsKey
+        && !isNonReplayableResponse(response)
+        && retryPolicy
+        && retries < retryPolicy.attempts
+        && transientSendAvailable()
+      ) {
+        retries += 1;
+        for await (const _ of prepareSameTarget429Wait({
+          body: response.body,
+          signal: upstream.signal,
+          delayMs: rateLimitRetryDelayMs(retryPolicy, response.headers.get("retry-after"), Date.now()),
+        })) { /* pre-stream wait */ }
+        if (upstream.signal.aborted) throw upstream.signal.reason;
+        response = await send("rate-limit-429");
+      }
+      while (response.status === 429 && distributedResponseOwnsKey && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
+        const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
+          retryAfter: response.headers.get("retry-after"),
+          now: Date.now(),
+          attemptedKey: activeProvider.apiKey,
+          attemptedSelection: activeProvider._apiKeyAttempt,
+        });
+        pendingDistributedFailure = undefined; // Rotation already records this physical failure.
+        if (!rotated) break;
+        // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
+        if (!transientSendAvailable()) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-429");
+      }
+      // Only distributed recovery revisits the ladder when a send crossed failure classes.
+      // Retry and transient counters remain shared across passes; an unchanged response stops.
+      if (!activeProvider._apiKeyAttempt?.distributed || !distributedResponseOwnsKey || response === priorResponse
+        || (response.status !== 401 && response.status !== 429) || isNonReplayableResponse(response)
+        || !transientSendAvailable()) break;
     }
-    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
-      const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
-        retryAfter: response.headers.get("retry-after"),
-        now: Date.now(),
-        attemptedKey: activeProvider.apiKey,
-        attemptedSelection: activeProvider._apiKeyAttempt,
-      });
-      if (!rotated) break;
-      // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
-      if (!transientSendAvailable()) break;
-      discard(response);
-      rebuildFor(rotated);
-      response = await send("key-429");
-    }
+    settleDistributedFailure();
     const oauthRetryKey = {};
     const triedAccountIds = new Set<string>();
     let oauthFailovers = 0;
@@ -741,6 +775,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
+    settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = fail(429, sendError.message, "rate_limit_error");

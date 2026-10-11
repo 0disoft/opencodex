@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { saveConfig } from "../../src/config";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
@@ -215,4 +216,33 @@ test("compact 401 after queued reselection cools the physical key B without repl
     expect(getKeyCooldownUntil(NAME, "k3")).toBeNull();
     unchanged(config); noLeaks(config);
   } finally { abort.abort(); first.release(); await pending.catch(() => undefined); }
+});
+
+test("direct compact distributed 429 cools each physical key without same-request replay", async () => {
+  const config = fixture();
+  globalThis.fetch = (async (input, init) => {
+    seen.push({ key: new Headers(init?.headers).get("authorization"), url: String(input), body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+    return Response.json({ error: { message: "fixture capacity" } }, { status: 429, headers: { "retry-after": "60" } });
+  }) as typeof fetch;
+  const began = Date.now();
+  for (let index = 0; index < 4; index++) {
+    const result = await start(config, new AbortController());
+    expect(result.response.status).toBe(429);
+    expect(seen).toHaveLength(Math.min(index + 1, 3));
+  }
+  expect(seen.map(row => row.key)).toEqual(KEYS.map(key => `Bearer ${key}`));
+  for (let index = 0; index < 3; index++) expect(getKeyCooldownUntil(NAME, `k${index + 1}`)).toBeGreaterThanOrEqual(began + 60_000);
+  unchanged(config); noLeaks(config);
+});
+
+test("a synthetic non-replayable compact 429 never cools a distributed key", async () => {
+  const config = fixture();
+  globalThis.fetch = (async () => {
+    const response = Response.json({ error: { message: "fixture local refusal" } }, { status: 429, headers: { "retry-after": "60" } });
+    markResponseNonReplayable(response); return response;
+  }) as typeof fetch;
+  const result = await start(config, new AbortController());
+  expect(result.response.status).toBe(429);
+  for (let index = 0; index < 3; index++) expect(getKeyCooldownUntil(NAME, `k${index + 1}`)).toBeNull();
+  unchanged(config); noLeaks(config);
 });

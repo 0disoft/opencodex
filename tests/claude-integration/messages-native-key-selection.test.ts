@@ -3,8 +3,10 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
-import { clearKeyCooldowns, forgetApiKeyRotationCursor, recordDistributedKeyFailure } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor, getKeyCooldownUntil, recordDistributedKeyFailure } from "../../src/providers/key-failover";
 import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
@@ -41,11 +43,13 @@ afterEach(async () => {
   removeTreeWithRetry(home);
 });
 
-function fixture(count = 2, rejectFirst = false, keyCap = true): OcxConfig {
+function fixture(count = 2, rejectFirst = false, keyCap = true, statuses: number[] = []): OcxConfig {
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     seen.push({ key: req.headers.get("x-api-key"), path: new URL(req.url).pathname, body: await req.json() });
-    if (rejectFirst && seen.length === 1) return Response.json({ type: "error",
-      error: { type: "authentication_error", message: "invalid fixture key" } }, { status: 401 });
+    const status = statuses[seen.length - 1] ?? (rejectFirst && seen.length === 1 ? 401 : 200);
+    if (status !== 200) return Response.json({ type: "error",
+      error: { type: status === 401 ? "authentication_error" : "rate_limit_error", message: "rejected fixture key" } },
+      { status, headers: status === 429 ? { "retry-after": "30" } : undefined });
     return Response.json(MESSAGE);
   } });
   const config = { port: 0, defaultProvider: NAME, protocols: { rollout: { managedMessagesNative: true } },
@@ -108,6 +112,105 @@ function nativeSuccess(result: Awaited<ReturnType<typeof start>>) {
 }
 
 describe("native Messages distributed key selection", () => {
+  for (const status of [401, 429]) test(`an overridden wire key C${status} never cools or replays selected A/B`, async () => {
+    const config = fixture(2, false, true, [status]);
+    provider(config).headers = { "x-api-key": KEYS[2]! };
+    // A credential mismatch also refuses an explicitly requested same-key 429 retry.
+    provider(config).retryOn429 = { attempts: 1, intervalMs: 1, respectRetryAfter: false };
+    saveConfig(config);
+    const abort = new AbortController();
+    const pending = start(config, abort);
+    try {
+      const result = await pending;
+      expect(result.response.status).toBe(status);
+      expect(seen.map(entry => entry.key)).toEqual([KEYS[2]]);
+      expect(seen[0]!.path).toBe("/v1/messages");
+      expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+      expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+      unchanged(config); noLeaks(config);
+    } finally { abort.abort(); await pending.catch(() => undefined); }
+  });
+
+  test("mixed A429 B401 C200 recovers across the ladder without changing saved selection", async () => {
+    const config = fixture(3, false, true, [429, 401, 200]);
+    const abort = new AbortController();
+    const pending = start(config, abort);
+    try {
+      const result = await pending;
+      nativeSuccess(result);
+      expect(seen.map(entry => entry.key)).toEqual(KEYS);
+      expect(seen[1]!.body).toEqual(seen[0]!.body);
+      expect(seen[2]!.body).toEqual(seen[0]!.body);
+      const row = getRequestLogEntries().find(entry => entry.requestId === result.requestId)!;
+      expect(row.attempts!.map(attempt => attempt.sendCount)).toEqual([1, 1, 1]);
+      expect(row.attempts!.map(attempt => attempt.accountLogLabel)).toEqual(KEYS.map((reference, index) =>
+        apiKeyAccountLogLabel(NAME, { entryId: `k${index + 1}`, reference })));
+      expect(row.attempts!.map(attempt => attempt.status)).toEqual([429, 401, 200]);
+      expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now() + 25_000);
+      expect(getKeyCooldownUntil(NAME, "k2")).toBeGreaterThan(Date.now());
+      expect(getKeyCooldownUntil(NAME, "k3")).toBeNull();
+      unchanged(config); noLeaks(config);
+    } finally { abort.abort(); await pending.catch(() => undefined); }
+  });
+
+  for (const terminal of [401, 429]) test(`mixed failures record terminal B${terminal} at the finite send limit`, async () => {
+    const config = fixture(2, false, true, [429, terminal]);
+    provider(config).transientRetryOn5xx = { attempts: 2 };
+    saveConfig(config);
+    const abort = new AbortController();
+    const pending = start(config, abort);
+    try {
+      const result = await pending;
+      expect(result.response.status).toBe(terminal);
+      expect(seen.map(entry => entry.key)).toEqual(KEYS.slice(0, 2));
+      expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now() + 25_000);
+      expect(getKeyCooldownUntil(NAME, "k2")).toBeGreaterThan(Date.now() + 25_000);
+      const exhausted = await start(config, abort);
+      expect(exhausted.response.status).toBe(429);
+      expect(Number(exhausted.response.headers.get("retry-after"))).toBeGreaterThan(0);
+      expect(seen).toHaveLength(2);
+      unchanged(config); noLeaks(config);
+    } finally { abort.abort(); await pending.catch(() => undefined); }
+  });
+
+  test("same-key retries precede cooldown and share their counter across mixed recovery", async () => {
+    const config = fixture(3, false, true, [429, 401, 429, 200]);
+    provider(config).retryOn429 = { attempts: 1, intervalMs: 0, respectRetryAfter: false };
+    provider(config).transientRetryOn5xx = { attempts: 4 };
+    saveConfig(config);
+    const abort = new AbortController();
+    const pending = start(config, abort);
+    try {
+      nativeSuccess(await pending);
+      expect(seen.map(entry => entry.key)).toEqual([KEYS[0], KEYS[0], KEYS[1], KEYS[2]]);
+      expect(getKeyCooldownUntil(NAME, "k1")).not.toBeNull();
+      expect(getKeyCooldownUntil(NAME, "k2")).not.toBeNull();
+      expect(getKeyCooldownUntil(NAME, "k3")).toBeNull();
+      unchanged(config); noLeaks(config);
+    } finally { abort.abort(); await pending.catch(() => undefined); }
+  });
+
+  test("a shared physical-send refusal records the last genuine 429 without cooling an unsent key", async () => {
+    const config = fixture(2, false, true, [429, 429, 429, 429, 200]);
+    provider(config).retryOn429 = { attempts: 6, intervalMs: 1, maxIntervalMs: 1, respectRetryAfter: false };
+    saveConfig(config);
+    configureSharedSpendLedger(spendPolicyFromConfig({ pool: { maxTokens: 100_000 } }, undefined, [NAME]));
+    const abort = new AbortController();
+    const pending = start(config, abort);
+    try {
+      const result = await pending;
+      expect(result.response.status).toBe(429);
+      expect(JSON.parse(result.text).error.type).toBe("send_budget_exhausted");
+      expect(seen.map(entry => entry.key)).toEqual(Array(4).fill(KEYS[0]));
+      expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now() + 25_000);
+      expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+      const next = await start(config, abort);
+      nativeSuccess(next);
+      expect(seen.map(entry => entry.key)).toEqual([...Array(4).fill(KEYS[0]), KEYS[1]]);
+      unchanged(config); noLeaks(config);
+    } finally { abort.abort(); await pending.catch(() => undefined); }
+  });
+
   test("401 recovers A to B without changing the saved key or revision", async () => {
     const config = fixture(2, true);
     const abort = new AbortController();

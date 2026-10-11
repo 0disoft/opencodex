@@ -1193,7 +1193,9 @@ export async function handleResponsesCompact(
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
 
-    if (upstream.status === 401) recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, 401);
+    if ((upstream.status === 401 || upstream.status === 429) && !isNonReplayableResponse(upstream)) {
+      recordDistributedKeyFailure(config, route.providerName, compactProvider._apiKeyAttempt, upstream.status, Date.now(), upstream.headers.get("retry-after"));
+    }
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")

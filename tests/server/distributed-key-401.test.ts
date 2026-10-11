@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor, getKeyCooldownUntil } from "../../src/providers/key-failover";
 import { startServer } from "../../src/server";
 import { handleResponsesCompact } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
@@ -29,7 +29,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   codexHome = installIsolatedCodexHome("ocx-distributed-401-codex-");
-  clearKeyCooldowns();
+  clearKeyCooldowns(); forgetApiKeyRotationCursor();
 });
 afterEach(async () => {
   globalThis.fetch = originalFetch;
@@ -40,7 +40,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
-  clearKeyCooldowns();
+  clearKeyCooldowns(); forgetApiKeyRotationCursor();
 });
 
 test("distributed image 401 cools the failed key without replaying the paid POST", async () => {
@@ -100,4 +100,35 @@ test("native compact distributed 401 cools the static key without replaying or r
     }
     expect(keys).toEqual(["Bearer synthetic-first", "Bearer synthetic-second", "Bearer synthetic-second"]);
   } finally { clearKeyCooldowns("openai-apikey"); }
+});
+
+test("direct distributed Images 429 cools both keys without replaying the paid POST", async () => {
+  const seen: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+    seen.push(req.headers.get("authorization")!);
+    return Response.json({ error: { message: "fixture capacity" } }, { status: 429, headers: { "retry-after": "60" } });
+  } });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return originalFetch(url.hostname === "api.openai.com" ? new URL(url.pathname, upstream.url) : input, init);
+  }) as typeof fetch;
+  saveConfig({ port: 0, defaultProvider: "openai-apikey", openaiProviderTierVersion: 2,
+    providers: { openai: disabledOpenAiProvider, "openai-apikey": {
+      ...keyedProvider(upstream.url.toString()), apiKeyPool: [{ id: "first", key: "sk-platform-key" }, { id: "second", key: "sk-warm-key" }],
+      requestPacing: { enabled: true, keySelection: "round-robin" },
+    } },
+  } as unknown as OcxConfig);
+  const server = startServer(0); const began = Date.now();
+  try {
+    for (let index = 0; index < 3; index++) {
+      const response = await fetch(new URL("/v1/images/generations", server.url), { method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}` },
+        body: JSON.stringify({ prompt: "fixture", model: "gpt-image-2" }),
+      });
+      expect(response.status).toBe(429); await response.text();
+      expect(seen).toHaveLength(Math.min(index + 1, 2));
+    }
+    expect(seen).toEqual(["Bearer sk-platform-key", "Bearer sk-warm-key"]);
+    for (const id of ["first", "second"]) expect(getKeyCooldownUntil("openai-apikey", id)).toBeGreaterThanOrEqual(began + 60_000);
+  } finally { await server.stop(true); await upstream.stop(true); clearKeyCooldowns(); }
 });
