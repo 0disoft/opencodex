@@ -53,6 +53,12 @@ user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run s
 dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
 the process timeout without executing tests. The per-process home isolation and live-home/service
 manager guards remain active because the preload installs them before the lock boundary.
+Ordinary macOS shards have a 25-minute whole-job cap, including setup; the unsharded
+control retains 75 minutes. Their 300-second process bounds, sequential execution,
+full membership and first-failure verdict remain unchanged.
+
+> Decision record: [ADR-6978](../decisions/ADR-6978-macos-shard-budget.md)
+
 Test teardown follows the [sandbox cleanup contract](test-sandbox-cleanup.md).
 `tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases; teardown awaits native-main startup releases and config hardening, then the sandbox's registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation starts listener stops while owned asynchronous work settles, and repeated close/stop calls share one promise. After teardown starts, only the lifecycle's own abort reason is absorbed; any other error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before draining producers/reaps and restoring or removing a home. The helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.

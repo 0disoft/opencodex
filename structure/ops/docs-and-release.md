@@ -244,7 +244,7 @@ Storage-policy and API-usage families run as singletons, as do manifest-declared
 This preserves full test membership but does not claim cross-batch shared-process coverage.
 Every primary assertion failure, timeout or crash fails the run; diagnostic singleton
 attribution never turns a failed primary green. Each control batch has a 300-second process
-bound plus 15 seconds for forced reap, inside unchanged 20-minute shard and 75-minute control job caps. Other batch
+bound plus 15 seconds for forced reap, inside 25-minute shard and 75-minute control job caps. Other batch
 lanes keep their existing defaults; optional parallelism must be a positive integer.
 
 The Windows selector is an operational stability control, not a security boundary. A pull request

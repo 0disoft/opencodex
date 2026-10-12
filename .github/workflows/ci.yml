@@ -804,12 +804,11 @@ jobs:
     # pull request stops paying for two macOS runners.
     if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
     runs-on: macos-latest
-    # Two shards. Unsharded, this job was the critical path on every green dev
-    # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
-    # 260905_test_modularization_and_windows/003). Two halves finish in ~7.7 and
-    # cost 0.6 extra macOS minutes of setup per run. The full-membership control
-    # runs the same bounded batches without sharding on explicit dispatch.
-    timeout-minutes: 20
+    # Two full-membership shards. #6978 records an actively passing shard
+    # cancelled at the old 20-minute whole-job cap after setup consumed a minute.
+    # Five minutes of job headroom does not extend the 300-second batch bound,
+    # retry failures, or change membership. Control retains its 75-minute cap.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

@@ -28,6 +28,7 @@ const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "c
     if?: string;
     needs?: string | string[];
     "runs-on"?: string;
+    "timeout-minutes"?: number;
     outputs?: Record<string, string>;
     strategy?: { matrix?: Record<string, unknown> };
     steps?: Array<{
@@ -349,6 +350,20 @@ describe("the native path filter", () => {
 
 describe("the native-gated jobs", () => {
   const condition = jobs["platform-macos"]?.if ?? "";
+
+  test("macOS shards have bounded job headroom without relaxing process limits (#6978)", () => {
+    const macos = jobs["platform-macos"];
+    // The old 20-minute job cap cancelled an actively passing shard after setup consumed a minute.
+    // Extra whole-job headroom must not lengthen a stalled batch or change suite membership.
+    expect(macos?.["timeout-minutes"]).toBe(25);
+    expect(macos?.strategy?.matrix?.shard).toEqual([1, 2]);
+    expect(macos?.steps?.find(step => step.name === "Test in fresh-process batches")?.env).toEqual({
+      TEST_SHARD: "${{ matrix.shard }}/2", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1",
+      OCX_TEST_FULL_SUITE: "1",
+    });
+    expect(jobs["macos-control"]?.["timeout-minutes"]).toBe(75);
+  });
 
   test("are exactly platform-macos, widget and desktop-shell on one shared condition", () => {
     expect(`widget:${jobs.widget?.if}`).toBe(`widget:${condition}`);
