@@ -1741,6 +1741,8 @@ export const pt: Record<TKey, string> = {
   "pws.loggedInTitle": "Conectado",
   "pws.notLoggedInTitle": "Não conectado",
   "pws.note": "Observação",
+  "pws.responsesReasoningReplay": "Reenviar raciocínio em texto simples",
+  "pws.responsesReasoningReplayHint": "Desativado por padrão. Envia o raciocínio anterior em texto simples a este endpoint e pode aumentar o uso de tokens. Ative apenas se o endpoint aceitar esse reenvio.",
   "pws.allowPrivateNetwork": "Permitir rede local/privada",
   "pws.liveModels": "Descobrir modelos a partir do provedor",
   "pws.liveModelsDesc": "Busca o catálogo de modelos ao vivo do provedor. Desative para usar apenas os modelos configurados/estáticos.",

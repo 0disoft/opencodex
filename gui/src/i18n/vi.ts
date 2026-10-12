@@ -1727,6 +1727,8 @@ export const vi: Record<TKey, string> = {
   "pws.loggedInTitle": "Đã đăng nhập",
   "pws.notLoggedInTitle": "Chưa đăng nhập",
   "pws.note": "Ghi chú",
+  "pws.responsesReasoningReplay": "Gửi lại suy luận văn bản thuần",
+  "pws.responsesReasoningReplayHint": "Mặc định tắt. Gửi suy luận văn bản thuần trước đó đến điểm cuối này và có thể tăng mức dùng token. Chỉ bật khi điểm cuối hỗ trợ gửi lại suy luận.",
   "pws.allowPrivateNetwork": "Cho phép mạng nội bộ/cá nhân",
   "pws.liveModels": "Khám phá các model từ provider",
   "pws.liveModelsDesc": "Lấy danh mục model trực tiếp từ provider. Hãy tắt tuỳ chọn này nếu chỉ muốn sử dụng các model đã cấu hình/tĩnh.",

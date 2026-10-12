@@ -2862,6 +2862,8 @@ export const de: Record<TKey, string> = {
   "pws.loggedInTitle": "Angemeldet",
   "pws.notLoggedInTitle": "Nicht angemeldet",
   "pws.note": "Notiz",
+  "pws.responsesReasoningReplay": "Klartext-Begründungen erneut senden",
+  "pws.responsesReasoningReplayHint": "Standardmäßig deaktiviert. Sendet frühere Klartext-Begründungen an diesen Endpunkt und kann den Tokenverbrauch erhöhen. Nur aktivieren, wenn der Endpunkt dies unterstützt.",
   "pws.allowPrivateNetwork": "Lokales/privates Netzwerk erlauben",
   "pws.liveModels": "Modelle beim Anbieter erkennen",
   "pws.liveModelsDesc": "Lädt den Live-Modellkatalog des Anbieters. Ausschalten, um nur konfigurierte statische Modelle zu verwenden.",

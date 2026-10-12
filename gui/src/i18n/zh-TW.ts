@@ -1421,6 +1421,8 @@ export const zhTW: Record<TKey, string> = {
   "pws.loggedInTitle": "已登入",
   "pws.notLoggedInTitle": "未登入",
   "pws.note": "備註",
+  "pws.responsesReasoningReplay": "重播明文推理",
+  "pws.responsesReasoningReplayHint": "預設關閉。將先前的明文推理傳送到此端點，可能增加 Token 用量。僅在端點支援推理重播時啟用。",
   "pws.allowPrivateNetwork": "允許本地/私有網路",
   "pws.liveModels": "從供應商發現模型",
   "pws.liveModelsDesc": "取得供應商的即時模型目錄。關閉後僅使用已配置的靜態模型。",

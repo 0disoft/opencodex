@@ -1743,6 +1743,8 @@ export const tr: Record<TKey, string> = {
   "pws.loggedInTitle": "Giriş yapıldı",
   "pws.notLoggedInTitle": "Giriş yapılmadı",
   "pws.note": "Not",
+  "pws.responsesReasoningReplay": "Düz metin akıl yürütmeyi yeniden gönder",
+  "pws.responsesReasoningReplayHint": "Varsayılan olarak kapalıdır. Önceki düz metin akıl yürütmeyi bu uç noktaya gönderir ve token kullanımını artırabilir. Yalnızca uç nokta bu tekrarı destekliyorsa etkinleştirin.",
   "pws.allowPrivateNetwork": "Yerel/özel ağa izin ver",
   "pws.liveModels": "Sağlayıcıdan canlı model keşfet",
   "pws.liveModelsDesc": "Sağlayıcının canlı model kataloğunu çekin.",
