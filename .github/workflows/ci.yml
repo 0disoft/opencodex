@@ -51,7 +51,8 @@ jobs:
           echo "REPRO_BUN=$(ls /tmp/bp/*/bun-profile)" >> "$GITHUB_ENV"
       - name: Repro loop
         env:
-          REPRO_ITERATIONS: "45"
+          REPRO_ITERATIONS: "28"
+          REPRO_MODE: sequence
         run: bash scripts/ci/diag-4956-repro.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()

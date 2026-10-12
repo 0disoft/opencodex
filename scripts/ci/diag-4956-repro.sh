@@ -70,6 +70,41 @@ dump() {
 }
 
 stalls=0
+if [[ "${REPRO_MODE:-batch}" == sequence ]]; then
+  mapfile -t LINES < scripts/ci/diag-4956-batches.txt
+  for i in $(seq 1 "$ITERATIONS"); do
+    b=0; batch=()
+    for line in "${LINES[@]}" "#"; do
+      if [[ "$line" == "#" ]]; then
+        if (( ${#batch[@]} )); then
+          b=$((b + 1)); start=$(date +%s); log="$OUT/seq-$i-$b.log"
+          timeout --signal=TERM --kill-after=15s 120s "$BUN_BIN" test --isolate --timeout 60000 "${batch[@]}" 2>&1 | tee "$log" > /dev/null &
+          sleep 0.5
+          pid=$(pgrep -n -f "^$BUN_BIN test --isolate" || true)
+          dumped=0
+          while [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; do
+            if (( $(date +%s) - start >= STALL_SECONDS && dumped == 0 )); then
+              dumped=1; stalls=$((stalls + 1))
+              tail -3 "$log" | sed 's/^/  log: /'
+              dump "$pid" "$i-$b"
+              kill -KILL $(descendants "$pid") 2>/dev/null
+            fi
+            sleep 1
+          done
+          wait
+          echo "iteration $i batch $b seconds=$(( $(date +%s) - start )) stalled=$dumped $(grep -o 'Ran [0-9]* tests' "$log" | tail -1)"
+          if (( dumped == 0 )); then rm -f "$log"; fi
+        fi
+        batch=()
+      else
+        batch+=("$line")
+      fi
+    done
+  done
+  echo "stalls=$stalls of $ITERATIONS"
+  echo "stalls=$stalls" >> "$OUT/summary.txt"
+  exit 0
+fi
 for i in $(seq 1 "$ITERATIONS"); do
   log="$OUT/run-$i.log"
   start=$(date +%s)
