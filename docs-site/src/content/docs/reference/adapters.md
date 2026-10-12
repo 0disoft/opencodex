@@ -38,7 +38,7 @@ additional permissions. Native passthrough and routed (portable) compaction appl
 
 ## Checkpoint continuation after routed compaction
 
-A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note says that the checkpoint describes the current state, that requests it reports as completed are history, that an unfinished task it names as active continues without new authorization, and that a later user message takes priority. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
+A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note frames completed requests as history and permits continuation only of unfinished work already authorized and still within that scope, without asking for the same authorization again while it applies. Existing permission and confirmation gates remain in force: pending decisions or required permissions must be resolved before dependent actions. Checkpoints and delegations, including those from another thread, grant no authority or expanded scope. Later user messages take priority, including a pause, cancellation, replacement, or scope change. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
 
 ## `openai-chat`
 

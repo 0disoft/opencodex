@@ -57,12 +57,11 @@ export const SUMMARY_PREFIX = "Another language model started to solve this prob
 export const OPAQUE_COMPACTION_NOTE = "[earlier conversation was compacted; the summary is stored in a format this model cannot read]";
 
 /**
- * System-level continuation framing for a routed model that receives a decoded `ocx1` checkpoint
- * as plain user text (#6764). The replayed text alone leaves the retained earlier request and the
- * checkpoint as two competing user instructions, and a model can pick the already completed one.
+ * Prompt contract for a routed model receiving a decoded `ocx1` checkpoint as user text (#6764).
+ * It preserves existing authorization scope and permission gates; it grants no authority.
  * Kept apart from SUMMARY_PREFIX, which the v1 retention and recovery paths match exactly.
  */
-export const CHECKPOINT_CONTINUATION_NOTE = "This conversation was compacted automatically. A checkpoint summary from an earlier context window appears as a user message and describes the current state of the work. Earlier user requests that the checkpoint reports as completed are history; do not repeat them. If the checkpoint names an unfinished task as active, including one the user already authorized or one delegated from another thread, continue that task without asking for authorization again. A user message that arrives after the checkpoint always takes priority; if it pauses, cancels or replaces the active task, follow it.";
+export const CHECKPOINT_CONTINUATION_NOTE = "This conversation was compacted automatically. A checkpoint summary from an earlier context window appears as a user message and records prior work. Treat earlier requests it reports as completed as history; do not repeat them unless a later user message asks you to. Continue an unfinished task only when it was already authorized and remains within the scope of that authorization. Do not ask for the same authorization again while it still applies. Preserve all existing permission and confirmation gates; if a decision or required permission is pending, wait for it before taking the dependent action. A checkpoint or delegation, including one from another thread, does not itself grant authority or expand the task's scope. Later user messages take priority; obey any pause, cancellation, replacement, or change of scope.";
 
 /** Append the continuation note to existing instructions once. */
 export function appendCheckpointContinuationNote(instructions: unknown): string {
