@@ -232,6 +232,23 @@ function median(sorted: number[]): number | undefined {
   return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
+export function healthCandidateSql(withAccount: boolean): string {
+  const where = ["provider = ?", "model = ?", "timestamp >= ?"];
+  if (withAccount) where.push("api_key_id = ?");
+  return `SELECT status, close_reason AS closeReason, terminal_status AS terminalStatus,
+              duration_ms AS durationMs, timestamp,
+              attempt_count AS attemptCount, row_json AS rowJson
+       FROM requests WHERE ${where.join(" AND ")}
+       ORDER BY timestamp DESC LIMIT ?`;
+}
+
+export const HEALTH_ATTEMPT_SQL = `SELECT timestamp, attempt_count AS attemptCount, row_json AS rowJson
+       FROM requests WHERE timestamp >= ? AND attempt_count > 1
+         AND row_json LIKE ? ESCAPE '\\'
+         AND row_json LIKE ? ESCAPE '\\'
+         AND NOT (provider = ? AND model = ?)
+       ORDER BY timestamp DESC LIMIT ?`;
+
 /**
  * Historical health evidence from the derived index (synchronous: called at
  * routing time). Never throws; an unopened/unreadable index yields unknown.
@@ -243,18 +260,12 @@ function computeHistoricalHealthEvidence(
   try {
     openRequestHistoryIndexSync();
     const handle = requestHistoryDb();
-    const where: string[] = ["provider = ?", "model = ?", "timestamp >= ?"];
     const values: Array<string | number> = [input.provider, input.model, now - HEALTH_WINDOW_MS];
     if (input.accountRef) {
-      where.push("api_key_id = ?");
       values.push(input.accountRef);
     }
     const rows = handle.query(
-      `SELECT status, close_reason AS closeReason, terminal_status AS terminalStatus,
-              duration_ms AS durationMs, timestamp,
-              attempt_count AS attemptCount, row_json AS rowJson
-       FROM requests WHERE ${where.join(" AND ")}
-       ORDER BY timestamp DESC LIMIT ?`,
+      healthCandidateSql(Boolean(input.accountRef)),
     ).all(...values, HEALTH_MAX_SAMPLES) as HealthRow[];
     // Rows whose top-level target differs from this candidate may still carry
     // candidate attempts (combo/failover): expand those too. The serialized
@@ -262,12 +273,7 @@ function computeHistoricalHealthEvidence(
     // rows that cannot contribute samples for this candidate.
     const escapeLike = (value: string): string => value.replace(/[\\%_]/g, match => `\\${match}`);
     const attemptRows = handle.query(
-      `SELECT timestamp, attempt_count AS attemptCount, row_json AS rowJson
-       FROM requests WHERE timestamp >= ? AND attempt_count > 1
-         AND row_json LIKE ? ESCAPE '\\'
-         AND row_json LIKE ? ESCAPE '\\'
-         AND NOT (provider = ? AND model = ?)
-       ORDER BY timestamp DESC LIMIT ?`,
+      HEALTH_ATTEMPT_SQL,
     ).all(
       now - HEALTH_WINDOW_MS,
       `%\"provider\":\"${escapeLike(input.provider)}\"%`,

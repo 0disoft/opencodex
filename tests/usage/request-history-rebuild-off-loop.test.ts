@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
@@ -33,7 +33,7 @@ import {
   REQUEST_HISTORY_MAX_RECORD_BYTES,
   setRequestHistoryBudgetsForTests,
 } from "../../src/routing/history/indexer";
-import { historyIndexDir, historyIndexPath } from "../../src/routing/history/schema";
+import { HISTORY_SCHEMA_VERSION, historyIndexDir, historyIndexPath } from "../../src/routing/history/schema";
 import { currentUsageLogRevision, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -244,7 +244,7 @@ describe("request-history refresh off the event loop (#6990)", () => {
     db.query("UPDATE schema_meta SET value = '1' WHERE key = 'schema_version'").run();
     db.close();
     const rebuilt = await openRequestHistoryIndex();
-    expect(rebuilt.lastError).toBe("schema version 1 -> 2; index rebuilt");
+    expect(rebuilt.lastError).toBe(`schema version 1 -> ${HISTORY_SCHEMA_VERSION}; index rebuilt`);
     expect(rebuilt.indexedRows).toBe(10);
   });
 
@@ -285,7 +285,7 @@ describe("request-history refresh off the event loop (#6990)", () => {
     writeFileSync(legacy, "old index");
     writeFileSync(`${legacy}-wal`, "old wal");
     const meta = await openRequestHistoryIndex();
-    expect(meta.dbPath.startsWith(historyIndexDir(getConfigDir()))).toBe(true);
+    expect(dirname(meta.dbPath)).toBe(historyIndexDir(getConfigDir()));
     // Reclamation runs after the refresh settles, one file per timer turn.
     for (let index = 0; index < 3; index++) await turn();
     expect(existsSync(legacy)).toBe(false);

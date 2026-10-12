@@ -6,9 +6,14 @@
  * (ADR-1/ADR-8 in devlog/_fin/260804_router_intelligence/000_master_plan.md).
  */
 
+import { join } from "node:path";
+
 // Version 2 rebuilds the derived projection so old raw requested-model selectors
 // are replaced by the bounded encoding already used by canonical JSONL reads.
-export const HISTORY_SCHEMA_VERSION = 2;
+// Version 3 rebuilds it again with the routing-health query indexes, which the
+// private build creates before ingest so a serving connection never indexes a
+// populated table.
+export const HISTORY_SCHEMA_VERSION = 3;
 // Single-file index used before #6990; removed once the first generation publishes.
 export const HISTORY_DB_FILENAME = "routing-history.sqlite";
 // Directory of published index generations (see ./generations.ts).
@@ -70,12 +75,14 @@ CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_conversation ON requests(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_requests_profile ON requests(profile_id);
+CREATE INDEX IF NOT EXISTS idx_requests_provider_model_ts ON requests(provider, model, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_requests_attempts_ts ON requests(timestamp DESC) WHERE attempt_count > 1;
 `;
 
 export function historyIndexPath(configDir: string): string {
-  return `${configDir.replace(/[\\/]+$/, "")}/${HISTORY_DB_FILENAME}`;
+  return join(configDir, HISTORY_DB_FILENAME);
 }
 
 export function historyIndexDir(configDir: string): string {
-  return `${configDir.replace(/[\\/]+$/, "")}/${HISTORY_DIRNAME}`;
+  return join(configDir, HISTORY_DIRNAME);
 }
