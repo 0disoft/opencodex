@@ -117,6 +117,8 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ownership";
+import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -451,6 +453,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
   const physicalBudget = createInferenceSendBudget(req, logCtx);
+  // Observe-only spend is already booked by the tracker; count billing sends without booking again.
+  let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
@@ -626,8 +630,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               // exact incarnation across its await; a returned response can never reserve one.
               sendOwner = snapshot ? captureAnthropicPhysicalSendOwnership(snapshot) : null;
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
+              physicalSendsUsed++;
               dispatched = await sendWithConnectionPolicy(
-                (activeProvider as OcxProviderTransport).fetch ?? execute,
+                anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
                 wire.url,
                 applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
                 { providerName: route.providerName, provider: activeProvider },
@@ -684,11 +689,14 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     response = await send();
     let retryPolicy: ReturnType<typeof rateLimitRetryPolicyFor> | undefined;
     let retries = 0;
+    let billingRecoveryActive = false;
+    const keySendAvailable = () => transientSendAvailable()
+      && (!billingRecoveryActive || Math.max(physicalSendsUsed, physicalBudget.used) < physicalBudget.policy.maxTotalModelSends);
     const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
-    for (let pass = 0; pass < recoveryPasses; pass++) {
+    for (let pass = 0; ; pass++) {
       const priorResponse = response;
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
-      while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && transientSendAvailable()) {
+      while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
         const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
           now: Date.now(),
           attemptedKey: activeProvider.apiKey,
@@ -696,6 +704,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         });
         pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
+        discard(response);
+        rebuildFor(rotated);
+        response = await send("key-401");
+      }
+      while ((response.status === 400 || response.status === 402) && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider)) {
+        const rotated = await rotateAnthropicBillingKeyOnResponse(response, config, route.providerName, activeProvider, { signal: upstream.signal });
+        if (!rotated) break;
+        billingRecoveryActive = true;
+        if (!keySendAvailable()) break;
         discard(response);
         rebuildFor(rotated);
         response = await send("key-401");
@@ -708,7 +725,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         && !isNonReplayableResponse(response)
         && retryPolicy
         && retries < retryPolicy.attempts
-        && transientSendAvailable()
+        && keySendAvailable()
       ) {
         retries += 1;
         for await (const _ of prepareSameTarget429Wait({
@@ -729,16 +746,20 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
         pendingDistributedFailure = undefined; // Rotation already records this physical failure.
         if (!rotated) break;
         // Rotation already recorded the cooldown; keep the terminal 429 when no send remains.
-        if (!transientSendAvailable()) break;
+        if (!keySendAvailable()) break;
         discard(response);
         rebuildFor(rotated);
         response = await send("key-429");
       }
-      // Only distributed recovery revisits the ladder when a send crossed failure classes.
-      // Retry and transient counters remain shared across passes; an unchanged response stops.
-      if (!activeProvider._apiKeyAttempt?.distributed || !distributedResponseOwnsKey || response === priorResponse
-        || (response.status !== 401 && response.status !== 429) || isNonReplayableResponse(response)
-        || !transientSendAvailable()) break;
+      if (response === priorResponse || isNonReplayableResponse(response) || !keySendAvailable()) break;
+      // Billing class transitions share the physical-send ceiling; distributed-only
+      // transitions additionally retain their original bounded pool-pass allowance.
+      if (distributedResponseOwnsKey && (
+        (billingRecoveryActive && [401, 429].includes(response.status))
+        || (activeProvider.adapter === "anthropic" && hasKeyPoolFailover(activeProvider) && [400, 402].includes(response.status))
+      )) continue;
+      if (!activeProvider._apiKeyAttempt?.distributed || !distributedResponseOwnsKey
+        || (response.status !== 401 && response.status !== 429) || pass + 1 >= recoveryPasses) break;
     }
     settleDistributedFailure();
     const oauthRetryKey = {};
