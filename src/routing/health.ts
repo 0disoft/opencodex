@@ -17,7 +17,12 @@
  */
 
 import type { OcxConfig } from "../types";
-import { openRequestHistoryIndexSync, requestHistoryDb } from "./history/indexer";
+import {
+  noteRequestHistoryIndexError,
+  openRequestHistoryIndexSync,
+  requestHistoryDb,
+  requestHistoryIndexEpoch,
+} from "./history/indexer";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import {
   getCodexAccountCooldownUntil,
@@ -65,7 +70,10 @@ type HistoricalHealthEvidence = Pick<
   "sampleCount" | "successRate" | "failures" | "incompleteStreamRate" | "recentLatencyMs" | "recencyWeight"
 >;
 
-const healthHistoryCache = new Map<string, { at: number; value: HistoricalHealthEvidence }>();
+// `epoch` ties an entry to the index state it was computed from: unknown
+// evidence cached while the index refreshed in the background is recomputed as
+// soon as that refresh finishes, instead of waiting out the TTL.
+const healthHistoryCache = new Map<string, { at: number; epoch: number; value: HistoricalHealthEvidence }>();
 
 /** Test seam: routing tests append fresh rows and must not see cached history. */
 export function clearHealthHistoryCacheForTests(): void {
@@ -326,8 +334,10 @@ function computeHistoricalHealthEvidence(
       out.recencyWeight = decayWeight(samples[0]!.timestamp, now);
     }
     return out;
-  } catch {
-    /* index unreadable: evidence stays unknown */
+  } catch (error) {
+    // Index busy (refreshing in the background) or unreadable: evidence stays
+    // unknown. A corruption error marks the index for rebuild.
+    noteRequestHistoryIndexError(error);
     return {};
   }
 }
@@ -350,7 +360,7 @@ export function healthEvidenceForCandidate(input: HealthEvidenceInput): RouteHea
 
   const cacheKey = healthHistoryCacheKey(input);
   const cached = healthHistoryCache.get(cacheKey);
-  if (cached && now - cached.at < HEALTH_HISTORY_CACHE_TTL_MS) {
+  if (cached && now - cached.at < HEALTH_HISTORY_CACHE_TTL_MS && cached.epoch === requestHistoryIndexEpoch()) {
     Object.assign(evidence, cached.value);
   } else {
     const history = computeHistoricalHealthEvidence(input, now);
@@ -366,7 +376,7 @@ export function healthEvidenceForCandidate(input: HealthEvidenceInput): RouteHea
       }
       if (oldestKey !== null) healthHistoryCache.delete(oldestKey);
     }
-    healthHistoryCache.set(cacheKey, { at: now, value: history });
+    healthHistoryCache.set(cacheKey, { at: now, epoch: requestHistoryIndexEpoch(), value: history });
   }
 
   return evidence;

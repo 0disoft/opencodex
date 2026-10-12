@@ -156,7 +156,7 @@ Une cible appartenant à un fournisseur désactivé — même si sa ligne de dé
 
 ## Historique des requêtes et analyse du routage
 
-- `GET /api/request-history` — historique complet paginé par curseur, issu de l’index dérivé (`routing-history.sqlite`), avec les filtres `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from` et `to`, ainsi qu’une pagination par `cursor` opaque. `GET /api/request-history/:requestId` renvoie une ligne canonique.
+- `GET /api/request-history` — historique complet paginé par curseur, issu de l’index dérivé (`routing-history/`), avec les filtres `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from` et `to`, ainsi qu’une pagination par `cursor` opaque. `GET /api/request-history/:requestId` renvoie une ligne canonique.
 - `GET /api/request-history/:requestId/route-decision` — explication du choix de la route : trace des candidats, exclusions, composantes du score, profil et révision, séquence des tentatives d’exécution et résultat final.
 - `GET /api/routing-analytics` — taux de réussite, d’échec, d’annulation et de repli, durées p50/p95/p99 et TTFT, taux de flux incomplets, échecs qui déclenchent une temporisation, coût par requête réussie, couverture, confiance et indicateur explicite de troncature.
 - `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` — examen des profils et simulation sans envoi en amont.
@@ -167,5 +167,5 @@ CLI : `ocx logs explain <request-id>`, `ocx logs rebuild-index`, `ocx logs index
 
 ## Migration
 
-`routingProfiles` est facultatif et uniquement additif : les fichiers de configuration existants continuent de se charger sans modification. Les anciennes lignes de `usage.jsonl` dépourvues de `routeDecision` continuent d’être analysées sans modification. L’index d’historique peut être supprimé : la suppression de `routing-history.sqlite` déclenche sa reconstruction automatique à partir de `usage.jsonl` lors de la requête suivante ; `ocx logs
+`routingProfiles` est facultatif et uniquement additif : les fichiers de configuration existants continuent de se charger sans modification. Les anciennes lignes de `usage.jsonl` dépourvues de `routeDecision` continuent d’être analysées sans modification. L’index d’historique peut être supprimé : la suppression du répertoire `routing-history/` déclenche sa reconstruction automatique à partir de `usage.jsonl` lors de la requête suivante ; `ocx logs
 rebuild-index` force cette reconstruction. Ce système n’ajuste automatiquement ni les poids, ni les budgets, ni les ensembles de candidats.

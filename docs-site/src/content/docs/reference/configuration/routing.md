@@ -349,7 +349,7 @@ align modalities, or target models with discoverable compatible capabilities.
 ## Request history and routing analytics
 
 - `GET /api/request-history` - cursor-paginated full history from the derived
-  index (`routing-history.sqlite`), with filters (`provider`, `model`,
+  index (`routing-history/`), with filters (`provider`, `model`,
   `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`,
   `apiKeyId`, `profileId`, `fallback`, `from`, `to`) and opaque `cursor`
   pagination. `GET /api/request-history/:requestId` returns one canonical row.
@@ -374,7 +374,11 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 
 `routingProfiles` is optional and additive: existing config files load
 unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
-The history index is disposable - deleting `routing-history.sqlite` triggers
-an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
-rebuild-index` forces one. Nothing in this system auto-tunes weights,
-budgets, or candidate sets.
+The history index is disposable - deleting the `routing-history/` directory
+triggers an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
+rebuild-index` forces one. A rebuild runs in the background in short slices,
+so the proxy keeps serving requests on a large ledger. Until it finishes,
+history queries wait for it and routing profiles treat historical health as
+unknown evidence (the profile's `unknownEvidence.health` policy applies). Indexes
+from older versions (`routing-history.sqlite`) are removed after the first
+rebuild. Nothing in this system auto-tunes weights, budgets, or candidate sets.

@@ -1500,7 +1500,7 @@
     "repo-hygiene.test.ts": "ci-workflows",
     "request-decompress.test.ts": "usage",
     "request-evidence.test.ts": "usage",
-    "request-history-index.test.ts": "usage",
+    "request-history-index.test.ts": "usage", "request-history-rebuild-off-loop.test.ts": "usage", "server-history-rebuild-responsiveness.test.ts": "server",
     "request-log-attempt-identity.test.ts": "usage",
     "request-log-conversation.test.ts": "usage",
     "request-log-estimate-cap.test.ts": "usage",
