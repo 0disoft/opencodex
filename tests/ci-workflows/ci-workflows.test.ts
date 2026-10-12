@@ -117,7 +117,7 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
-    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
+    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(25);
     // 75, not 30: the unsharded control measured 50m39s for a complete run and had
     // therefore never finished inside 30. See the rationale in ci.yml and #4905.
     expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(75);
