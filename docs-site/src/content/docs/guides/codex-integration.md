@@ -393,6 +393,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
+On macOS, opencodex checks the Codex app’s bundled CLI in `/Applications/ChatGPT.app` and then `~/Applications/ChatGPT.app` after explicit selections, shims, PATH, established installs, and the runnable bare `codex` fallback, requires the bundle’s XML `Info.plist` identity to be `com.openai.codex`, and never automatically replaces a runnable persisted selection with an app candidate.
+
 On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or holds no Codex state
 (`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex also
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
