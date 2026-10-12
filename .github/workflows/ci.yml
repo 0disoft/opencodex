@@ -39,6 +39,9 @@ jobs:
           bun run build
       - name: Repro loop
         shell: pwsh
+        env:
+          REPRO_FILES: tests/codex-integration/codex-credits-after-limit.test.ts tests/codex-integration/codex-history-job.test.ts tests/codex-integration/codex-idle-window.test.ts tests/codex-integration/codex-inject-history-wording.test.ts tests/codex-integration/codex-journal.test.ts tests/codex-integration/codex-log-guard-doctor-protection.test.ts
+          REPRO_MARK: writeJournal creates journal file
         run: ./scripts/ci/diag-4956-windows.ps1 -Iterations 15
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()

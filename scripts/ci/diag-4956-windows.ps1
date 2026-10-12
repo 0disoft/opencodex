@@ -53,7 +53,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
   $secs = [int]((Get-Date) - $start).TotalSeconds
   $text = (Get-Content $log, "$log.err" -Raw -ErrorAction SilentlyContinue) -join ""
   $failed = ([regex]::Matches($text, "\(fail\)")).Count
-  $zt = [regex]::Match($text, "published Node launcher attest[^\[]*\[([0-9.]+)ms\]").Groups[1].Value
+  $markPattern = if ($env:REPRO_MARK) { $env:REPRO_MARK } else { "published Node launcher attest" }
+  $zt = [regex]::Match($text, $markPattern + "[^\[]*\[([0-9.]+)ms\]").Groups[1].Value
   if ($snapped) { $stalls++ }
   if ($failed) { $slow++ }
   "iteration $i exit=$($proc.ExitCode) seconds=$secs fails=$failed zeroEffectMs=$zt quietSnapshots=$snapped" | Tee-Object -FilePath repro-out/summary.txt -Append
