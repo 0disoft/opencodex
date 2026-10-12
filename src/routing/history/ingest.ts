@@ -22,6 +22,12 @@ export const REQUEST_HISTORY_INSERT_BATCH = 500;
 // does not bound one transaction; a batch also commits before its source bytes
 // pass this cap, keeping each synchronous COMMIT to a few milliseconds.
 export const REQUEST_HISTORY_INSERT_BATCH_BYTES = 4 * 1024 * 1024;
+// A staged batch drains in sub-transactions sized from the measured cost of
+// the previous one, so a slow disk or a large index shrinks each synchronous
+// transaction instead of stretching one step (Windows: 500 rows took 20-60 ms).
+export const REQUEST_HISTORY_COMMIT_TARGET_MS = 8;
+export const REQUEST_HISTORY_MIN_COMMIT_ROWS = 16;
+export const REQUEST_HISTORY_INITIAL_COMMIT_ROWS = 64;
 export const REQUEST_HISTORY_READ_CHUNK_BYTES = 64 * 1024;
 // The SQLite index is a disposable projection. Complete JSONL records above
 // this bound are omitted from the projection; the canonical usage.jsonl is
@@ -60,6 +66,27 @@ export function isSqliteCorruption(error: unknown): boolean {
 }
 
 type Row = Array<string | number | null>;
+
+/** A parsed row with the byte offset just past its line, so any prefix commits an exact resume point. */
+interface PendingRow {
+  values: Row;
+  endOffset: number;
+  sourceBytes: number;
+}
+
+/**
+ * Rows for the next sub-transaction after one that attempted `attemptedRows`
+ * (duplicates included) in `elapsedMs`: aim at the target, shrink at once,
+ * grow at most twofold, and stay within [MIN_COMMIT_ROWS, INSERT_BATCH].
+ */
+export function nextCommitRowLimit(current: number, attemptedRows: number, elapsedMs: number): number {
+  if (attemptedRows <= 0) return current;
+  const estimate = elapsedMs > 0
+    ? Math.floor((REQUEST_HISTORY_COMMIT_TARGET_MS * attemptedRows) / elapsedMs)
+    : REQUEST_HISTORY_INSERT_BATCH;
+  const next = Math.min(estimate, current * 2);
+  return Math.max(REQUEST_HISTORY_MIN_COMMIT_ROWS, Math.min(REQUEST_HISTORY_INSERT_BATCH, next));
+}
 
 export function metaValue(dbHandle: Database, key: string): string | null {
   const row = dbHandle.query("SELECT value FROM schema_meta WHERE key = ?").get(key) as
@@ -152,13 +179,16 @@ export interface IngestOptions {
   expected: Pick<UsageLogRevision, "dev" | "ino">;
   /** Runs before every write transaction; throws to stop writing into a superseded index. */
   beforeWrite?: () => void;
+  /** Monotonic milliseconds that size sub-transactions; tests inject a scripted clock. */
+  now?: () => number;
 }
 
 /**
  * Ingest complete JSONL lines from `fromOffset` up to the ledger size observed
- * when the ingest starts, yielding after each read chunk. The fixed endpoint
- * keeps continuous appends from postponing completion; the next refresh picks
- * them up as a tail. Returns the rows this ingest actually inserted.
+ * when the ingest starts, yielding after each read chunk and between the
+ * sub-transactions a staged batch drains in. The fixed endpoint keeps
+ * continuous appends from postponing completion; the next refresh picks them
+ * up as a tail. Returns the rows this ingest actually inserted.
  */
 export function* ingestSteps(
   dbHandle: Database,
@@ -167,8 +197,10 @@ export function* ingestSteps(
   options: IngestOptions,
 ): Generator<void, number, unknown> {
   let inserted = 0;
-  let pending: Row[] = [];
+  let pending: PendingRow[] = [];
   let pendingBytes = 0;
+  let rowLimit = REQUEST_HISTORY_INITIAL_COMMIT_ROWS;
+  const now = options.now ?? (() => performance.now());
   const insert = dbHandle.prepare(ROW_INSERT);
   let fd: number | undefined;
   try {
@@ -193,20 +225,22 @@ export function* ingestSteps(
         throw new RequestHistoryIndexStaleError("usage log changed while indexing");
       }
     };
-    // Rows, the offset just past their last line and the running count land in
-    // one transaction. Counts are read inside it, so a second process tailing
-    // the same generation cannot overwrite them; the local count advances only
-    // after COMMIT.
-    const commit = (final: boolean) => {
+    // The first `take` pending rows, the offset just past their last line and
+    // the running count land in one transaction. Taking every pending row
+    // commits `nextOffset`, which also covers skipped lines after the last row.
+    // Counts are read inside the transaction, so a second process tailing the
+    // same generation cannot overwrite them; local state (queue, count and the
+    // adaptive limit) advances only after COMMIT.
+    const commit = (take: number, final: boolean) => {
       options.beforeWrite?.();
       assertSourceUnchanged();
-      const rows = pending;
-      const offset = nextOffset;
+      const offset = take < pending.length ? pending[take - 1]!.endOffset : nextOffset;
       let batchInserted = 0;
+      const started = now();
       dbHandle.transaction(() => {
-        for (const row of rows) {
+        for (let index = 0; index < take; index++) {
           // `changes` counts real inserts only; INSERT OR IGNORE replays add 0.
-          batchInserted += insert.run(...row).changes;
+          batchInserted += insert.run(...pending[index]!.values).changes;
         }
         const storedOffset = metaNumber(dbHandle, HISTORY_META_KEYS.indexedOffset);
         setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, Math.max(storedOffset, offset));
@@ -221,18 +255,32 @@ export function* ingestSteps(
           setMeta(dbHandle, HISTORY_META_KEYS.builtAtMs, Date.now());
         }
       })();
+      const elapsed = now() - started;
       inserted += batchInserted;
-      pending = [];
-      pendingBytes = 0;
+      for (let index = 0; index < take; index++) pendingBytes -= pending[index]!.sourceBytes;
+      pending = pending.slice(take);
+      rowLimit = nextCommitRowLimit(rowLimit, take, elapsed);
     };
-    function* commitWithRetry(final: boolean): Generator<void, void, unknown> {
+    function* commitWithRetry(take: number, final: boolean): Generator<void, void, unknown> {
       for (let attempt = 0; ; attempt++) {
         try {
-          commit(final);
+          commit(take, final);
           return;
         } catch (error) {
           if (!isSqliteBusy(error) || attempt >= BUSY_COMMIT_RETRIES) throw error;
         }
+        yield;
+      }
+    }
+    // Drain every staged row in sub-transactions of `rowLimit`, yielding between
+    // them but not after the last, so no step ever suspends inside a transaction
+    // and completion follows the final COMMIT in the same step, as before.
+    function* drain(final: boolean): Generator<void, void, unknown> {
+      for (;;) {
+        const take = Math.min(rowLimit, pending.length);
+        const last = take === pending.length;
+        yield* commitWithRetry(take, final && last);
+        if (last) return;
         yield;
       }
     }
@@ -263,10 +311,10 @@ export function* ingestSteps(
         nextOffset = position + index + 1;
         const entry = line ? parsedEntryFromLine(line.toString("utf-8")) : null;
         if (!entry) continue;
-        pending.push(extractRow(entry));
+        pending.push({ values: extractRow(entry), endOffset: nextOffset, sourceBytes: line!.length });
         pendingBytes += line!.length;
         if (pending.length >= REQUEST_HISTORY_INSERT_BATCH || pendingBytes >= REQUEST_HISTORY_INSERT_BATCH_BYTES) {
-          yield* commitWithRetry(false);
+          yield* drain(false);
         }
       }
       const remainder = readBuffer.subarray(lineStart, bytesRead);
@@ -282,7 +330,7 @@ export function* ingestSteps(
       position += bytesRead;
       if (position < size) yield;
     }
-    yield* commitWithRetry(true);
+    yield* drain(true);
     return inserted;
   } finally {
     if (fd !== undefined) closeSync(fd);
