@@ -34,6 +34,11 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /**
+   * Test seam: arms the drop of a connection whose backend ended, after PICKER_ABANDONED_INPUT_LINGER_MS;
+   * returns a cancel function. Production uses a timer.
+   */
+  scheduleAbandonedInputDrop?: (drop: () => void, ms: number) => () => void;
   log?: (line: string) => void;
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
@@ -51,6 +56,12 @@ export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
+/**
+ * Once the backend has ended a connection and its reply has been flushed, input the client still
+ * sends is discarded for at most this long before the connection is dropped. A cooperative client
+ * closes as soon as it reads a Connection: close reply; this only bounds one that keeps uploading.
+ */
+export const PICKER_ABANDONED_INPUT_LINGER_MS = 30_000;
 
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
@@ -152,6 +163,10 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  const scheduleAbandonedInputDrop = options.scheduleAbandonedInputDrop ?? ((drop: () => void, ms: number) => {
+    const timer = setTimeout(drop, ms);
+    return () => clearTimeout(timer);
+  });
   let activeUpstreams = 0;
   const upgrades = new Set<Duplex>();
   const spliced = new Set<Socket>();
@@ -467,8 +482,22 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       inner.once("close", () => { spliced.delete(inner); if (!client.writableEnded) client.destroy(); });
       client.once("close", () => { if (!inner.writableEnded) inner.destroy(); });
       // The backend reply ended; discard ciphertext still coming from the aborted upload.
-      // Unpipe before resuming, so backpressure cannot hide the peer FIN.
-      inner.once("end", () => { client.unpipe(inner); client.resume(); });
+      // Unpipe before resuming, so backpressure cannot hide the peer FIN. The discard is bounded
+      // from the moment the reply has been flushed to the socket (finish), never before, so the
+      // drop cannot cut a reply still being written; finish is not peer receipt, so a peer that
+      // also stops reading for the whole budget can lose unread bytes. A peer that keeps sending
+      // past the budget is dropped instead of holding the connection until shutdown (#6984).
+      inner.once("end", () => {
+        client.unpipe(inner);
+        client.resume();
+        const linger = () => {
+          if (client.destroyed) return;
+          const cancel = scheduleAbandonedInputDrop(() => client.destroy(), PICKER_ABANDONED_INPUT_LINGER_MS);
+          client.once("close", cancel);
+        };
+        if (client.writableFinished) linger();
+        else client.once("finish", linger);
+      });
       inner.once("connect", () => {
         inner.setNoDelay(true);
         client.setNoDelay(true);
