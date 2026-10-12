@@ -91,7 +91,7 @@ import {
   safeHostLabel,
 } from "./fetch-helpers";
 import { classifyPoolRecoveryDispatch } from "../../routing/probe-lease";
-import { clientCancelledResponse } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
@@ -949,8 +949,7 @@ export async function preparePassthroughExchange(
           return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(refusal));
         }
         if (refusal instanceof AnthropicAccountCooldownError) {
-          return formatErrorResponse(429, "rate_limit_error", refusal.message,
-            refusal.retryAfterSeconds === null ? undefined : { retryAfter: String(refusal.retryAfterSeconds) });
+          return anthropicPoolCooldownResponse(refusal, { comboAttempt: options.comboAttempt, logCtx });
         }
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(refusal));
       }

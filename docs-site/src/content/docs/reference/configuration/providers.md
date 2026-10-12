@@ -950,6 +950,23 @@ Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 
+When every account the request can use is held on spent quota (a shared 5-hour or weekly window,
+or the requested model family's weekly window), that 429 is a usage limit rather than a rate limit:
+the Responses body carries `error.type` and `error.code` `usage_limit_reached` and, when the
+upstream reset of every held account is known, `resets_at` (epoch seconds of the earliest reset).
+Codex stops on this answer and shows when to try again instead of retrying until
+"exceeded retry limit". The last account's own spent-quota refusal gets the same answer once no
+replacement is left. If any held account is only throttled, revalidating a model family, or
+refused for entitlement, the answer stays the retryable `rate_limit_exceeded`. Combo targets keep
+the rate-limit form so the combo can move to its next target. Native `/v1/messages` keeps
+Anthropic's `rate_limit_error` type; its message names the usage limit.
+
+A quota cooldown lifts early once a fresh usage reading (the dashboard Providers page, or
+`ocx account list anthropic --quota --refresh`) shows every window the refusal rejected below
+100%, whether the cooldown came from `Retry-After` or a window reset. This covers a plan upgrade
+or a window that reopened early. A reading taken before the refusal never lifts it, and
+entitlement 403 cooldowns wait for their deadline.
+
 Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever
 of those two a given response carries is recorded against that account — each window independently,
 on refusals as well as successes. Usage-aware selection therefore works from the accounts you
