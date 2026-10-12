@@ -1942,7 +1942,7 @@
     "winsw-stop-hardening.test.ts": "windows",
     "winsw.test.ts": "service",
     "workflow-budget.test.ts": "lib",
-    "ws-ambiguous-resend.test.ts": "responses",
+    "ws-ambiguous-resend.test.ts": "responses", "ws-pre-output-refusal.test.ts": "responses", "responses-pool-overload-failover.test.ts": "responses", "compact-transient-alternate.test.ts": "responses",
     "ws-endpoint.test.ts": "responses",
     "ws-failure-stage.test.ts": "responses",
     "ws-native-injection.test.ts": "responses",
