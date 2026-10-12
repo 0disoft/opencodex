@@ -734,8 +734,7 @@ function readBoundedBundleIdentifier(path: string): string | null {
       data: /^[A-Za-z0-9+/=\s]*$/,
     };
     const validNode = (node: Node, inDict: "key" | "value" | null): boolean => {
-      // eslint-disable-next-line no-control-regex
-      if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/.test(node.text)) return false;
+      if (!allXmlChars(node.text)) return false;
       if (inDict === "key" && node.name !== "key") return false;
       if (inDict !== "key" && node.name === "key") return false;
       switch (node.name) {
