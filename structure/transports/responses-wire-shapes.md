@@ -18,8 +18,8 @@ remain, and the note asks the next model to reopen unresolved visual evidence. P
 commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
 vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
 may rewrite the request-local raw body for transport safety. Normal generation and native compaction
-stay unchanged. Both routed v1 and v2 pass through this boundary;
-raw Responses gateways retain their existing text-only compaction conversion.
+stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion.
+The [decoded checkpoint continuation contract](responses.md#decoded-checkpoint-continuation) governs the conditional system note and its authorization limits.
 
 ## Direct MCP calls in code mode
 

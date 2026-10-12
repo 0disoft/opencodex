@@ -35,6 +35,11 @@ caller credential as the Pool selection. An exact account binding remains bound 
 
 ## Config injection
 
+`ocx sync` removes reasoning efforts unsupported by the selected Codex runtime from the catalog.
+It reports a clamp when its runtime identity, removed efforts or affected models change; unchanged
+syncs preserve the diagnostic timestamp and do not repeat that notice. This compatibility
+projection does not require running `ocx doctor`. If a clamp clears and later returns, it is reported again.
+
 OpenCodex serializes its Codex configuration writes. On Windows, a file temporarily held open
 by another process gets a short, bounded retry. If access stays busy, retry the operation shortly;
 OpenCodex preserves the existing lock evidence and does not use that access failure to take over
@@ -1055,6 +1060,15 @@ When an account reaches 100% on a usage window and still holds credits, upstream
 For an opted-in, unpaused main account with a full usage window, the background recovery cycle renews spendable credit observations from three minutes of age, even while the dashboard is closed. It prepares a valid token before the authenticated usage lookup so the balance can be observed again before its five-minute freshness limit. Missing, zero, restricted or retracted credits keep the account eligible for recovery lookups under the existing retry backoff. Requests remain refused until a fresh positive balance or unlimited credits are observed; `has_credits` alone or approximate message counts do not prove a spendable balance. With consent on, this credit-evidence refusal's `Retry-After` is at most five minutes, or a sooner included-quota reset; without consent it still follows the included-quota reset. A failed or incomplete lookup does not refresh old balance evidence. The separate main-account hard lock, needs-reauth quarantine and upstream retry delays still apply. This metadata lookup does not send a model validation request or set or clear the account's needs-reauth state.
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
+
+### After a ChatGPT plan upgrade
+
+Refresh the main account's quota in Codex Auth after changing your ChatGPT plan. When the
+authenticated usage response confirms a long window has replaced the five-hour window,
+opencodex removes the old five-hour reading from both request admission and account selection.
+An allowed response with primary and secondary windows can omit the optional tertiary window.
+This recovery uses your included plan allowance and does not require enabling **Use credits**.
+Partial or invalid usage data retains the previous block until recovery is confirmed.
 
 ### Cancelling main-account device reauthentication
 
