@@ -15,7 +15,7 @@ import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { projectOpenAiTierMigration } from "../../src/providers/openai-tiers";
 import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
-import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { closeRequestHistoryIndex, drainRequestHistoryIoForTests } from "../../src/routing/history/indexer";
 import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { stopServerListener } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
@@ -132,6 +132,7 @@ export async function settleServerAuthFixture(configDir: string, codexHome?: str
   await flushConfigDirHardeningForTests();
   clearHealthHistoryCacheForTests();
   closeRequestHistoryIndex();
+  await drainRequestHistoryIoForTests();
   await flushWindowsSecretAclReapsBeforeRemoval(configDir);
   if (codexHome) await flushWindowsSecretAclReapsBeforeRemoval(codexHome);
 }

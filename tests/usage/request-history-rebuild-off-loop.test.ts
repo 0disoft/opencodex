@@ -23,6 +23,7 @@ import { ingestSteps } from "../../src/routing/history/ingest";
 import { RECLAIM_SERVING_MAX_WAL_BYTES } from "../../src/routing/history/generations";
 import {
   closeRequestHistoryIndex,
+  drainRequestHistoryIoForTests,
   noteRequestHistoryIndexError,
   openRequestHistoryIndex,
   openRequestHistoryIndexSync,
@@ -106,6 +107,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   closeRequestHistoryIndex();
+  await drainRequestHistoryIoForTests();
   setRequestHistoryBudgetsForTests(null);
   clearHealthHistoryCacheForTests();
   await flushConfigDirHardeningForTests();

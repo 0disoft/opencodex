@@ -11,7 +11,7 @@ import {
   REQUEST_HISTORY_COMMIT_TARGET_MS, REQUEST_HISTORY_INITIAL_COMMIT_ROWS,
   REQUEST_HISTORY_INSERT_BATCH, REQUEST_HISTORY_MAX_RECORD_BYTES, REQUEST_HISTORY_MIN_COMMIT_ROWS,
 } from "../../src/routing/history/ingest";
-import {
+import { drainRequestHistoryIoForTests,
   closeRequestHistoryIndex, openRequestHistoryIndex, rebuildRequestHistoryIndex,
   RequestHistoryIndexClosedError, setRequestHistoryBudgetsForTests,
 } from "../../src/routing/history/indexer";
@@ -154,6 +154,7 @@ afterEach(async () => {
   for (const generator of generators) generator.return(0);
   for (const db of handles.reverse()) db.close();
   closeRequestHistoryIndex();
+  await drainRequestHistoryIoForTests();
   setRequestHistoryBudgetsForTests(null);
   restoreDate();
   await flushConfigDirHardeningForTests();
