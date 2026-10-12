@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import {
@@ -110,7 +110,7 @@ describe("request-history index (RI-02)", () => {
     expect(page.meta.indexedRows).toBe(0);
     expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
     expect(existsSync(page.meta.dbPath)).toBe(true);
-    expect(page.meta.dbPath.startsWith(historyIndexDir(getConfigDir()))).toBe(true);
+    expect(dirname(page.meta.dbPath)).toBe(historyIndexDir(getConfigDir()));
   });
 
   test("indexes appended rows incrementally", async () => {

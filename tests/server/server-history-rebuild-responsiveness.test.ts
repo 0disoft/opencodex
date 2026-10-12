@@ -131,14 +131,20 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
   history.catch(() => undefined);
 
   const probes = { healthz: [] as number[], dryRun: [] as number[], proxied: [] as number[] };
+  // Include latencies that cross publication, using each probe's own start snapshot.
+  const startedProbes = { healthz: [] as number[], dryRun: [] as number[], proxied: [] as number[] };
   while (rebuilding) {
+    const healthzStartedWhileRebuilding = rebuilding;
     let at = performance.now();
     const healthz = await fetch(`${base}/healthz`);
     expect(healthz.status).toBe(200);
     await healthz.arrayBuffer();
-    if (rebuilding) probes.healthz.push(performance.now() - at);
+    let latencyMs = performance.now() - at;
+    if (rebuilding) probes.healthz.push(latencyMs);
+    if (healthzStartedWhileRebuilding) startedProbes.healthz.push(latencyMs);
 
     // Policy dry-run reads candidate health through the routing-time sync entry.
+    const dryRunStartedWhileRebuilding = rebuilding;
     at = performance.now();
     const dryRun = await fetch(`${base}/api/routing-profiles/dry-run`, {
       method: "POST",
@@ -147,10 +153,13 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
     });
     expect(dryRun.status).toBe(200);
     await dryRun.arrayBuffer();
-    if (rebuilding) probes.dryRun.push(performance.now() - at);
+    latencyMs = performance.now() - at;
+    if (rebuilding) probes.dryRun.push(latencyMs);
+    if (dryRunStartedWhileRebuilding) startedProbes.dryRun.push(latencyMs);
 
     // A proxied request routed by the policy profile: routing reads candidate
     // health through the sync entry, then dispatches to the local upstream.
+    const proxiedStartedWhileRebuilding = rebuilding;
     at = performance.now();
     const proxied = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
@@ -159,7 +168,9 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
     });
     const proxiedText = await proxied.text();
     expect(proxied.status, proxiedText).toBe(200);
-    if (rebuilding) probes.proxied.push(performance.now() - at);
+    latencyMs = performance.now() - at;
+    if (rebuilding) probes.proxied.push(latencyMs);
+    if (proxiedStartedWhileRebuilding) startedProbes.proxied.push(latencyMs);
   }
   const response = await history;
   const rebuildMs = performance.now() - startedAt;
@@ -182,8 +193,8 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
   expect(probes.healthz.length, detail).toBeGreaterThanOrEqual(5);
   expect(probes.dryRun.length, detail).toBeGreaterThanOrEqual(5);
   expect(probes.proxied.length, detail).toBeGreaterThanOrEqual(5);
-  expect(Math.max(...probes.healthz), detail).toBeLessThan(PROBE_BOUND_MS);
-  expect(Math.max(...probes.dryRun), detail).toBeLessThan(PROBE_BOUND_MS);
-  expect(Math.max(...probes.proxied), detail).toBeLessThan(PROBE_BOUND_MS);
+  expect(Math.max(...startedProbes.healthz), detail).toBeLessThan(PROBE_BOUND_MS);
+  expect(Math.max(...startedProbes.dryRun), detail).toBeLessThan(PROBE_BOUND_MS);
+  expect(Math.max(...startedProbes.proxied), detail).toBeLessThan(PROBE_BOUND_MS);
   expect(maxLagMs, detail).toBeLessThan(LAG_BOUND_MS);
 }, 120_000);
