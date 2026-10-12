@@ -1,3 +1,4 @@
+import { configuredAnthropicInstance, isAnthropicOAuthInstance } from "../providers/anthropic-instance";
 import { parseQuotaFailureCode, type QuotaFailureCode, type ProviderQuota, type AccountQuotaMode } from "../providers/quota-types";
 /**
  * Data-access layer for `ocx account` (issue #180) — live-proxy HTTP client and
@@ -12,6 +13,8 @@ import type { OcxConfig } from "../types";
 import { projectCodexQuotaRefreshOutcome, type CodexQuotaRefreshOutcome } from "../codex/quota-refresh-outcome";
 
 import { projectApiKeyQuotaRows } from "./account-key-quota";
+import { projectAccountHealth } from "./account-next-actions";
+import type { OAuthHealthLabel } from "../oauth/health";
 
 export type AccountType = "codex" | "oauth" | "api-key";
 
@@ -29,6 +32,11 @@ export interface AccountRow {
   masked?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** Validated server health label and locally generated recovery guidance. */
+  health?: OAuthHealthLabel;
+  healthAction?: string;
+  /** Explicit paid-credit consent, reported only when supplied by the Codex API. */
+  creditsAfterLimit?: boolean;
   needsReauthReason?: "verify_account";
   autoSelectable?: boolean;
   skipReason?: "paused" | "needs_reauth" | "suspended" | "cooldown" | "quota_exhausted";
@@ -103,6 +111,7 @@ export function classifyAccount(config: OcxConfig, name: string): ClassifyResult
   if (provider && !provider.authMode && (provider.apiKey || (provider.apiKeyPool?.length ?? 0) > 0)) {
     return { type: "api-key" };
   }
+  if (name === "anthropic2" && !configuredAnthropicInstance(config, name)) return { error: "Anthropic pool instance is not configured" };
   if (isPublicOAuthProvider(name)) return { type: "oauth" };
   if (provider) return { type: "api-key" };
   return { error: `unknown provider "${name}"` };
@@ -260,6 +269,8 @@ interface CodexAccountDto {
   selectionExcludedReason?: "plan_excluded";
   selectionExcludedPlan?: string;
   health?: { reason?: string };
+  healthLabel?: unknown;
+  creditsAfterLimit?: unknown;
   priority?: number;
   autoSwitchThresholdOverride?: number | null;
   quota?: CodexQuotaDto | null;
@@ -326,6 +337,8 @@ export async function fetchCodexRows(
     plan: a.plan,
     active: a.id === activeId,
     needsReauth: a.needsReauth,
+    ...projectAccountHealth(a, "openai", a.id),
+    ...(typeof a.creditsAfterLimit === "boolean" ? { creditsAfterLimit: a.creditsAfterLimit } : {}),
     ...(a.selectionExcludedReason === "plan_excluded" ? {
       selectionExcludedReason: "plan_excluded" as const,
       ...(typeof a.selectionExcludedPlan === "string" ? { selectionExcludedPlan: a.selectionExcludedPlan } : {}),
@@ -350,6 +363,7 @@ interface OAuthAccountDto {
   email?: string;
   active?: boolean;
   needsReauth?: boolean;
+  healthLabel?: unknown;
   /** Present only for providers that support operator pause (generic OAuth pools). */
   paused?: boolean;
   autoSwitchThresholdOverride?: number | null;
@@ -394,8 +408,9 @@ async function fetchOAuthRows(
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
+    ...projectAccountHealth(a, name, a.id),
     ...(a.paused === true ? { paused: true } : {}),
-    ...(name === "anthropic" && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
+    ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
       ? { autoSelectable: a.autoSelectable } : {}),

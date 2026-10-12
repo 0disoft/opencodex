@@ -5,6 +5,13 @@ description: Provider configuration, credentials, quota, and model catalog comma
 
 These commands configure upstream providers, authenticate accounts, manage credential pools, and control the model catalog exposed to Codex.
 
+Leftover-argument errors from `account list`, `account current`, native main profiles,
+and provider commands redact values of credential options, including `--code`, `--token`,
+`--api-key`, `--key`, `--secret`, `--password`, and `--admin-token`, in both
+`--option value` and `--option=value` forms. Local provider registration uses
+`ocx provider add <name> --api-key <key>`; an inline `--api-key=<key>` is rejected
+with its value redacted. `ocx provider edit` does not accept `--api-key`.
+
 ## Providers
 
 ### `ocx provider <subcommand>`
@@ -218,6 +225,14 @@ them anyway: it routes to the account-pool login, so `ocx login codex --reauth` 
 `ocx account reauth codex`. The dashboard Codex account pool (Reauthenticate) does it too. That route
 runs inside the proxy, so it needs a running one.
 
+For the ChatGPT OAuth provider, an explicit terminal OAuth code confirming an expired
+or revoked refresh grant requires signing in again. Free-text descriptions alone never
+require reauthentication. Temporary token-service failures, timeouts and cancellation leave the account
+eligible for a later refresh. Browser token exchange and refresh each have a 30-second
+per-fetch deadline covering headers and body. HTTP-derived errors show only the status
+and an allowlisted OAuth code. Cancellation, timeout and transport failures use fixed
+messages without the original reason or cause.
+
 ```bash
 ocx login xai
 ocx login anthropic
@@ -238,6 +253,12 @@ A `403` asking to verify the account quarantines that credential as `needs-reaut
 when account failover is enabled, the request can retry on another eligible account. Complete
 Google's account verification, then run `ocx login google-antigravity`. Silent token refresh
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
+
+For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
+wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
+unavailable sibling preserves the failure.
 
 A proxy that is already running picks up the new credential without a restart: the CLI asks it to
 reload that one provider from disk, and the request carries no credential of its own. If the
@@ -385,6 +406,12 @@ or recovery evidence. The account card shows the published cached usage, keeping
 with the lock status; Direct provider quota omits an unpublished response and its older cached report. Conflicting account
 identities and stale 401/403 replies retain the current
 cached info and cannot clear or set the current account's reauthentication state.
+
+Responses to requests sent with the identified main credential refresh its cached
+usage from their quota headers, whether the proxy substituted the stored credential or
+the caller sent the same credential itself. A response is applied only if that
+credential is still the observed main credential when it arrives; a caller-owned
+credential for another account or workspace never updates the main account's usage.
 
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
 `true` means on; only an explicit `false` turns it off, and that is what switching the setting off
@@ -569,6 +596,20 @@ returns:
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+An empty provider listing names the next command in human output and JSON `notes`:
+`ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`
+with a human-controlled piped stdin source for API keys. An empty global listing
+points to `ocx account login <provider>` and `ocx help account login`.
+
+Account rows include a validated `health` label and, when recovery is available,
+`healthAction`. Human output prints the recovery below the table. Reauthentication
+targets the stored account with `ocx account reauth <provider> --id <id>`;
+native main uses `ocx account main reauth --device`. Provider verification,
+credential conflicts, and pending validation retain distinct guidance.
+Codex rows preserve the server's boolean `creditsAfterLimit` in list/current JSON;
+human rows show `paid-credits: on` only when permission is enabled. These reads do
+not change paid-credit permission.
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
 per-account probe (Anthropic, Kiro, Google Antigravity, and Devin today). It is opt-in because the proxy probes the upstream
@@ -917,6 +958,8 @@ ocx account grok-reset-coupons --consume --yes --token-id <token-id>
 
 Pass `--operation-id <uuid>` (must be a valid UUIDv4) to guarantee idempotent settlement. If the network drops or the command is retried, identical operation IDs replay the durably recorded outcome instead of consuming a second coupon.
 
+The command exits nonzero unless the settled code is `redeemed` (including a replayed `redeemed`). When the outcome is unconfirmed (a missing or unrecognized settled code, `attempt_unresolved`, `attempt_in_progress`, `attempt_reconcile_failed`, `operation_state_changed`, `operation_token_mismatch`, `attempt_mark_failed`, or `ledger_unavailable`/`capacity` with an operation ID), it prints the `--operation-id` to preserve; rerun with that same ID instead of starting a new operation. A recorded refusal (`auth_failed`, `fetch_resets_failed`, `no_coupons_available`, `coupon_unavailable`, or `token_unresolved`), such as a replayed failure, prints `Coupon was not redeemed (<code>)`; any other settled code counts as unconfirmed.
+
 ### `ocx account main <subcommand>`
 
 Manage named native Codex main-login profiles without changing OpenCodex account-pool routing:
@@ -932,6 +975,9 @@ ocx account main reauth cancel --flow <id> [--json]
 ocx account main switch <profile-id-or-label> --yes [--json]
 ocx account main recover [--rollback --yes] [--json]
 ```
+
+An empty native-profile list suggests `ocx account main add <label>` in human
+output and JSON `notes`; it does not assume an existing native login is available.
 
 `ocx account main reauth --device --no-wait --json` writes one JSON object to stdout on success, without the human-readable `follow up:` line. Use its `flowId` with `ocx account main reauth status --flow <id> --json` to check progress.
 

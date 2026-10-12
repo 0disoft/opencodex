@@ -9,6 +9,12 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "message",
+    usage: "ocx message <sessions|send> [options]",
+    summary: "Discover loaded local Codex sessions and submit one queued peer message.",
+    details: ["Local Unix transport only; starts no daemon. queued is submission, not processing; never replay an unknown send."],
+  },
+  {
     name: "chatgpt",
     usage: "ocx chatgpt <launch|restore|status>",
     summary: "Experimental ChatGPT app-server shim (macOS only, default off).",
@@ -138,14 +144,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke>",
+    usage: "ocx link <port|issue|status|revoke|reconnect>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
-      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
+      "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
   {
@@ -239,8 +246,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "hub",
-    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]",
-    summary: "Hub-side commands. `invite` prints a ready-to-run `ocx connect` line for one more machine.",
+    usage: "ocx hub invite [--json] [--data-url <origin>] [--management-url <origin>] [--clients codex,claude]\n  ocx hub disable [--revoke-clients --client-key <id> ...] [--json]",
+    summary: "Invite another machine, or disable hub mode in one validated config write.",
     details: [
       "Topology: a hub serves ONE port. Remote machines dial `hostname:port` with their own per-client",
       "key; the hub's own local processes dial `127.0.0.1:<same port>` with no credential, through the",
@@ -391,8 +398,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route combo <list|show|set|remove> ...",
-    summary: "Manage routing features; combo is currently the supported routing resource.",
+    usage: "ocx route <combo|policy> <subcommand>",
+    summary: "Manage combo routing and routing profiles.",
   },
   {
     name: "effort",
@@ -467,8 +474,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
@@ -560,7 +567,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "and `providers.opencodex` blocks injected through OpenCode's inline runtime layer",
       "(`OPENCODE_CONFIG_CONTENT`). Any existing inline config in the environment is preserved",
       "and only `provider.opencodex` and `providers.opencodex` are overwritten for this launch.",
-      "Only the V2 block (`providers.opencodex`) carries the reasoning-effort variants.",
+      "V1 receives reasoning-effort variant maps; V2 receives native variant arrays for the same declared choices and defaults.",
       "Global/project opencode.json may be read to warn about an existing provider.opencodex or",
       "providers.opencodex override; on-disk files are never modified.",
       "Routed models appear in the model picker as opencodex/<provider>/<model>.",
@@ -593,16 +600,38 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Connect ZCode (Z.ai desktop client) to the proxy via its managed provider.",
     details: [
       "Alias of ocx integration client <sub> --client zcode.",
-      "enable writes the managed provider.opencodex block into ~/.zcode/v2/config.json; disable removes only that block.",
-      "ZCode 3.14 moved its providers to ~/.zcode/v2/provider_config.json; where that file exists, enable is refused because the write cannot reach the client.",
+      "enable manages ~/.zcode/v2/provider_config.json with schemaVersion 1; if the store is absent, it writes the legacy provider.opencodex block into ~/.zcode/v2/config.json.",
+      "A surviving owned legacy block prevents switching stores. Run `ocx zcode disable` before enabling the current store. Unknown store schemas are refused.",
       "ZCode reads its config at startup — restart ZCode after enable/disable.",
       "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],
   },
   {
+    name: "commandcode",
+    usage: "ocx commandcode [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
+    summary: "Connect Command Code CLI to the proxy via its managed provider.",
+    details: [
+      "Alias of ocx integration client <sub> --client commandcode.",
+      "enable manages the opencodex block under the existing provider or providers root in ~/.commandcode/providers.json; disable removes only that block.",
+      "Command Code reads providers on startup.",
+      "`restore --op <opId>` replays the exact previous managed block; take the id from `ocx commandcode history`.",
+    ],
+  },
+  {
+    name: "cmd",
+    usage: "ocx cmd [status|show|list|enable|disable|history|journal|restore --op <opId>] [--json]",
+    summary: "Alias of ocx commandcode.",
+  },
+  {
     name: "restart",
     usage: "ocx restart",
-    summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
+    summary: "Request a graceful restart of the verified running proxy, preserving routing.",
+    details: [
+      "If no proxy is running, use the normal `ocx ensure` start policy, including the Codex autostart setting.",
+      "Unverifiable running targets are refused without a stop/start fallback.",
+      "Restarting an older proxy from this newer CLI requires standalone macOS/Linux proxies; supervised, shared, foreground, or unverifiable targets are refused.",
+      "For a service-managed update, run `ocx service restart`; for a desktop-managed update, restart through the OpenCodex desktop app.",
+    ],
   },
   {
     name: "v2",

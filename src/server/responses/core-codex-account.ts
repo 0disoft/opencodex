@@ -6,6 +6,7 @@ import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
 } from "../../codex/routing";
+import { claimMainQuotaDispatchForWs, isMainQuotaDispatchLive, renewMainQuotaDispatchForAttempt, type MainQuotaDispatch } from "../../codex/main-account-cache";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isCodexAccountGenerationLive } from "../../codex/account-store";
@@ -54,7 +55,8 @@ import {
   headersForCodexAuthContext,
   applyCodexAuthContextToProvider,
   stripCodexRuntimeProviderFields,
-  createCodexReserveDispatchGuard,
+  createCodexAuthDispatchGuard,
+  CodexPoolAccountCreditsOffError,
 } from "../../codex/auth-context";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
@@ -120,8 +122,28 @@ export function usesCodexForwardPoolAuth(
 }
 
 
+/** Live proof that this plain-main response used the observed main credential. */
+export function liveMainQuotaDispatch(
+  authCtx: CodexAuthContext, provider: OcxProviderConfig,
+): MainQuotaDispatch | undefined {
+  if (authCtx.kind !== "main" || !authCtx.mainQuotaDispatch) return undefined;
+  if (!isCanonicalOpenAiForwardProvider(provider)
+    || provider.authMode !== "forward" || provider.adapter !== "openai-responses") return undefined;
+  return isMainQuotaDispatchLive(authCtx.mainQuotaDispatch) ? authCtx.mainQuotaDispatch : undefined;
+}
+
 export function codexWsQuotaObserver(authCtx: CodexAuthContext, provider: OcxProviderConfig, modelId?: string): CodexWsQuotaObserver | undefined {
-  if (!isCanonicalOpenAiForwardProvider(provider) || !usesCodexForwardPoolAuth(authCtx, provider)) return undefined;
+  if (!isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  if (!usesCodexForwardPoolAuth(authCtx, provider)) {
+    const captured = liveMainQuotaDispatch(authCtx, provider);
+    if (!captured || authCtx.kind !== "main") return undefined;
+    const dispatch = authCtx.mainQuotaDispatch = renewMainQuotaDispatchForAttempt(captured);
+    return headers => {
+      claimMainQuotaDispatchForWs(dispatch);
+      if (!isMainQuotaDispatchLive(dispatch)) return;
+      applyCapturedCodexQuota(MAIN_CODEX_ACCOUNT_ID, headers, dispatch.configGeneration, dispatch.writer, { modelId });
+    };
+  }
   const { accountId, writerGeneration } = authCtx;
   const credentialGeneration = authCtx.kind === "pool" ? authCtx.generation : undefined;
   const mainWriter = authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined;
@@ -745,12 +767,21 @@ export async function retryCodexPoolOnAlternateAccount(
   // Only a combo reset-derived outcome is deferred. Retry-After, defaults, and
   // ordinary requests must block the first account before the alternate send.
   if (!deferFirstOutcome) recordFirstOutcome();
-  const retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
-  const retryProvider = applyCodexAuthContextToProvider(
-    stripCodexRuntimeProviderFields(route.provider),
-    retryAuthCtx,
-    "pool",
-  );
+  let retryHeaders: Headers;
+  let retryProvider: ReturnType<typeof applyCodexAuthContextToProvider>;
+  try {
+    retryHeaders = headersForCodexAuthContext(callerAuthHeaders, retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission);
+    retryProvider = applyCodexAuthContextToProvider(stripCodexRuntimeProviderFields(route.provider), retryAuthCtx, "pool");
+  } catch (error) {
+    if (!(error instanceof CodexPoolAccountCreditsOffError)) throw error;
+    // Body/entitlement reads above can outlive credit consent. No alternate will send:
+    // release its reservation and probes, then let the owner map the policy refusal.
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(firstAuthCtx);
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
+    await firstResponse.body?.cancel().catch(() => undefined);
+    return { kind: "transport", error, authCtx: retryAuthCtx };
+  }
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire, route.staticPolicy),
     config.cacheRetention,
@@ -889,7 +920,7 @@ export async function retryCodexPoolOnAlternateAccount(
             modelId: route.modelId,
             onCodexWsQuota: codexWsQuotaObserver(retryAuthCtx, route.provider, route.modelId),
             beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
-              ? createCodexReserveDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
+              ? createCodexAuthDispatchGuard(retryAuthCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
           }),
           // Credential-bearing forward send: never follow a redirect into a
           // dead-host rejection after the credential was seen (#914).
