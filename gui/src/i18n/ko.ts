@@ -2909,6 +2909,8 @@ export const ko: Record<TKey, string> = {
   "pws.loggedInTitle": "로그인됨",
   "pws.notLoggedInTitle": "로그인 필요",
   "pws.note": "메모",
+  "pws.responsesReasoningReplay": "평문 reasoning 리플레이",
+  "pws.responsesReasoningReplayHint": "기본값은 꺼짐입니다. 이전 평문 reasoning을 이 엔드포인트로 전송하며 토큰 사용량이 늘 수 있습니다. 엔드포인트가 reasoning 리플레이를 지원할 때만 켜세요.",
   "pws.allowPrivateNetwork": "로컬/사설 네트워크 허용",
   "pws.liveModels": "프로바이더에서 모델 검색",
   "pws.liveModelsDesc": "프로바이더의 실시간 모델 카탈로그를 가져옵니다. 끄면 설정된 정적 모델만 사용합니다.",

@@ -1625,6 +1625,8 @@ export const ja: Record<TKey, string> = {
   "pws.loggedInTitle": "ログイン済み",
   "pws.notLoggedInTitle": "未ログイン",
   "pws.note": "メモ",
+  "pws.responsesReasoningReplay": "平文の推論を再送",
+  "pws.responsesReasoningReplayHint": "初期設定はオフです。過去の平文推論をこのエンドポイントに送信し、トークン使用量が増える場合があります。推論の再送に対応する場合のみ有効にしてください。",
   "pws.allowPrivateNetwork": "ローカル/プライベートネットワークを許可",
   "pws.liveModels": "プロバイダーからモデルを検出",
   "pws.liveModelsDesc": "プロバイダーのライブモデルカタログを取得します。オフにすると設定済みの静的モデルのみを使用します。",

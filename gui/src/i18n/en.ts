@@ -1757,6 +1757,8 @@ export const en = {
   "pws.loggedInTitle": "Logged in",
   "pws.notLoggedInTitle": "Not logged in",
   "pws.note": "Note",
+  "pws.responsesReasoningReplay": "Replay plaintext reasoning",
+  "pws.responsesReasoningReplayHint": "Off by default. Sends prior plaintext reasoning to this endpoint and may increase token use. Enable only if the endpoint accepts reasoning replay.",
   "pws.allowPrivateNetwork": "Allow local/private network",
   "pws.liveModels": "Discover models from provider",
   "pws.liveModelsDesc": "Fetch the provider's live model catalog. Turn this off to use only configured/static models.",

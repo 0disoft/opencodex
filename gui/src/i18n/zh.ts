@@ -2882,6 +2882,8 @@ export const zh: Record<TKey, string> = {
   "pws.loggedInTitle": "已登录",
   "pws.notLoggedInTitle": "未登录",
   "pws.note": "备注",
+  "pws.responsesReasoningReplay": "重放明文推理",
+  "pws.responsesReasoningReplayHint": "默认关闭。将此前的明文推理发送到此端点，可能增加令牌用量。仅在端点支持推理重放时启用。",
   "pws.allowPrivateNetwork": "允许本地/私有网络",
   "pws.liveModels": "从提供方发现模型",
   "pws.liveModelsDesc": "获取提供方的实时模型目录。关闭后仅使用已配置的静态模型。",

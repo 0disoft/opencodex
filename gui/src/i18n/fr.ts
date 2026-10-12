@@ -1730,6 +1730,8 @@ export const fr: Record<TKey, string> = {
   "pws.loggedInTitle": "Connecté",
   "pws.notLoggedInTitle": "Non connecté",
   "pws.note": "Note",
+  "pws.responsesReasoningReplay": "Rejouer le raisonnement en clair",
+  "pws.responsesReasoningReplayHint": "Désactivé par défaut. Envoie le raisonnement précédent en clair à ce point de terminaison et peut augmenter les tokens utilisés. Activez uniquement si le service accepte cette relecture.",
   "pws.allowPrivateNetwork": "Autoriser le réseau local/privé",
   "pws.liveModels": "Détecter les modèles auprès du fournisseur",
   "pws.liveModelsDesc": "Récupérez le catalogue de modèles en direct du fournisseur. Désactivez cette option pour utiliser uniquement les modèles configurés/statiques.",
