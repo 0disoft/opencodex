@@ -354,9 +354,12 @@ for (const protocol of ["h1", "h2"] as const) {
   for (const input of protocol === "h1" ? ["small", "buffered"] as const : ["small"] as const)
   bounded(`${protocol} early upstream response closes ${input === "buffered" ? "a buffered" : "an"} unfinished upload without losing the reply`, async wait => {
     const f = await fixture((req, res) => {
-      // Keep reading the body, as a real origin answering early does: one that closes with unread
-      // input resets the connection, and Windows then discards the reply before the relay reads it.
+      // Answer like a real origin that replies early: keep reading the body and close with a FIN.
+      // Bun's own server would close this unfinished request with destroySoon(), a reset that
+      // Windows delivers before the reply bytes, so the relay could never read what it should relay.
       req.on("error", () => res.destroy()); req.resume();
+      const socket = req.socket;
+      socket.destroySoon = () => { socket.end(); return socket; };
       if (req.url === "/early") { res.writeHead(413, { "Content-Length": "5" }); res.end("early"); }
       else res.end("ordinary");
     });
