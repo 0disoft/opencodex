@@ -243,7 +243,7 @@ export function persistEffortClamp(
   // This is an observation, not a heartbeat: rewriting updatedAt on every sync both churns disk
   // and makes identical clamps look new after restart. Compare sets, not catalog enumeration order.
   const previous = loadLastEffortClamp(deps);
-  const setKey = (values: string[]) => JSON.stringify([...new Set(values)].sort());
+  const setKey = (values: readonly string[]) => JSON.stringify([...new Set(values)].sort());
   if (previous && previous.runtimePath === diagnostic.runtimePath
     && previous.runtimeVersion === diagnostic.runtimeVersion
     && setKey(previous.removedEfforts) === setKey(diagnostic.removedEfforts)
