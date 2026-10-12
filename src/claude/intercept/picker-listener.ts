@@ -207,6 +207,12 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
+      if (!h2 && uploading && !req.complete) {
+        const socket = req.socket;
+        // Bun 1.4.3 ends Connection: close responses with destroySoon before our finish listener.
+        // Keep the pending TLS reply intact by sending a FIN and discarding remaining input.
+        socket.destroySoon = () => { req.resume(); socket.end(); return socket; };
+      }
       // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
       if (uploading && !req.complete) {
         req.once("error", () => res.destroy());
@@ -438,6 +444,8 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       const offersH2 = clientHelloOffersH2(head);
       if (offersH2 === null) return;
       client.off("data", onData);
+      // Keep reading an aborted upload after the backend reply FIN.
+      client.allowHalfOpen = true;
       // Paused, a FIN or later bytes wait in the readable buffer and follow `head` once piped.
       client.pause();
       clearTimeout(deadline);
@@ -450,6 +458,9 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       // its peer (reset, dial failure) tears the peer down instead of leaving it open.
       inner.once("close", () => { spliced.delete(inner); if (!client.writableEnded) client.destroy(); });
       client.once("close", () => { if (!inner.writableEnded) inner.destroy(); });
+      // The backend reply ended; discard ciphertext still coming from the aborted upload.
+      // Unpipe before resuming, so backpressure cannot hide the peer FIN.
+      inner.once("end", () => { client.unpipe(inner); client.resume(); });
       inner.once("connect", () => {
         inner.setNoDelay(true);
         client.setNoDelay(true);

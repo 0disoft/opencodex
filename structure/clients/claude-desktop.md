@@ -232,7 +232,13 @@ HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
 the request. Draining adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Body completion removes the input-cleanup listeners,
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the refusal reached the client; an HTTP/1.1 refusal of unfinished input
+therefore replaces that socket's `destroySoon` with the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). Body completion removes the input-cleanup listeners,
 leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
 `tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
 protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
