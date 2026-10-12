@@ -25,7 +25,11 @@ beforeEach(() => {
   observeMainQuotaIdentity(account);
   const writer = captureMainQuotaWriter(account)!;
   const old = Date.now() - 19 * 24 * 60 * 60_000;
-  writeFileSync(join(home, "codex-quota-cache.json"), JSON.stringify({ version: 1, quotas: {},
+  const current = Date.now();
+  writeFileSync(join(home, "codex-quota-cache.json"), JSON.stringify({ version: 1, quotas: {
+    [MAIN]: { shortPercent: 100, shortObservedAt: current, shortResetAt: current / 1000 + 3_600,
+      shortWindowSeconds: 18_000, weeklyPercent: 0, updatedAt: current },
+  },
     mainPolicyQuota: { identityKey: writer.identityKey, quota: {
       shortPercent: 100, shortObservedAt: old, shortResetAt: old / 1000 + 18_000,
       shortWindowSeconds: 18_000, weeklyPercent: 0, updatedAt: old,
@@ -120,6 +124,22 @@ describe("authoritative main 5h window retirement (#6244)", () => {
     expect(getMainAccountHardLockStatus({}).state).toBe("blocked");
   });
 
+  test.each([101, -1, NaN])("malformed weekly usage %s retains the future-reset rotation tuple and old policy", used_percent => {
+    const rotationBefore = getAccountQuota(MAIN)!;
+    const policyBefore = getMainPolicyQuota()!;
+    expect(rotationBefore.shortResetAt).toBeGreaterThan(Date.now() / 1000);
+    const data = { rate_limit: { allowed: true, primary_window: { ...weekly, used_percent },
+      secondary_window: null } };
+    expect(parseMainPolicyUsageQuota(data)).toBeNull();
+    publish(data);
+    expect(getMainPolicyQuota()).toEqual(policyBefore);
+    expect(getAccountQuota(MAIN)).toMatchObject({
+      shortPercent: 100, shortObservedAt: rotationBefore.shortObservedAt,
+      shortResetAt: rotationBefore.shortResetAt, shortWindowSeconds: 18_000,
+    });
+    expect(getMainAccountHardLockStatus({}).state).toBe("blocked");
+  });
+
   test.each(["go", "free"])("%s tertiary-only monthly usage cannot prove governing recovery", plan_type => {
     const data = { plan_type, rate_limit: { primary_window: null, secondary_window: null,
       tertiary_window: { used_percent: 0, limit_window_seconds: 2_592_000 } } };
@@ -139,12 +159,17 @@ describe("authoritative main 5h window retirement (#6244)", () => {
 
   test.each([false, true])("a stale identity writer cannot publish authoritative absence (tertiary null=%j)", tertiaryNull => {
     const staleWriter = captureMainQuotaWriter(account)!;
+    const rotationBefore = getAccountQuota(MAIN)!;
+    const policyBefore = getMainPolicyQuota()!;
+    expect(rotationBefore.shortResetAt).toBeGreaterThan(Date.now() / 1000);
     clearMainAccountInfoCache();
     observeMainQuotaIdentity(account);
     const data = { rate_limit: { allowed: true, primary_window: null, secondary_window: weekly,
       ...(tertiaryNull ? { tertiary_window: null } : {}) } };
     setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, staleWriter, parseMainPolicyUsageQuota(data));
     expect(getMainPolicyQuota()?.shortPercent).toBe(100);
+    expect(getMainPolicyQuota()).toEqual(policyBefore);
+    expect(getAccountQuota(MAIN)).toEqual(rotationBefore);
     expect(getMainAccountHardLockStatus({}).state).toBe("blocked");
   });
 

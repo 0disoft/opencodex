@@ -186,6 +186,35 @@ test.each([[false, false], [true, false], [false, true], [true, true]] as const)
   },
 );
 
+test.each([false, true])("delayed plan upgrade cannot retire short usage after credential replacement (tertiary null=%j)", async tertiaryNull => {
+  clearAccountQuota(MAIN);
+  setAccountQuotaFromParsed(MAIN, { shortPercent: 100, shortWindowSeconds: 18_000,
+    shortResetAt: Math.floor((now + HOUR) / 1000), weeklyPercent: 20 }, undefined,
+    captureMainQuotaWriter(accountId));
+  const policyBefore = getMainPolicyQuota()!;
+  const rotationBefore = getAccountQuota(MAIN)!;
+  expect(rotationBefore.shortResetAt).toBeGreaterThan(now / 1000);
+  const entered = deferred<void>();
+  const finish = deferred<Response>();
+  fetchWith(async () => { entered.resolve(); return finish.promise; });
+  const pending = fetchMainAccountInfoAttempt(true, 0);
+  await entered.promise;
+  writeMain(accountId, true);
+  finish.resolve(Response.json({ plan_type: "prolite", rate_limit: {
+    allowed: true, primary_window: { used_percent: 3, limit_window_seconds: 604_800 },
+    secondary_window: null, ...(tertiaryNull ? { tertiary_window: null } : {}),
+  } }));
+  const result = await pending;
+  expect(result.infoUnpublished).toBe(true);
+  expect(result.info.quota?.weeklyPercent).toBe(3);
+  expect(result.freshQuota).toBeUndefined();
+  expect(result.resetRecoveryProof).toBeUndefined();
+  expect(getMainPolicyQuota()).toEqual(policyBefore);
+  expect(getAccountQuota(MAIN)).toEqual(rotationBefore);
+  expect(calls).toEqual([whamUrl]);
+  expect(getNativeMainProfileRequestCount()).toBe(0);
+});
+
 test.each([false, true])("hidden-dashboard sweep renews at three minutes and admits past original expiry (unlimited=%j)", async unlimited => {
   const original = now;
   seed({ hasCredits: true, ...(unlimited ? { unlimited: true } : { balance: 5 }), observedAt: now });
