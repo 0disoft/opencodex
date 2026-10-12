@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setRequestHistoryStepObserverForTests, type RequestHistoryStepSample } from "../../src/routing/history/indexer";
 import { usageLogPath } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -54,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setRequestHistoryStepObserverForTests(null);
   await fixture?.close();
   fixture = null;
   upstream?.stop(true);
@@ -110,19 +112,47 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
   writeLedger();
   const base = `http://127.0.0.1:${fixture.server.port}`;
 
-  // Event-loop lag: the largest gap between consecutive 2 ms timers.
+  let rebuilding = true;
+  let inFlight = "none";
+  // Attribution only: the longest rebuild steps with their phase, so a hosted
+  // failure shows whether its gap was rebuild work or something outside it.
+  const longSteps: Array<{ phase: string; ms: number; atMs: number }> = [];
+  setRequestHistoryStepObserverForTests((sample: RequestHistoryStepSample) => {
+    if (sample.ms < 50) return;
+    longSteps.push({ phase: sample.phase, ms: Math.round(sample.ms), atMs: Math.round(sample.startedAt - startedAt) });
+    longSteps.sort((left, right) => right.ms - left.ms);
+    longSteps.length = Math.min(longSteps.length, 5);
+  });
+
+  // Event-loop lag: the largest gap between consecutive 2 ms timers. Each large
+  // gap also records the process CPU used inside it, the probe in flight and
+  // its start offset; these are diagnostics, the bound stays on wall time.
   let monitoring = true;
   let maxLagMs = 0;
+  let maxBusyMs = 0;
+  const gaps: Array<{ gapMs: number; cpuMs: number; startMs: number; probe: string }> = [];
   let last = performance.now();
+  let lastCpu = process.cpuUsage();
   const monitor = () => {
     const at = performance.now();
-    maxLagMs = Math.max(maxLagMs, at - last - 2);
+    const cpu = process.cpuUsage();
+    const gapMs = at - last - 2;
+    const cpuMs = (cpu.user - lastCpu.user + cpu.system - lastCpu.system) / 1000;
+    // Other threads can add CPU too, so the main thread ran at most the gap.
+    const busyMs = Math.min(Math.max(gapMs, 0), cpuMs);
+    maxLagMs = Math.max(maxLagMs, gapMs);
+    maxBusyMs = Math.max(maxBusyMs, busyMs);
+    if (gapMs >= 50) {
+      gaps.push({ gapMs: Math.round(gapMs), cpuMs: Math.round(cpuMs), startMs: Math.round(last - startedAt), probe: inFlight });
+      gaps.sort((left, right) => right.gapMs - left.gapMs);
+      gaps.length = Math.min(gaps.length, 5);
+    }
     last = at;
+    lastCpu = cpu;
     if (monitoring) setTimeout(monitor, 2);
   };
   setTimeout(monitor, 2);
 
-  let rebuilding = true;
   const startedAt = performance.now();
   // The dashboard history read waits for the rebuild (async reader contract).
   const history = fetch(`${base}/api/request-history?limit=1`, { headers: managementHeaders() })
@@ -136,6 +166,7 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
   while (rebuilding) {
     const healthzStartedWhileRebuilding = rebuilding;
     let at = performance.now();
+    inFlight = "healthz";
     const healthz = await fetch(`${base}/healthz`);
     expect(healthz.status).toBe(200);
     await healthz.arrayBuffer();
@@ -146,6 +177,7 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
     // Policy dry-run reads candidate health through the routing-time sync entry.
     const dryRunStartedWhileRebuilding = rebuilding;
     at = performance.now();
+    inFlight = "dryRun";
     const dryRun = await fetch(`${base}/api/routing-profiles/dry-run`, {
       method: "POST",
       headers: managementHeaders({ "content-type": "application/json" }),
@@ -161,6 +193,7 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
     // health through the sync entry, then dispatches to the local upstream.
     const proxiedStartedWhileRebuilding = rebuilding;
     at = performance.now();
+    inFlight = "proxied";
     const proxied = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -172,6 +205,7 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
     if (rebuilding) probes.proxied.push(latencyMs);
     if (proxiedStartedWhileRebuilding) startedProbes.proxied.push(latencyMs);
   }
+  inFlight = "none";
   const response = await history;
   const rebuildMs = performance.now() - startedAt;
   monitoring = false;
@@ -184,6 +218,9 @@ test("a cold request-history rebuild leaves /healthz and routing responsive", as
   const detail = JSON.stringify({
     rebuildMs: Math.round(rebuildMs),
     maxLagMs: Math.round(maxLagMs),
+    maxBusyMs: Math.round(maxBusyMs),
+    gaps,
+    longSteps,
     healthz: probes.healthz.length,
     dryRun: probes.dryRun.length,
     proxied: probes.proxied.length,
