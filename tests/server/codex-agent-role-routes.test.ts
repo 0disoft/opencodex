@@ -86,6 +86,37 @@ describe("/api/codex-agent-roles", () => {
     expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5" });
   });
 
+  test("a null effort removes the role-level effort override from both files", async () => {
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high", "temperature": 0.2 } } } }\n');
+    await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "high" }) });
+    const cleared = await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: null }) });
+    expect(cleared.body).toMatchObject({ effort: null, toml: { status: "written" }, omoJsonc: { status: "written" } });
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).not.toContain("model_reasoning_effort");
+    expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5", temperature: 0.2 });
+    expect((await call("/api/codex-agent-roles")).body.roles).toEqual([{ role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: "gpt-5.5" }]);
+  });
+
+  test.each([
+    ["multiline basic", '"""\nhigh\n"""'],
+    ["multiline literal", "'''\nhigh\n'''"],
+    ["non-string", "5"],
+  ])("clearing a %s effort returns 409 and leaves both files unchanged", async (_kind, value) => {
+    const rolePath = join(root, "codex", "agents", "explorer.toml");
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(rolePath, ROLE + `model_reasoning_effort = ${value}\n`);
+    writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high" } } } }\n');
+    const roleBefore = readFileSync(rolePath);
+    const omoBefore = readFileSync(omoPath);
+    const refused = await call("/api/codex-agent-roles/explorer", {
+      method: "PUT", body: JSON.stringify({ model: "xai/grok-4.5", effort: null }),
+    });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("unsupported_model_value");
+    expect(readFileSync(rolePath)).toEqual(roleBefore);
+    expect(readFileSync(omoPath)).toEqual(omoBefore);
+  });
+
   test("a model-only save keeps the role's effort and its omo.jsonc reasoning", async () => {
     const omoPath = join(root, "home", ".omo", "omo.jsonc");
     writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high" } } } }\n');

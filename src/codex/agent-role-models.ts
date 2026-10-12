@@ -97,6 +97,21 @@ export function setTomlRootReasoningEffort(content: string, effort: string): str
   return setTomlRootString(content, locateTomlReasoningEffortKey(content), "model_reasoning_effort", effort);
 }
 
+export function removeTomlRootReasoningEffort(content: string): string {
+  const location = locateTomlReasoningEffortKey(content);
+  if (!location?.inRootTable) return content;
+  if (!location.span) {
+    throw new AgentRoleModelError("unsupported_model_value", "the existing model_reasoning_effort value is not a one-line string");
+  }
+  const lines = content.split("\n");
+  // A terminated line goes with its own newline. An unterminated last line is emptied instead,
+  // so the previous line keeps its terminator (and its \r in a CRLF file).
+  if (location.line < lines.length - 1) lines.splice(location.line, 1);
+  else lines[location.line] = "";
+  const bom = location.line === 0 && content.startsWith("\ufeff") ? "\ufeff" : "";
+  return bom + lines.join("\n");
+}
+
 export function readCodexAgentRoleEffort(role: string, codexHome: string): string | null {
   try {
     const location = locateTomlReasoningEffortKey(readFileSync(roleFile(role, codexHome), "utf8"));
@@ -150,7 +165,7 @@ export function writeCodexAgentRoleModel(
   role: string,
   model: string,
   codexHome: string,
-  effort?: string,
+  effort?: string | null,
 ): { status: "written" | "unchanged" } {
   requireKnownRole(role, codexHome);
   const path = roleFile(role, codexHome);
@@ -162,7 +177,9 @@ export function writeCodexAgentRoleModel(
   const withModel = setTomlRootModel(before, validateAgentRoleModel(model));
   const after = effort === undefined
     ? withModel
-    : setTomlRootReasoningEffort(withModel, validateAgentRoleEffort(effort));
+    : effort === null
+      ? removeTomlRootReasoningEffort(withModel)
+      : setTomlRootReasoningEffort(withModel, validateAgentRoleEffort(effort));
   if (after === before) return { status: "unchanged" };
   assertValidRoleToml(role, after, "after");
   assertIntegrationWriteOwnership(path);

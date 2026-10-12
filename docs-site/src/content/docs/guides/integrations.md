@@ -683,14 +683,16 @@ role's model is actually decided. LazyCodex counts as installed when the `omo@si
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
 `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
-section is hidden and the command line reports it as not installed. Pick a model on a row and
-press Save:
+section is hidden and the command line reports it as not installed. Pick a model and a reasoning
+effort on a row and press Save:
 
-- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
-  instructions, comments, and other keys are left exactly as they were. A role with no pin gets
-  one added near the top of the file.
-- The same value is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
-  LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
+- opencodex updates only the root `model = "..."` and `model_reasoning_effort = "..."` keys of that role's file.
+  Missing pins are inserted near the top. Choosing **Inherit effort**, available on every row,
+  sends `"effort": null` to clear the effort pin, removing its line and trailing comment.
+  The role's instructions, other comments, and other keys are left exactly as they were.
+- The model is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
+  LazyCodex 5.1.1 and later reads, and a changed effort LazyCodex supports goes to
+  `[codex].agents.<role>.reasoning` in the same entry. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
   a FIFO is rejected without waiting for a writer. A skipped mirror does not undo the role-file save.
@@ -704,9 +706,15 @@ ocx agent roles set explorer xai/grok-4.5
 ```
 
 `ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
-rewrites the role file's `model_reasoning_effort` line and writes `[codex].agents.<role>.reasoning`
+inserts or replaces the role file's `model_reasoning_effort` value and writes `[codex].agents.<role>.reasoning`
 in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
-`reasoning` is removed). A Save that changes only the model leaves both effort values as they were.
+`reasoning` is removed). On `PUT /api/codex-agent-roles/{role}`, omitting `effort` keeps the pin,
+a level sets it, and `null` removes the role file's `model_reasoning_effort` line, its trailing
+comment, and the omo.jsonc `reasoning`. A Save that changes only the model leaves both effort values as they were.
+Only an existing one-line string value can be removed; a multiline or non-string value is refused
+with 409 `unsupported_model_value`, leaving both files unchanged. Clearing removes only the
+role's own override: Codex then resolves the effort as it does for any role without one (an explicit
+spawn value, the `[agents]` default, or the parent session), not a fixed model default.
 
 ### Auto-assign
 
@@ -729,9 +737,11 @@ picks a model. opencodex then picks the cheapest model from your picker list tha
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
 cannot be applied. Nothing is written until you press Apply on a row or Apply all. Applying uses the
-same save as picking by hand, and also rewrites the role's `model_reasoning_effort` when the file already has
-one. The effort is placed on the chosen model's own levels: its lowest, its default, one above the
-default, or its highest.
+same save as picking by hand. Every sized role whose chosen model has a non-empty effort ladder gets
+an effort proposal, and Apply or `--apply` inserts or replaces its `model_reasoning_effort` value.
+The effort is placed on the chosen model's own levels: its lowest, its default, one above the
+default, or its highest. An empty ladder gives no effort proposal (`proposedEffort: null`);
+Apply omits `effort` and leaves any existing effort pin as it was. A null proposal never clears a pin.
 
 ```bash
 ocx agent roles suggest
