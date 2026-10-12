@@ -438,7 +438,10 @@ function* rebuildSteps(
   try {
     // A private build file needs no crash durability: an interrupted build is
     // discarded. WAL is enabled just before publication for future readers.
-    build.exec("PRAGMA journal_mode = DELETE");
+    // MEMORY keeps in-process ROLLBACK without a rollback file: DELETE created
+    // and removed one per commit, which dominated commit time on Windows
+    // (devlog/_plan/261013_rt284_l1_owner_bundle/060_windows_rebuild_lag.md).
+    build.exec("PRAGMA journal_mode = MEMORY");
     build.exec("PRAGMA synchronous = OFF");
     build.exec(HISTORY_DDL);
     const fresh = build;
