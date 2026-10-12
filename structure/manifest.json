@@ -160,6 +160,13 @@
       ]
     },
     {
+      "path": "catalog-effort-clamp.md",
+      "tier": 2,
+      "title": "Effort-clamp observations",
+      "scope": "Persisted effort-clamp observation identity and idempotent sync notices.",
+      "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",

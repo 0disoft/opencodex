@@ -35,6 +35,11 @@ caller credential as the Pool selection. An exact account binding remains bound 
 
 ## Config injection
 
+`ocx sync` removes reasoning efforts unsupported by the selected Codex runtime from the catalog.
+It reports a clamp when its runtime identity, removed efforts or affected models change; unchanged
+syncs preserve the diagnostic timestamp and do not repeat that notice. This compatibility
+projection does not require running `ocx doctor`. If a clamp clears and later returns, it is reported again.
+
 OpenCodex serializes its Codex configuration writes. On Windows, a file temporarily held open
 by another process gets a short, bounded retry. If access stays busy, retry the operation shortly;
 OpenCodex preserves the existing lock evidence and does not use that access failure to take over
