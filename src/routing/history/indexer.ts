@@ -367,6 +367,7 @@ function* refreshSteps(paths: IndexPaths, forcedReason: string | null): Generato
 }
 
 function* refreshOnce(paths: IndexPaths, forcedReason: string | null): Generator<void, Settled, unknown> {
+  stepPhase = "refresh";
   const { dir } = paths;
   const revision = sourceIdentity();
   let reason = forcedReason ?? integrityReason;
@@ -398,6 +399,7 @@ function* refreshOnce(paths: IndexPaths, forcedReason: string | null): Generator
       // Truncated source: offsets no longer make sense.
       reason = "source truncated; index rebuilt";
     } else if (current.indexedOffset < Number(revision.size)) {
+      stepPhase = "tail";
       const inserted = yield* ingestSteps(generation.handle, revision.path, current.indexedOffset, {
         expected: revision,
         beforeWrite: () => {
@@ -425,6 +427,7 @@ function* rebuildSteps(
   revision: UsageLogRevision | null,
 ): Generator<void, Settled, unknown> {
   const { dir } = paths;
+  stepPhase = "prepare";
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   removeAbandonedBuilds(dir);
   // Rows of a superseded generation stay unreachable for the whole build, and
@@ -453,7 +456,9 @@ function* rebuildSteps(
       setMeta(fresh, HISTORY_META_KEYS.lastError, reason);
       recordSourceMeta(fresh, revision);
     })();
+    stepPhase = "ingest";
     if (revision !== null) yield* ingestSteps(fresh, revision.path, 0, { expected: revision });
+    stepPhase = "publish";
     if (!sameLedger(revision, sourceIdentity())) {
       throw new RequestHistoryIndexStaleError("usage log changed while rebuilding");
     }
@@ -476,6 +481,7 @@ function* rebuildSteps(
   integrityReason = null;
   epoch += 1;
   open = { handle: openGeneration(generationPath), path: generationPath };
+  stepPhase = "published";
   // Older generations and the single-file index from before generations go
   // once nothing has them open, after this refresh has already settled.
   scheduleReclaim([...supersededGenerations(dir, generationPath), paths.legacyPath], paths.reclaimMaxWalBytes);
@@ -533,7 +539,11 @@ function driveFlight(target: Flight, budgetMs: number): boolean {
   target.running = true;
   try {
     for (;;) {
+      const observer = stepObserver;
+      const phaseBefore = stepPhase;
+      const stepStarted = observer ? performance.now() : 0;
       const step = target.steps.next();
+      if (observer) observer({ phase: phaseBefore === stepPhase ? stepPhase : `${phaseBefore}->${stepPhase}`, startedAt: stepStarted, ms: performance.now() - stepStarted });
       if (step.done) {
         finishFlight(target, { result: step.value });
         return true;
@@ -680,6 +690,24 @@ export function requestHistoryIndexEpoch(): number {
 }
 
 /** Test seam: shrink the slice and sync budgets (0 = one step per drive); null restores defaults. */
+/** One generator step as the slice driver ran it, for tests that attribute event-loop gaps. */
+export interface RequestHistoryStepSample {
+  phase: string;
+  startedAt: number;
+  ms: number;
+}
+
+// Test-only attribution: which part of a refresh a step ran (refresh, tail,
+// prepare, ingest, publish, published). Plain assignments; no cost unless an
+// observer is installed.
+let stepPhase = "refresh";
+let stepObserver: ((sample: RequestHistoryStepSample) => void) | null = null;
+
+/** Test seam: observe every driven step with its phase and duration; null removes it. */
+export function setRequestHistoryStepObserverForTests(observer: ((sample: RequestHistoryStepSample) => void) | null): void {
+  stepObserver = observer;
+}
+
 export function setRequestHistoryBudgetsForTests(budgets: { sliceMs?: number; syncBudgetMs?: number } | null): void {
   sliceMs = budgets?.sliceMs ?? REQUEST_HISTORY_SLICE_MS;
   syncBudgetMs = budgets?.syncBudgetMs ?? REQUEST_HISTORY_SYNC_BUDGET_MS;
