@@ -425,13 +425,13 @@ changes. The queue lives in `gui/src/use-model-visibility.ts`; the dashboard pag
 ## The client role owns no management plane
 
 A connected client machine runs `src/client/machine-listener.ts` instead of the standalone server.
-It binds the address the standalone proxy would (`port ?? config.port ?? 10100`) and serves
-`GET /healthz`, `/readyz`, the packaged GUI/SPA routes, and `/api/machine/*`. A link-transport client
-also relays the link data routes to its Home and serves its own read-only `GET /api/link/status`
-([Remote Link](remote-link.md#dashboard-admission)). Every other `/api/*` and `/v1/*` path is
-refused before dispatch with a JSON 404 naming the method and path. There is no second management
-port on such a machine: management rides the same listener a standalone or hub install runs, so a
-connected client has no mutating `/api/*` management surface at all.
+It binds the address the standalone proxy would (`port ?? config.port ?? 10100`) and serves `GET /healthz`,
+`/readyz`, the packaged GUI/SPA routes, and `/api/machine/*`. A link-transport client also relays the link data
+routes to its Home, serves its own read-only `GET /api/link/status` ([Remote Link](remote-link.md#dashboard-admission)),
+and relays allowlisted management reads to the Home under `/api/machine/hub-relay/api/*` for a Child dashboard session
+([Remote Link](remote-link.md#child-management-relay-and-home-codex-settings)). Every other `/api/*` and `/v1/*` path is
+refused before dispatch with a JSON 404 naming the method and path. There is no second management port on such a machine:
+management rides the same listener a standalone or hub install runs, so a connected client has no mutating `/api/*` surface.
 
 The discriminator is `role` on `/healthz` and `/readyz`. The machine listener reports
 `role: "client"`; the standalone and hub server omit the field. `src/server/proxy-liveness.ts` parses

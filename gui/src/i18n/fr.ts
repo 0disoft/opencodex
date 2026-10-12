@@ -3488,6 +3488,8 @@ export const fr: Record<TKey, string> = {
   "models.aliasStale": "obsolète",
   "connection.discovering": "Détection des cibles locale et partagée…",
   "connection.machineUnavailable": "Le plan machine local est indisponible. Les requêtes partagées n'ont pas été redirigées localement.",
+  "connection.linkManaged": "Géré par le Home {home} via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
+  "connection.linkManagedUnnamed": "Géré par son Home via Remote Link ({linkId}). Ce tableau de bord affiche les paramètres et le quota du Home en lecture seule ; effectuez les modifications sur le Home.",
   "connection.disconnect": "Déconnecter du hub",
   "connection.disconnectConfirm": "Déconnecter cette machine du hub et la redémarrer en mode autonome ?",
   "connection.pairing.hub": "Hub",

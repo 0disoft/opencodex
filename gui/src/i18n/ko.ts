@@ -3521,6 +3521,8 @@ export const ko: Record<TKey, string> = {
   "models.aliasStale": "오래됨",
   "connection.discovering": "로컬 및 공유 대상을 확인하는 중…",
   "connection.machineUnavailable": "로컬 머신 연결을 사용할 수 없습니다. 공유 요청을 로컬로 우회하지 않았습니다.",
+  "connection.linkManaged": "Remote Link({linkId})를 통해 Home {home}이(가) 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
+  "connection.linkManagedUnnamed": "Remote Link({linkId})를 통해 Home이 관리합니다. 이 대시보드는 Home의 설정과 할당량을 읽기 전용으로 보여 줍니다. 변경은 Home에서 하세요.",
   "connection.disconnect": "허브 연결 해제",
   "connection.disconnectConfirm": "이 머신의 허브 연결을 해제하고 독립 실행 모드로 다시 시작할까요?",
   "connection.pairing.hub": "허브",

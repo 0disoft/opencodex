@@ -3579,6 +3579,8 @@ export const en = {
   "models.aliasStale": "stale",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "Managed by Home {home} over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
+  "connection.linkManagedUnnamed": "Managed by its Home over Remote Link ({linkId}). This dashboard shows the Home's settings and quota read-only; make changes on the Home.",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "Hub",
