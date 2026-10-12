@@ -3522,6 +3522,8 @@ export const ru: Record<TKey, string> = {
   "models.aliasStale": "устарел",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "Управляется Home {home} через Remote Link ({linkId}). Эта панель показывает настройки и квоту Home только для чтения; вносите изменения на Home.",
+  "connection.linkManagedUnnamed": "Управляется вашим Home через Remote Link ({linkId}). Эта панель показывает настройки и квоту Home только для чтения; вносите изменения на Home.",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "Хаб",

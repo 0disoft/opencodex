@@ -3521,6 +3521,8 @@ export const ja: Record<TKey, string> = {
   "models.aliasStale": "古い",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "Remote Link ({linkId}) 経由で Home {home} が管理しています。このダッシュボードは Home の設定とクォータを読み取り専用で表示します。変更は Home で行ってください。",
+  "connection.linkManagedUnnamed": "Remote Link ({linkId}) 経由で Home が管理しています。このダッシュボードは Home の設定とクォータを読み取り専用で表示します。変更は Home で行ってください。",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "ハブ",

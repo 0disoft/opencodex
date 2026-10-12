@@ -3499,6 +3499,8 @@ export const de: Record<TKey, string> = {
   "models.aliasStale": "veraltet",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "Verwaltet von Home {home} über Remote Link ({linkId}). Dieses Dashboard zeigt die Einstellungen und das Kontingent des Home nur lesend an; Änderungen erfolgen auf dem Home.",
+  "connection.linkManagedUnnamed": "Verwaltet von seinem Home über Remote Link ({linkId}). Dieses Dashboard zeigt die Einstellungen und das Kontingent des Home nur lesend an; Änderungen erfolgen auf dem Home.",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "Hub",

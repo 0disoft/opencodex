@@ -3540,6 +3540,8 @@ export const pt: Record<TKey, string> = {
   "models.aliasStale": "obsoleto",
   "connection.discovering": "Descobrindo destinos locais e compartilhados…",
   "connection.machineUnavailable": "O plano da máquina local está indisponível. As requisições compartilhadas não foram redirecionadas para o local.",
+  "connection.linkManaged": "Gerenciado pelo Home {home} via Remote Link ({linkId}). Este painel mostra as configurações e a cota do Home somente para leitura; faça as alterações no Home.",
+  "connection.linkManagedUnnamed": "Gerenciado pelo seu Home via Remote Link ({linkId}). Este painel mostra as configurações e a cota do Home somente para leitura; faça as alterações no Home.",
   "connection.disconnect": "Desconectar do hub",
   "connection.disconnectConfirm": "Desconectar esta máquina do hub e reiniciá-la no modo standalone?",
   "connection.pairing.hub": "Hub",

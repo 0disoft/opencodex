@@ -3522,6 +3522,8 @@ export const tr: Record<TKey, string> = {
   "models.aliasStale": "eski",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "Remote Link ({linkId}) üzerinden Home {home} tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
+  "connection.linkManagedUnnamed": "Remote Link ({linkId}) üzerinden Home tarafından yönetiliyor. Bu pano Home'un ayarlarını ve kotasını salt okunur gösterir; değişiklikleri Home üzerinde yapın.",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "Merkez",

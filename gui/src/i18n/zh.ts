@@ -3520,6 +3520,8 @@ export const zh: Record<TKey, string> = {
   "models.aliasStale": "过期",
   "connection.discovering": "Discovering local and shared targets…",
   "connection.machineUnavailable": "The local machine plane is unavailable. Shared requests were not redirected locally.",
+  "connection.linkManaged": "由 Home {home} 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
+  "connection.linkManagedUnnamed": "由其 Home 通过 Remote Link（{linkId}）管理。此仪表板以只读方式显示 Home 的设置和配额；请在 Home 上进行更改。",
   "connection.disconnect": "Disconnect from hub",
   "connection.disconnectConfirm": "Disconnect this machine from the hub and restart it in standalone mode?",
   "connection.pairing.hub": "中心",
