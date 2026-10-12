@@ -112,7 +112,7 @@ CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dr
 
 ## 요청 기록 및 라우팅 분석
 
-- `GET /api/request-history` - 파생 인덱스(`routing-history.sqlite`)에서 커서 페이지네이션으로 전체 기록을 조회. 필터: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
+- `GET /api/request-history` - 파생 인덱스(`routing-history/`)에서 커서 페이지네이션으로 전체 기록을 조회. 필터: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
 - `GET /api/request-history/:requestId/route-decision` - 이 경로가 선택된 이유(추적, 후보, 제외, 점수, 프로필+리비전, 실행 시도, 결과).
 - `GET /api/routing-analytics` - 성공/실패/취소/폴백 비율, p50/p95/p99 소요 시간 및 TTFT, 불완전 스트림 비율, 쿨다운 실패 수, 성공 요청당 추정 비용, 커버리지, 신뢰도, 잘림 플래그.
 - `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` - 프로필 조회와 드라이런 평가(업스트림 전송 없음).

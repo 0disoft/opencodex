@@ -9,7 +9,10 @@
 // Version 2 rebuilds the derived projection so old raw requested-model selectors
 // are replaced by the bounded encoding already used by canonical JSONL reads.
 export const HISTORY_SCHEMA_VERSION = 2;
+// Single-file index used before #6990; removed once the first generation publishes.
 export const HISTORY_DB_FILENAME = "routing-history.sqlite";
+// Directory of published index generations (see ./generations.ts).
+export const HISTORY_DIRNAME = "routing-history";
 
 export const HISTORY_META_KEYS = {
   schemaVersion: "schema_version",
@@ -71,4 +74,8 @@ CREATE INDEX IF NOT EXISTS idx_requests_profile ON requests(profile_id);
 
 export function historyIndexPath(configDir: string): string {
   return `${configDir.replace(/[\\/]+$/, "")}/${HISTORY_DB_FILENAME}`;
+}
+
+export function historyIndexDir(configDir: string): string {
+  return `${configDir.replace(/[\\/]+$/, "")}/${HISTORY_DIRNAME}`;
 }

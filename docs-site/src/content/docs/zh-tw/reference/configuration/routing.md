@@ -152,7 +152,7 @@ Dry-run 評估候選項而不發送任何上游請求。
 
 ## 請求歷史與路由分析
 
-- `GET /api/request-history` - 從衍生的索引（`routing-history.sqlite`）以 cursor 分頁取得完整歷史，附過濾器（`provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`）與不透明 `cursor` 分頁。`GET /api/request-history/:requestId` 回傳一個標準列。
+- `GET /api/request-history` - 從衍生的索引（`routing-history/`）以 cursor 分頁取得完整歷史，附過濾器（`provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`）與不透明 `cursor` 分頁。`GET /api/request-history/:requestId` 回傳一個標準列。
 - `GET /api/request-history/:requestId/route-decision` - why-this-route 說明：軌跡（候選項、排除、計分元件、設定檔＋修訂）、執行嘗試序列與最終結果。
 - `GET /api/routing-analytics` - 成功／失敗／取消／fallback 率、p50/p95/p99 持續時間與 TTFT、不完全串流率、觸發冷卻的失敗、每次成功請求成本、覆蓋、信心度與明確的截斷旗標。
 - `GET /api/routing-profiles`、`POST /api/routing-profiles/dry-run` - 設定檔檢視與 dry-run 評估（無上游分派）。
@@ -163,4 +163,4 @@ CLI：`ocx logs explain <request-id>`、`ocx logs rebuild-index`、`ocx logs ind
 
 ## 遷移
 
-`routingProfiles` 為可選且附加式：既有設定檔載入不變。舊 `usage.jsonl` 列（無 `routeDecision`）解析不變。歷史索引可拋棄——刪除 `routing-history.sqlite` 會在下一次查詢時從 `usage.jsonl` 自動重建；`ocx logs rebuild-index` 強制執行一次。此系統中沒有任何東西會自動調校權重、預算或候選集。
+`routingProfiles` 為可選且附加式：既有設定檔載入不變。舊 `usage.jsonl` 列（無 `routeDecision`）解析不變。歷史索引可拋棄——刪除 `routing-history/` 目錄會在下一次查詢時從 `usage.jsonl` 自動重建；`ocx logs rebuild-index` 強制執行一次。此系統中沒有任何東西會自動調校權重、預算或候選集。

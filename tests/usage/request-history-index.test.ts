@@ -30,7 +30,7 @@ import {
   REQUEST_HISTORY_READ_CHUNK_BYTES,
 } from "../../src/routing/history/indexer";
 import { InvalidCursorError } from "../../src/routing/history/cursor";
-import { HISTORY_DB_FILENAME, HISTORY_SCHEMA_VERSION } from "../../src/routing/history/schema";
+import { HISTORY_SCHEMA_VERSION, historyIndexDir } from "../../src/routing/history/schema";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
@@ -109,7 +109,8 @@ describe("request-history index (RI-02)", () => {
     expect(page.hasMore).toBe(false);
     expect(page.meta.indexedRows).toBe(0);
     expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
-    expect(existsSync(join(getConfigDir(), HISTORY_DB_FILENAME))).toBe(true);
+    expect(existsSync(page.meta.dbPath)).toBe(true);
+    expect(page.meta.dbPath.startsWith(historyIndexDir(getConfigDir()))).toBe(true);
   });
 
   test("indexes appended rows incrementally", async () => {
@@ -195,10 +196,9 @@ describe("request-history index (RI-02)", () => {
 
   test("corrupt database is repaired by a full rebuild without losing canonical rows", async () => {
     for (const row of seedRows(8)) appendUsageEntry(row);
-    await queryRequestHistory({}, undefined, 10);
+    const { meta } = await queryRequestHistory({}, undefined, 10);
     closeRequestHistoryIndex();
-    const dbFile = join(getConfigDir(), HISTORY_DB_FILENAME);
-    writeFileSync(dbFile, "this is not a sqlite file at all");
+    writeFileSync(meta.dbPath, "this is not a sqlite file at all");
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(8);
     expect(page.meta.lastError).toContain("rebuilt");
@@ -206,9 +206,9 @@ describe("request-history index (RI-02)", () => {
 
   test("old schema version triggers a rebuild", async () => {
     for (const row of seedRows(4)) appendUsageEntry(row);
-    await queryRequestHistory({}, undefined, 10);
+    const { meta } = await queryRequestHistory({}, undefined, 10);
     const { Database } = await import("bun:sqlite");
-    const db = new Database(join(getConfigDir(), HISTORY_DB_FILENAME));
+    const db = new Database(meta.dbPath);
     db.query("UPDATE schema_meta SET value = '999' WHERE key = 'schema_version'").run();
     db.close();
     const page = await queryRequestHistory({}, undefined, 10);
@@ -220,10 +220,10 @@ describe("request-history index (RI-02)", () => {
     const selector = `policy/${"long-selector".repeat(20)}`;
     // Model a pre-encoding ledger and index: both originally carried the raw selector.
     appendFileSync(usageLogPath(), `${JSON.stringify(entry("legacy-selector", 1234, "a", "m1", { requestedModel: selector }))}\n`);
-    await queryRequestHistory({}, undefined, 10);
+    const { meta } = await queryRequestHistory({}, undefined, 10);
     closeRequestHistoryIndex();
     const { Database } = await import("bun:sqlite");
-    const db = new Database(join(getConfigDir(), HISTORY_DB_FILENAME));
+    const db = new Database(meta.dbPath);
     db.query("UPDATE requests SET requested_model = ? WHERE request_id = 'legacy-selector'").run(selector);
     db.query("UPDATE schema_meta SET value = '1' WHERE key = 'schema_version'").run();
     db.close();

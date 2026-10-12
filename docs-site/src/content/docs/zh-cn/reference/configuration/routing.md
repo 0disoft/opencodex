@@ -122,7 +122,7 @@ CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy
 
 ## 请求历史与路由分析
 
-- `GET /api/request-history` - 从派生索引（`routing-history.sqlite`）进行游标分页的全历史查询。过滤器：`provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
+- `GET /api/request-history` - 从派生索引（`routing-history/`）进行游标分页的全历史查询。过滤器：`provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
 - `GET /api/request-history/:requestId/route-decision` - 为什么选择此路由（跟踪、候选、排除、分数、配置文件+版本、执行尝试、结果）。
 - `GET /api/routing-analytics` - 成功/失败/取消/回退率、p50/p95/p99 耗时与 TTFT、不完整流率、冷却失败数、每次成功请求的估算成本、覆盖率、置信度、截断标志。
 - `GET /api/routing-profiles`、`POST /api/routing-profiles/dry-run` - 配置文件查看与试运行评估（不发送上游请求）。

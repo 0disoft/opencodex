@@ -2,7 +2,7 @@
  * Source-backed routing analytics (RI-03).
  *
  * All metrics derive from the rebuildable request-history index
- * (`routing-history.sqlite`), never from repeated full JSONL scans. The
+ * (`routing-history/`), never from repeated full JSONL scans. The
  * analysis is read-only: no routing decision, profile, or weight changes here
  * (ADR-10 - no automatic self-tuning).
  *
@@ -11,9 +11,10 @@
  * sample for the full history.
  */
 
+import type { Database } from "bun:sqlite";
 import type { PersistedUsageEntry } from "../usage/log";
 import { estimateRequestCost, serviceTierContext } from "../usage/cost";
-import { openRequestHistoryIndex, requestHistoryDb } from "./history/indexer";
+import { withRequestHistoryIndex } from "./history/indexer";
 
 export const ANALYTICS_MAX_ROWS = 50_000;
 /** Default row cap for the management API (full cap remains available via `limit`). */
@@ -177,8 +178,14 @@ export async function computeRoutingAnalytics(
   filters: RoutingAnalyticsFilters,
   options: { maxRows?: number } = {},
 ): Promise<RoutingAnalyticsResult> {
-  await openRequestHistoryIndex();
-  const handle = requestHistoryDb();
+  return withRequestHistoryIndex(handle => analyzeHistory(handle, filters, options));
+}
+
+function analyzeHistory(
+  handle: Database,
+  filters: RoutingAnalyticsFilters,
+  options: { maxRows?: number },
+): RoutingAnalyticsResult {
   const maxRows = Math.min(
     Math.max(1, Math.trunc(options.maxRows ?? ANALYTICS_MAX_ROWS)),
     ANALYTICS_MAX_ROWS,

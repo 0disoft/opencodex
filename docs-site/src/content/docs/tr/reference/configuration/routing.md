@@ -278,7 +278,7 @@ yeteneklere sahip modelleri hedefleyin.
 - `GET /api/request-history` - filtreler (`provider`, `model`, `requestedModel`,
   `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`,
   `profileId`, `fallback`, `from`, `to`) ve donuk `cursor` sayfalaması ile
-  türetilen dizinden (`routing-history.sqlite`) imleç sayfalamalı tam geçmiş.
+  türetilen dizinden (`routing-history/`) imleç sayfalamalı tam geçmiş.
   `GET /api/request-history/:requestId` tek bir kurallı satır döndürür.
 - `GET /api/request-history/:requestId/route-decision` - rota açıklaması: iz
   (adaylar, hariç tutmalar, puan bileşenleri, profil + revizyon), yürütme
@@ -301,7 +301,7 @@ index-status`, `ocx route policy list | show | dry-run | evaluate`.
 `routingProfiles` isteğe bağlı ve eklemelidir: mevcut yapılandırma dosyaları
 değişmeden yüklenir. `routeDecision` içermeyen eski `usage.jsonl` satırları
 değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
-`routing-history.sqlite` dosyasını silmek, bir sonraki sorguda `usage.jsonl`'den
+`routing-history/` dizinini silmek, bir sonraki sorguda `usage.jsonl`'den
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.

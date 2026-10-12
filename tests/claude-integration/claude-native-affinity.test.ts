@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
@@ -12,7 +12,8 @@ import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
-import { historyIndexPath } from "../../src/routing/history/schema";
+import { newestGenerationPath } from "../../src/routing/history/generations";
+import { historyIndexDir } from "../../src/routing/history/schema";
 import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
@@ -152,7 +153,7 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
     const response = await handleResponsesWithPolicyFallback(req, cfg, { model: "", provider: "" },
       { claudeNativeSessionId: expectedSession }, { runCore });
     await response.text();
-    expect(existsSync(historyIndexPath(home))).toBe(true);
+    expect(newestGenerationPath(historyIndexDir(home))).not.toBeNull();
     expect(response.status).toBe(200);
     expect(requests).toHaveLength(2);
     expect(wires[0]?.get("session_id")).toBe(expectedSession);

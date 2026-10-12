@@ -135,7 +135,7 @@ CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dr
 
 ## История запросов и аналитика маршрутизации
 
-- `GET /api/request-history` - полная история с курсорной пагинацией из производного индекса (`routing-history.sqlite`). Фильтры: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
+- `GET /api/request-history` - полная история с курсорной пагинацией из производного индекса (`routing-history/`). Фильтры: `provider`, `model`, `requestedModel`, `status`, `conversationId`, `surface`, `inboundProtocol`, `apiKeyId`, `profileId`, `fallback`, `from`, `to`.
 - `GET /api/request-history/:requestId/route-decision` - объяснение выбора маршрута (трасса, кандидаты, исключения, оценки, профиль+ревизия, попытки, результат).
 - `GET /api/routing-analytics` - доли успеха/отказа/отмены/фолбэка, p50/p95/p99 длительность и TTFT, доля неполных потоков, сбои кулдауна, оценка стоимости за успешный запрос, покрытие, доверие, флаг усечения.
 - `GET /api/routing-profiles`, `POST /api/routing-profiles/dry-run` - просмотр профилей и пробная оценка (без отправки запросов).

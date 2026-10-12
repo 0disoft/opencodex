@@ -114,7 +114,7 @@ CLI: `ocx route policy list`、`ocx route policy show <id>`、`ocx route policy 
 
 ## リクエスト履歴とルーティング分析
 
-- `GET /api/request-history` - 派生インデックス（`routing-history.sqlite`）からのカーソルページング付き全履歴。フィルタ: `provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
+- `GET /api/request-history` - 派生インデックス（`routing-history/`）からのカーソルページング付き全履歴。フィルタ: `provider`、`model`、`requestedModel`、`status`、`conversationId`、`surface`、`inboundProtocol`、`apiKeyId`、`profileId`、`fallback`、`from`、`to`。
 - `GET /api/request-history/:requestId/route-decision` - このルートが選ばれた理由（トレース、候補、除外、スコア、プロファイル+リビジョン、実行試行、結果）。
 - `GET /api/routing-analytics` - 成功率・失敗率・フォールバック率、p50/p95/p99 の所要時間と TTFT、不完全ストリーム率、クールダウン失敗数、成功あたりの推定コスト、カバレッジ、信頼度、切り捨てフラグ。
 - `GET /api/routing-profiles`、`POST /api/routing-profiles/dry-run` - プロファイル参照とドライラン評価（上流への送信なし）。
