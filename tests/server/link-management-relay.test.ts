@@ -79,11 +79,34 @@ function watchHomeEffects(): void {
   wrap(fs, ["writeFileSync", "appendFileSync", "copyFileSync", "renameSync", "chmodSync", "mkdirSync", "rmSync", "unlinkSync",
     "writeSync", "ftruncateSync", "truncateSync", "linkSync", "symlinkSync", "utimesSync"], "fs");
   wrap(fsPromises, ["writeFile", "appendFile", "copyFile", "rename", "chmod", "mkdir", "rm", "unlink", "truncate"], "fs/promises");
-  // Opening for reading is a read; any other flag can create or change a file.
-  const opensForWrite = (args: unknown[]) => args[1] !== undefined && args[1] !== "r" && args[1] !== fs.constants.O_RDONLY;
   wrap(fs, ["openSync"], "fs", opensForWrite);
   wrap(fsPromises, ["open"], "fs/promises", opensForWrite);
 }
+
+/**
+ * Opening for reading is a read; a flag that can create, truncate or change a file is a write.
+ * Numeric flags are judged by their write bits, so a read-only open with modifiers such as
+ * O_NONBLOCK (the bounded macOS Info.plist identity read, #6973) stays a read.
+ */
+function opensForWrite(args: unknown[]): boolean {
+  const flags = args[1];
+  if (flags === undefined) return false;
+  if (typeof flags === "number") {
+    const { O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND } = fs.constants;
+    return (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) !== 0;
+  }
+  return !["r", "rs", "sr"].includes(String(flags));
+}
+
+test("the passive effect watcher classifies opens by their write capability", () => {
+  const { O_RDONLY, O_NONBLOCK, O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND } = fs.constants;
+  for (const flags of [undefined, "r", "rs", "sr", O_RDONLY, O_RDONLY | O_NONBLOCK]) {
+    expect(opensForWrite(["/fixture", flags])).toBe(false);
+  }
+  for (const flags of ["w", "wx", "w+", "a", "ax", "a+", "as", "r+", "rs+", O_WRONLY, O_RDWR, O_RDONLY | O_CREAT, O_RDONLY | O_TRUNC, O_WRONLY | O_APPEND]) {
+    expect(opensForWrite(["/fixture", flags])).toBe(true);
+  }
+});
 
 /** Every file under the Home's config and Codex homes, with what a write would change. */
 function durableState(): Record<string, string> {

@@ -314,7 +314,8 @@ function* bundledCatalogSteps(
       const output = yield command;
       if (!current()) return null;
       const catalog = output === null ? null : parseCatalogJson(output);
-      if (catalog && findNativeTemplate(catalog)) {
+      if (catalog && catalog.models?.every(row => row !== null && typeof row === "object" && !Array.isArray(row))
+        && findNativeTemplate(catalog)) {
         if (cacheKey) {
           publishBundledCatalogCache(
             cacheKey,

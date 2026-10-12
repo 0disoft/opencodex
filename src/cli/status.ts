@@ -332,8 +332,12 @@ export function selectStatusStartupHealth(
     if (evidence?.kind === "desktop" && evidence.runtimePid === livePid) {
       const local = fallback();
       const supervisor = local.desktop?.supervisor;
-      // The local probe runs later; it must still describe the same unowned process pair.
-      if (local.desktop?.owned === false && supervisor
+      // The local probe runs later; it must still describe the same process pair. macOS and Linux
+      // accept only an unowned pair. On Windows an older runtime never published a Desktop
+      // diagnostic, so a durable Desktop claim beside proven live parentage qualifies too.
+      const ownershipEligible = local.desktop?.owned === false
+        || (local.desktop?.owned === true && local.platform === "win32");
+      if (ownershipEligible && supervisor
         && supervisor.runtimePid === evidence.runtimePid && supervisor.supervisorPid === evidence.supervisorPid) {
         return { startup: local, startupSource: "local-supervision-override" };
       }
