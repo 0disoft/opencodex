@@ -24,6 +24,7 @@
 
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { open as openFileAsync, rename as renameAsync } from "node:fs/promises";
 import { getConfigDir } from "../../config";
 import { recordOwnedConfigPath } from "../../lib/config-ownership";
 import {
@@ -145,8 +146,32 @@ interface Settled {
   handle: Database;
 }
 
+/** The outcome of one publication I/O request, delivered as the value of its yield. */
+type IoOutcome = { ok: true } | { ok: false; error: unknown };
+
+/**
+ * A file operation a flight step asks its driver to run. The routing-time sync
+ * driver runs `runSync` inline, as before; the async drivers start `runAsync`
+ * and resume the flight from a timer once it settles, so a slow rename or an
+ * on-access scan waits off the serving loop.
+ */
+interface IoRequest {
+  kind: "io";
+  phase: string;
+  runSync: () => void;
+  runAsync: () => Promise<void>;
+}
+
+type StepYield = void | IoRequest;
+type FlightSteps = Generator<StepYield, Settled, IoOutcome | undefined>;
+type DriveMode = "sync" | "async";
+
 interface Flight {
-  steps: Generator<void, Settled, unknown>;
+  steps: FlightSteps;
+  /** The I/O request an async driver started; the generator is not advanced until it settles. */
+  waiting: IoRequest | null;
+  /** A settled I/O outcome not yet delivered; the next drive consumes it exactly once. */
+  pendingOutcome: IoOutcome | null;
   promise: Promise<Settled>;
   resolve: (value: Settled) => void;
   reject: (error: unknown) => void;
@@ -356,7 +381,7 @@ function rebuildReason(dbHandle: Database, revision: UsageLogRevision | null): s
   }
 }
 
-function* refreshSteps(paths: IndexPaths, forcedReason: string | null): Generator<void, Settled, unknown> {
+function* refreshSteps(paths: IndexPaths, forcedReason: string | null): FlightSteps {
   for (let attempt = 1; ; attempt++) {
     try {
       return yield* refreshOnce(paths, forcedReason);
@@ -366,7 +391,7 @@ function* refreshSteps(paths: IndexPaths, forcedReason: string | null): Generato
   }
 }
 
-function* refreshOnce(paths: IndexPaths, forcedReason: string | null): Generator<void, Settled, unknown> {
+function* refreshOnce(paths: IndexPaths, forcedReason: string | null): FlightSteps {
   stepPhase = "refresh";
   const { dir } = paths;
   const revision = sourceIdentity();
@@ -425,7 +450,7 @@ function* rebuildSteps(
   paths: IndexPaths,
   reason: string,
   revision: UsageLogRevision | null,
-): Generator<void, Settled, unknown> {
+): FlightSteps {
   const { dir } = paths;
   stepPhase = "prepare";
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -436,6 +461,9 @@ function* rebuildSteps(
   epoch += 1;
   const { buildPath, generationPath } = newGenerationNames(dir);
   removeBuildFiles(buildPath);
+  // Captured once: a later test reset cannot redirect this publication.
+  const io = publishIo;
+  const resource: { renamed: boolean; pending: Promise<void> | null } = { renamed: false, pending: null };
   let build: Database | null = new Database(buildPath, { create: true, readwrite: true });
   let published = false;
   try {
@@ -458,7 +486,10 @@ function* rebuildSteps(
     })();
     stepPhase = "ingest";
     if (revision !== null) yield* ingestSteps(fresh, revision.path, 0, { expected: revision });
-    stepPhase = "publish";
+    // Publication runs as separate steps so each synchronous part is its own
+    // sample, and the rename and warm-up wait off the loop when async-driven.
+    yield;
+    stepPhase = "publish-meta";
     if (!sameLedger(revision, sourceIdentity())) {
       throw new RequestHistoryIndexStaleError("usage log changed while rebuilding");
     }
@@ -467,21 +498,72 @@ function* rebuildSteps(
       setMeta(fresh, HISTORY_META_KEYS.lastError, reason);
       setMeta(fresh, HISTORY_META_KEYS.builtAtMs, Date.now());
     })();
+    yield;
+    stepPhase = "publish-wal";
     fresh.exec("PRAGMA journal_mode = WAL");
+    yield;
+    stepPhase = "publish-close";
     build.close();
     build = null;
-    renameSync(buildPath, generationPath);
+    // Recorded by the operation itself: a close can return this generator
+    // while the rename is still in flight, and its outcome must still decide
+    // whether the build is cleanup's to remove.
+    yield* awaitIo({
+      kind: "io",
+      phase: "publish-rename",
+      runSync: () => {
+        io.renameSync(buildPath, generationPath);
+        resource.renamed = true;
+      },
+      runAsync: () => {
+        const operation = io.rename(buildPath, generationPath).then(() => { resource.renamed = true; });
+        resource.pending = trackIo(operation);
+        return operation;
+      },
+    });
     published = true;
   } finally {
     if (build) {
       try { build.close(); } catch { /* already closed */ }
     }
-    if (!published) removeBuildFiles(buildPath);
+    if (!published) {
+      const pending = resource.pending;
+      // A rename still in flight owns the build: remove it only once that
+      // rename has failed. A rename that succeeded published a complete
+      // generation, which ordinary adoption or reclamation handles.
+      if (pending) trackIo(pending.then(() => { if (!resource.renamed) removeBuildFiles(buildPath); }));
+      else removeBuildFiles(buildPath);
+    }
+  }
+  stepPhase = "publish-warm";
+  yield* awaitIo({
+    kind: "io",
+    phase: "publish-warm",
+    // The sync driver opens directly, as it always has.
+    runSync: () => {},
+    runAsync: () => {
+      const operation = io.warm(generationPath).catch((error: unknown) => {
+        if ((error as { code?: unknown } | null)?.code === "ENOENT") {
+          throw new RequestHistoryIndexStaleError("index generation reclaimed while publishing");
+        }
+        // Best effort: the synchronous open below decides.
+      });
+      trackIo(operation);
+      return operation;
+    },
+  });
+  stepPhase = "publish-open";
+  assertPublishable(dir, generationPath, revision);
+  const handle = io.openGeneration(generationPath, openGeneration);
+  try {
+    assertPublishable(dir, generationPath, revision);
+  } catch (error) {
+    try { handle.close(); } catch { /* already unusable */ }
+    throw error;
   }
   integrityReason = null;
   epoch += 1;
-  open = { handle: openGeneration(generationPath), path: generationPath };
-  stepPhase = "published";
+  open = { handle, path: generationPath };
   // Older generations and the single-file index from before generations go
   // once nothing has them open, after this refresh has already settled.
   scheduleReclaim([...supersededGenerations(dir, generationPath), paths.legacyPath], paths.reclaimMaxWalBytes);
@@ -503,6 +585,8 @@ function startFlight(forcedReason: string | null, reclaimMaxWalBytes = RECLAIM_S
     promise,
     resolve,
     reject,
+    waiting: null,
+    pendingOutcome: null,
     timer: null,
     running: false,
     handedOff: false,
@@ -532,9 +616,9 @@ function finishFlight(target: Flight, outcome: { result: Settled } | { error: un
 }
 
 /** Advance whole steps until the flight settles or the budget runs out; true when settled. */
-function driveFlight(target: Flight, budgetMs: number): boolean {
+function driveFlight(target: Flight, budgetMs: number, mode: DriveMode): boolean {
   if (target.done) return true;
-  if (target.running) return false;
+  if (target.running || target.waiting) return false;
   const deadline = performance.now() + budgetMs;
   target.running = true;
   try {
@@ -542,11 +626,27 @@ function driveFlight(target: Flight, budgetMs: number): boolean {
       const observer = stepObserver;
       const phaseBefore = stepPhase;
       const stepStarted = observer ? performance.now() : 0;
-      const step = target.steps.next();
-      if (observer) observer({ phase: phaseBefore === stepPhase ? stepPhase : `${phaseBefore}->${stepPhase}`, startedAt: stepStarted, ms: performance.now() - stepStarted });
+      const input = target.pendingOutcome ?? undefined;
+      target.pendingOutcome = null;
+      let step: IteratorResult<StepYield, Settled>;
+      try {
+        step = target.steps.next(input);
+      } finally {
+        if (observer) observer({ phase: phaseBefore === stepPhase ? stepPhase : `${phaseBefore}->${stepPhase}`, startedAt: stepStarted, ms: performance.now() - stepStarted });
+      }
       if (step.done) {
         finishFlight(target, { result: step.value });
         return true;
+      }
+      const request = step.value;
+      if (request) {
+        if (mode === "async") {
+          startIo(target, request);
+          return false;
+        }
+        const ioStarted = observer ? performance.now() : 0;
+        target.pendingOutcome = runIoSync(request);
+        if (observer) observer({ phase: request.phase, startedAt: ioStarted, ms: performance.now() - ioStarted });
       }
       if (performance.now() >= deadline) return false;
     }
@@ -558,16 +658,52 @@ function driveFlight(target: Flight, budgetMs: number): boolean {
   }
 }
 
+function runIoSync(request: IoRequest): IoOutcome {
+  try {
+    request.runSync();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+/** Start an async request; its settlement re-arms the timer driver, which delivers the outcome. */
+function startIo(target: Flight, request: IoRequest): void {
+  target.waiting = request;
+  const observer = stepObserver;
+  const started = observer ? performance.now() : 0;
+  let operation: Promise<void>;
+  try {
+    operation = request.runAsync();
+  } catch (error) {
+    operation = Promise.reject(error);
+  }
+  if (observer) observer({ phase: request.phase, startedAt: started, ms: performance.now() - started });
+  operation.then(
+    (): IoOutcome => ({ ok: true }),
+    (error: unknown): IoOutcome => ({ ok: false, error }),
+  ).then(outcome => {
+    // A close or a newer flight cleared or replaced the wait: drop the outcome.
+    if (target.waiting !== request) return;
+    target.waiting = null;
+    if (flight !== target || target.done) return;
+    target.pendingOutcome = outcome;
+    scheduleFlight(target);
+  });
+}
+
 function scheduleFlight(target: Flight): void {
   if (target.done || target.timer || flight !== target) return;
   target.handedOff = true;
+  // Settlement of the pending request re-arms this; no slice runs meanwhile.
+  if (target.waiting) return;
   // setTimeout(0), not setImmediate: on Bun 1.4 an in-process HTTP exchange
   // waited ~50 ms per request behind setImmediate-chained slices and ~0.1 ms
   // behind timers. Same yield as the cooperative usage scanner.
   target.timer = setTimeout(() => {
     target.timer = null;
     if (flight !== target || target.done) return;
-    if (!driveFlight(target, sliceMs)) scheduleFlight(target);
+    if (!driveFlight(target, sliceMs, "async")) scheduleFlight(target);
   }, 0);
 }
 
@@ -575,7 +711,7 @@ function openForRead(): Promise<Settled> {
   let target = flight;
   if (!target) {
     target = startFlight(null);
-    if (!driveFlight(target, sliceMs)) scheduleFlight(target);
+    if (!driveFlight(target, sliceMs, "async")) scheduleFlight(target);
   }
   return target.promise;
 }
@@ -589,7 +725,7 @@ function openForRead(): Promise<Settled> {
 export function openRequestHistoryIndexSync(): RequestHistoryIndexMeta {
   if (flight) throw new RequestHistoryIndexBusyError();
   const target = startFlight(null);
-  if (!driveFlight(target, syncBudgetMs)) {
+  if (!driveFlight(target, syncBudgetMs, "sync")) {
     scheduleFlight(target);
     throw new RequestHistoryIndexBusyError();
   }
@@ -639,6 +775,9 @@ export function closeRequestHistoryIndex(): void {
   if (target && !target.done) {
     if (target.timer) clearTimeout(target.timer);
     target.timer = null;
+    // An I/O request still in flight settles on its own; its outcome is dropped.
+    target.waiting = null;
+    target.pendingOutcome = null;
     target.done = true;
     target.failed = true;
     // Runs every pending `finally`: statements finalized, ledger fd and build
@@ -665,7 +804,7 @@ export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexM
   // its own process), so it also reclaims old files whose WAL checkpoint is
   // too large for a serving process.
   const target = startFlight("manual rebuild requested", Number.POSITIVE_INFINITY);
-  if (!driveFlight(target, sliceMs)) scheduleFlight(target);
+  if (!driveFlight(target, sliceMs, "async")) scheduleFlight(target);
   const { meta } = await target.promise;
   // The operator asked for a clean index directory: wait for old files too.
   await reclaimQueue?.done;
@@ -690,6 +829,71 @@ export function requestHistoryIndexEpoch(): number {
 }
 
 /** Test seam: shrink the slice and sync budgets (0 = one step per drive); null restores defaults. */
+/** Rename and warm-up used by publication; tests replace them to hold or fail each one. */
+export interface RequestHistoryPublishIo {
+  rename: (from: string, to: string) => Promise<void>;
+  renameSync: (from: string, to: string) => void;
+  warm: (path: string) => Promise<void>;
+  /** Opens the published generation; `defaultOpen` is the real open. */
+  openGeneration: (path: string, defaultOpen: (path: string) => Database) => Database;
+}
+
+const WARM_BYTES = 4096;
+
+/** Open, read the first page and close, so on-access scanning and cold reads finish off the loop. */
+async function warmGenerationFile(path: string): Promise<void> {
+  const file = await openFileAsync(path, "r");
+  try {
+    await file.read(Buffer.alloc(WARM_BYTES), 0, WARM_BYTES, 0);
+  } finally {
+    await file.close();
+  }
+}
+
+const DEFAULT_PUBLISH_IO: RequestHistoryPublishIo = {
+  rename: (from, to) => renameAsync(from, to),
+  renameSync: (from, to) => renameSync(from, to),
+  warm: warmGenerationFile,
+  openGeneration: (path, defaultOpen) => defaultOpen(path),
+};
+let publishIo: RequestHistoryPublishIo = DEFAULT_PUBLISH_IO;
+// Publication I/O that may outlive its flight (a close during a rename or warm).
+const detachedIo = new Set<Promise<void>>();
+
+function trackIo(operation: Promise<void>): Promise<void> {
+  const settled = operation.then(() => undefined, () => undefined);
+  detachedIo.add(settled);
+  void settled.then(() => { detachedIo.delete(settled); });
+  return settled;
+}
+
+/** Yield one I/O request and rethrow its failure inside the generator, so finally blocks and stale restarts run. */
+function* awaitIo(request: IoRequest): Generator<StepYield, void, IoOutcome | undefined> {
+  const outcome = yield request;
+  if (!outcome) throw new Error(`request-history ${request.phase} resumed without an outcome`);
+  if (!outcome.ok) throw outcome.error ?? new Error(`request-history ${request.phase} failed`);
+}
+
+/** The ledger and the newest generation still match what this publication built. */
+function assertPublishable(dir: string, generationPath: string, revision: UsageLogRevision | null): void {
+  if (!sameLedger(revision, sourceIdentity())) {
+    throw new RequestHistoryIndexStaleError("usage log changed while publishing");
+  }
+  if (newestGenerationPath(dir) !== generationPath) {
+    throw new RequestHistoryIndexStaleError("index generation superseded while publishing");
+  }
+}
+
+/** Test seam: replace publication I/O (null restores the defaults). */
+export function setRequestHistoryPublishIoForTests(io: Partial<RequestHistoryPublishIo> | null): void {
+  publishIo = io ? { ...DEFAULT_PUBLISH_IO, ...io } : DEFAULT_PUBLISH_IO;
+}
+
+/** Test teardown: wait for publication I/O and deferred cleanup that outlived a closed flight. */
+export async function drainRequestHistoryIoForTests(): Promise<void> {
+  while (detachedIo.size > 0) await Promise.all([...detachedIo]);
+}
+
 /** One generator step as the slice driver ran it, for tests that attribute event-loop gaps. */
 export interface RequestHistoryStepSample {
   phase: string;
@@ -698,8 +902,9 @@ export interface RequestHistoryStepSample {
 }
 
 // Test-only attribution: which part of a refresh a step ran (refresh, tail,
-// prepare, ingest, publish, published). Plain assignments; no cost unless an
-// observer is installed.
+// prepare, ingest, publish-meta, publish-wal, publish-close, publish-open);
+// rename and warm-up samples carry their request phase. Plain assignments; no
+// cost unless an observer is installed.
 let stepPhase = "refresh";
 let stepObserver: ((sample: RequestHistoryStepSample) => void) | null = null;
 

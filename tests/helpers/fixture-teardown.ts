@@ -1,6 +1,6 @@
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { flushConfigDirHardening } from "../../src/config/paths";
-import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { closeRequestHistoryIndex, drainRequestHistoryIoForTests } from "../../src/routing/history/indexer";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "./remove-tree";
 
@@ -9,14 +9,15 @@ export interface FixtureTeardownPlan { roots: FixtureRoot[]; restoreEnvironment:
 export interface FixtureTeardownDeps {
   settleProducers(): Promise<void>;
   settleConfigFlights(root: string): Promise<void>;
-  closeHistory(): void;
+  closeHistory(): void | Promise<void>;
   drainAcl(root: string): Promise<void>;
   remove(path: string): void;
 }
 export const defaultFixtureTeardownDeps: Readonly<FixtureTeardownDeps> = {
   settleProducers: flushNativeMainStartupReleases,
   settleConfigFlights: flushConfigDirHardening,
-  closeHistory: closeRequestHistoryIndex,
+  // A close can leave publication I/O in flight; it must settle before removal.
+  closeHistory: async () => { closeRequestHistoryIndex(); await drainRequestHistoryIoForTests(); },
   drainAcl: flushWindowsSecretAclReapsBeforeRemoval,
   remove: removeTreeWithRetry,
 };
