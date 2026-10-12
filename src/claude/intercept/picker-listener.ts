@@ -205,14 +205,18 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         } else req.destroy();
       }
     };
+    // An HTTP/1.1 reply sent while the upload is unfinished advertises Connection: close. Bun 1.4.3
+    // ends such a response with socket.destroySoon() before our finish listeners run, which resets
+    // the splice before the reply reaches the client; keep it a graceful FIN that discards input.
+    // Only that closing socket is changed, and destroy() stays available for errors and shutdown.
+    const closesUnfinishedUpload = () => !h2 && uploading && !req.complete;
+    const keepClosingReplyIntact = () => {
+      const socket = req.socket;
+      socket.destroySoon = () => { req.resume(); socket.end(); return socket; };
+    };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
-      if (!h2 && uploading && !req.complete) {
-        const socket = req.socket;
-        // Bun 1.4.3 ends Connection: close responses with destroySoon before our finish listener.
-        // Keep the pending TLS reply intact by sending a FIN and discarding remaining input.
-        socket.destroySoon = () => { req.resume(); socket.end(); return socket; };
-      }
+      if (closesUnfinishedUpload()) keepClosingReplyIntact();
       // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
       if (uploading && !req.complete) {
         req.once("error", () => res.destroy());
@@ -242,6 +246,7 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       if (clientGone) return;
       if (res.headersSent) res.destroy();
       else {
+        if (closesUnfinishedUpload()) keepClosingReplyIntact();
         res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
         res.end(); log(502);
       }
@@ -266,7 +271,10 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
           // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
           if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
           else {
-            if (uploading && !req.complete) raw.push("Connection", "close");
+            if (uploading && !req.complete) {
+              keepClosingReplyIntact();
+              raw.push("Connection", "close");
+            }
             res.writeHead(status, upRes.statusMessage, raw);
           }
           log(status);
