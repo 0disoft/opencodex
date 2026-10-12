@@ -57,3 +57,10 @@ Audit Plato (NEAR-PASS) additions:
 - Required: the unchanged responsiveness assertion (lag < 300 ms) passes in hosted windows 6/9 on the exact pushed PR head. Recording lag alone is not acceptance.
 - Focused history tests; typecheck, structure, privacy, ratchet and layout guards with Bun 1.4.3.
 - Independent sol review, then push (authorized) and report the PR #7009 CI.
+
+## Follow-up: hosted runs after the fix (head 6fcf640077)
+
+- Hosted windows 6/9 (run 38291419934, job 114952272458): `{"rebuildMs":2834,"maxLagMs":707,...}`. The rebuild halved, as the desktop measured, but one gap of about 700 ms remained. Gaps across three hosted runs were 545, 508 and 707 ms; the Windows desktop shows 60–68 ms.
+- Ruled out on the desktop. Bun 1.4.3 `bun test --isolate` runs a batch's files serially in one process (same pid, sequential timestamps), so the other five files cannot contend for CPU. The 190 ms synchronous PowerShell principal lookup runs in `saveConfig` during fixture start, before the window. No synchronous spawn, fs or sqlite call reaches 40 ms inside the window.
+- First attempt rejected by review (Mill, FAIL): bounding min(gap, process CPU) hides a synchronous wait that blocks the loop with little CPU (a demonstrated 553 ms Atomics.wait passes), and a blocking readSync, close or rename on a slow disk is exactly that. The wall-clock assertion stays.
+- Change: indexer.ts gains setRequestHistoryStepObserverForTests, which reports each driven step with its phase (refresh, tail, prepare, ingest, publish, published) and duration, using plain phase assignments and no cost without an observer. The responsiveness test keeps maxLagMs < 300 and adds attribution to its failure detail: the five largest gaps (wall, process CPU, start offset, probe in flight) and the five longest rebuild steps (50 ms or more, with phase and offset). On the Windows desktop no rebuild step reaches 50 ms; the 60–93 ms gaps sit on the first proxied request and on a dry-run near the end. The next hosted run will show whether its 500–700 ms gap is a rebuild step (fix it there) or request handling outside the rebuild (fix that path).
