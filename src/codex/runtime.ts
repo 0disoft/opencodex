@@ -225,10 +225,11 @@ export function loadLastEffortClamp(
   }
 }
 
+/** Return whether a nonempty observation changed, so catalog notices share persistence's identity. */
 export function persistEffortClamp(
   diagnostic: EffortClampDiagnostic | null,
   deps: ResolveCodexRuntimeDeps = {},
-): void {
+): boolean {
   const configDir = deps.configDir ?? getConfigDir();
   const path = codexRuntimeClampStatePath(configDir);
   if (!diagnostic || diagnostic.removedEfforts.length === 0) {
@@ -237,8 +238,16 @@ export function persistEffortClamp(
     } catch {
       /* absent is fine */
     }
-    return;
+    return false;
   }
+  // This is an observation, not a heartbeat: rewriting updatedAt on every sync both churns disk
+  // and makes identical clamps look new after restart. Compare sets, not catalog enumeration order.
+  const previous = loadLastEffortClamp(deps);
+  const setKey = (values: string[]) => JSON.stringify([...new Set(values)].sort());
+  if (previous && previous.runtimePath === diagnostic.runtimePath
+    && previous.runtimeVersion === diagnostic.runtimeVersion
+    && setKey(previous.removedEfforts) === setKey(diagnostic.removedEfforts)
+    && setKey(previous.affectedModels) === setKey(diagnostic.affectedModels)) return false;
   const payload: PersistedClampState = {
     version: 1,
     updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
@@ -249,6 +258,7 @@ export function persistEffortClamp(
   };
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
   atomicWriteFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+  return true;
 }
 
 export function displayCodexRuntimePath(command: string): string {
@@ -1232,6 +1242,5 @@ export function formatClampLogLines(diagnostic: EffortClampDiagnostic): string[]
   const efforts = diagnostic.removedEfforts.join(", ");
   return [
     `[opencodex] Removed unsupported reasoning efforts: ${efforts}`,
-    "[opencodex] Run ocx doctor for diagnosis and recovery.",
   ];
 }
