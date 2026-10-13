@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { getConfigDir } from "../../src/config";
@@ -75,6 +75,12 @@ function observePhases(): string[] {
 }
 
 const turn = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
+
+/** WAL header salts (bytes 16-23): a WAL restart rewrites them. */
+function walSalt(dbPath: string): string {
+  const header = readFileSync(`${dbPath}-wal`).subarray(16, 24);
+  return header.toString("hex");
+}
 
 function dump(handle: Database): { rows: unknown[]; meta: Record<string, string> } {
   const tableRows = handle.query("SELECT * FROM requests ORDER BY request_id").all();
@@ -422,5 +428,41 @@ describe("request-history serving-thread I/O", () => {
     // The checkpoint moved the tail into the database file and emptied the WAL.
     expect(statSync(first.dbPath).size).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
     expect(statSync(`${first.dbPath}-wal`).size).toBeLessThan(64 * 1024);
+    // The worker restarted the WAL; the next serving tail appends to it.
+    const salt = walSalt(first.dbPath);
+    appendFileSync(usageLogPath(), `${row(4001)}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(18);
+    expect(walSalt(first.dbPath)).toBe(salt);
+  });
+
+  test("a checkpoint a reader kept from resetting still leaves the restart to the worker", async () => {
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 60_000 });
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const big = Array.from({ length: 6 }, (_, index) => row(6000 + index, { pad: "z".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big.join("\n")}\n`);
+    // A reader that has seen every frame: the checkpoint backfills them all but cannot reset the WAL.
+    const reader = new Database(first.dbPath, { readonly: true });
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    await drainRequestHistoryIoForTests();
+    reader.exec("COMMIT");
+    reader.close();
+    const salt = walSalt(first.dbPath);
+    appendFileSync(usageLogPath(), `${row(6100)}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(17);
+    expect(walSalt(first.dbPath)).toBe(salt);
+  });
+
+  test("a generation published by the worker reaches the serving thread with its WAL already started", async () => {
+    setRequestHistoryRebuildWorkerForTests("worker");
+    writeLedger(`${rows(40).join("\n")}\n`);
+    const meta = await openRequestHistoryIndex();
+    expect(statSync(`${meta.dbPath}-wal`).size).toBeGreaterThan(0);
+    const salt = walSalt(meta.dbPath);
+    appendFileSync(usageLogPath(), `${row(7000)}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(41);
+    expect(walSalt(meta.dbPath)).toBe(salt);
   });
 });

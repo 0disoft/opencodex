@@ -56,6 +56,18 @@ function holdOpen(path: string): void {
   generation.query("PRAGMA schema_version").get();
 }
 
+/**
+ * Leave one frame in the WAL that is not yet checkpointed. A writer restarts
+ * the WAL (rewriting and syncing its header) only when every frame is already
+ * backfilled, so with this frame in place the serving thread's next tail
+ * appends instead. The write rewrites user_version unchanged.
+ */
+function primeWal(db: Database): void {
+  db.exec("PRAGMA busy_timeout = 1000");
+  const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+  db.exec(`PRAGMA user_version = ${Number(version) | 0}`);
+}
+
 function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
   switch (request.type) {
     case "build": {
@@ -79,6 +91,9 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
     case "publish": {
       renameSync(request.buildPath, request.generationPath);
       holdOpen(request.generationPath);
+      // The published WAL is empty; its first write (and header sync) is this one.
+      // Best effort: the rename already published a complete generation.
+      try { primeWal(held[held.length - 1]!); } catch { /* another process holds the write lock */ }
       return { type: "held" };
     }
     case "hold": {
@@ -99,13 +114,11 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
         const result = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as
           | { busy: number; log: number; checkpointed: number }
           | undefined;
-        if (result === undefined || result.busy !== 0) return { type: "checkpointed", complete: false };
-        // The first write into an emptied WAL writes and syncs its header.
-        // Do it here (rewriting user_version unchanged), while the indexer
-        // holds its tails back, so that sync never lands on the serving thread.
-        const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-        db.exec(`PRAGMA user_version = ${Number(version) | 0}`);
-        return { type: "checkpointed", complete: true };
+        // Whatever the outcome (emptied, or fully backfilled but a reader kept
+        // it from resetting), the restart and its header sync happen here,
+        // while the indexer holds its tails back, and never on the serving thread.
+        primeWal(db);
+        return { type: "checkpointed", complete: result !== undefined && result.busy === 0 };
       } finally {
         closeQuietly(db);
       }
