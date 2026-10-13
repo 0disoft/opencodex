@@ -339,6 +339,47 @@ describe("request-history serving-thread I/O", () => {
     expect((await openRequestHistoryIndex()).indexedRows).toBe(12);
   });
 
+  test("a serving-path close hands any non-empty WAL to a worker", async () => {
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    appendFileSync(usageLogPath(), `${rows(20, 10).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(30);
+    const walBytes = statSync(`${first.dbPath}-wal`).size;
+    expect(walBytes).toBeGreaterThan(0);
+    expect(walBytes).toBeLessThan(REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES);
+    const sizeBefore = statSync(first.dbPath).size;
+
+    closeRequestHistoryIndex({ checkpointOnWorker: "always" });
+    expect(statSync(first.dbPath).size).toBe(sizeBefore);
+    await drainRequestHistoryIoForTests();
+    expect(existsSync(`${first.dbPath}-wal`) ? statSync(`${first.dbPath}-wal`).size : 0).toBe(0);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(30);
+  });
+
+  test("a retry pending for an old generation does not hold back the new generation's checkpoint", async () => {
+    // Long enough that the old generation's retry never fires in this test.
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 60_000 });
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const reader = new Database(first.dbPath, { readonly: true });
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    const tail = (start: number) => Array.from({ length: 6 }, (_, index) => row(start + index, { pad: "r".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${tail(1000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    await drainRequestHistoryIoForTests();
+    reader.exec("COMMIT");
+    reader.close();
+
+    const rebuilt = await rebuildRequestHistoryIndex();
+    expect(rebuilt.dbPath).not.toBe(first.dbPath);
+    const sizeBefore = statSync(rebuilt.dbPath).size;
+    appendFileSync(usageLogPath(), `${tail(2000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(22);
+    await drainRequestHistoryIoForTests();
+    expect(statSync(rebuilt.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+  });
+
   test("a build that fails to initialize removes its private file", () => {
     const dir = historyIndexDir(getConfigDir());
     mkdirSync(dir, { recursive: true });

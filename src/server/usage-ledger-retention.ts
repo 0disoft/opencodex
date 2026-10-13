@@ -33,7 +33,8 @@ function invalidateLedgerReaders(): void {
     } catch { /* rebuildable by construction */ }
     try {
       const { closeRequestHistoryIndex } = await import("../routing/history/indexer");
-      closeRequestHistoryIndex();
+      // On the serving path: the last close's checkpoint runs on a worker.
+      closeRequestHistoryIndex({ checkpointOnWorker: "always" });
     } catch { /* the index rebuilds from its own source-identity contract */ }
   })();
   try { rehydrateRequestLogsAfterLedgerReplacement(); } catch { /* the ring refills as rows arrive */ }

@@ -117,7 +117,7 @@ export const REQUEST_HISTORY_SYNC_BUDGET_MS = 50;
  * entry can still settle a small cold index in one call.
  */
 export const REQUEST_HISTORY_WORKER_MIN_BYTES = 1024 * 1024;
-/** WAL size after a tail commit from which a worker checkpoints the serving generation. */
+/** Ledger bytes tailed into a generation since its last checkpoint from which a worker checkpoints it. */
 export const REQUEST_HISTORY_CHECKPOINT_WAL_BYTES = 4 * 1024 * 1024;
 /**
  * WAL size from which closing the last serving connection is handed to a
@@ -125,9 +125,6 @@ export const REQUEST_HISTORY_CHECKPOINT_WAL_BYTES = 4 * 1024 * 1024;
  * one ordinary commit's work and runs inline, as every close did before.
  */
 export const REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES = 1024 * 1024;
-// After a checkpoint the next writer restarts the WAL; this trims the file
-// then, so its size tracks unchecked frames rather than a high-water mark.
-const SERVING_JOURNAL_SIZE_LIMIT = 1024 * 1024;
 // A serving connection must not park the event loop behind another process's
 // write lock; contention fails fast and the ingest retries after a yield.
 const BUSY_TIMEOUT_MS = 25;
@@ -222,8 +219,13 @@ let flight: Flight | null = null;
 let reclaimQueue: ReclaimQueue | null = null;
 // At most one WAL checkpoint job at a time.
 let checkpointJob: Promise<void> | null = null;
-// A retry is scheduled for a checkpoint a reader held back; tails wait for it.
-let checkpointRetryPending = false;
+// Ledger bytes tailed into a generation since its last complete checkpoint.
+// Counted here: the WAL file keeps its high-water size after a checkpoint, so
+// its size cannot tell how much is left to checkpoint.
+let checkpointDebt: { path: string; bytes: number } | null = null;
+// The generation whose checkpoint a reader held back and a timer will retry;
+// its tails wait for that retry. Other generations are unaffected.
+let checkpointRetryPath: string | null = null;
 // Serving handles whose close waits for a worker to hold the file first.
 const deferredCloses = new Set<Promise<void>>();
 // A worker rebuild hands reclamation over once its worker has exited (it held
@@ -305,11 +307,11 @@ function sameLedger(before: UsageLogRevision | null, after: UsageLogRevision | n
 }
 
 /** Teardown: close the open generation and any parked handles. */
-function closeOpenGeneration(): void {
+function closeOpenGeneration(always: boolean): void {
   const generations = open ? [open, ...parked] : parked;
   open = null;
   parked = [];
-  for (const generation of generations) closeServingHandle(generation);
+  for (const generation of generations) closeServingHandle(generation, { always });
 }
 
 /**
@@ -320,11 +322,12 @@ function closeOpenGeneration(): void {
  * checkpoints instead. The handle is detached at once and closed once the
  * worker holds the file (or, if it cannot, closed here as before).
  */
-function closeServingHandle(generation: OpenGeneration, alreadyHeld = false): void {
+function closeServingHandle(generation: OpenGeneration, options: { alreadyHeld?: boolean; always?: boolean } = {}): void {
   const { handle, path } = generation;
   let walBytes = 0;
   try { walBytes = statSync(`${path}-wal`).size; } catch { /* no WAL */ }
-  if (alreadyHeld || walBytes < REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES) {
+  const defer = options.always ? walBytes > 0 : walBytes >= REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES;
+  if (options.alreadyHeld || !defer) {
     try { handle.close(); } catch { /* already closed */ }
     return;
   }
@@ -355,7 +358,7 @@ function retireOpenGeneration(maxWalBytes: number, alreadyHeld = false): void {
     parked.push(generation);
     return;
   }
-  closeServingHandle(generation, alreadyHeld);
+  closeServingHandle(generation, { alreadyHeld });
 }
 
 function cancelReclaim(): void {
@@ -393,23 +396,33 @@ const CHECKPOINT_RETRY_MS = 5_000;
 let checkpointRetryMs = CHECKPOINT_RETRY_MS;
 const CHECKPOINT_ATTEMPTS = 12;
 
+/** Count tailed bytes against a generation and checkpoint it on a worker once they pass the bound. */
+function noteTailBytes(path: string, bytes: number): void {
+  if (checkpointDebt?.path !== path) checkpointDebt = { path, bytes: 0 };
+  checkpointDebt.bytes += bytes;
+  if (checkpointDebt.bytes >= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES && checkpointRetryPath !== path) scheduleCheckpoint(path);
+}
+
 function scheduleCheckpoint(path: string, attempt = 1): void {
-  if (checkpointJob || (attempt === 1 && checkpointRetryPending)) return;
-  let walBytes = 0;
-  try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
-  if (walBytes < REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) return;
+  if (checkpointJob) return;
   const token = lifetime;
+  const debt = checkpointDebt?.path === path ? checkpointDebt.bytes : 0;
   const job = new IndexWorkerJob();
   let complete = false;
   const run = job.checkpoint(path).then(done => { complete = done; }, () => undefined).then(() => job.dispose());
   checkpointJob = trackIo(run).then(() => {
     checkpointJob = null;
-    if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
+    if (complete) {
+      // Bytes tailed while the checkpoint ran stay owed.
+      if (checkpointDebt?.path === path) checkpointDebt.bytes = Math.max(0, checkpointDebt.bytes - debt);
+      return;
+    }
+    if (attempt >= CHECKPOINT_ATTEMPTS) return;
     // A reader pinned part of the WAL, and nothing guarantees another tail
     // soon: retry while this generation is still the one being served.
-    checkpointRetryPending = true;
+    checkpointRetryPath = path;
     const retry = setTimeout(() => {
-      checkpointRetryPending = false;
+      if (checkpointRetryPath === path) checkpointRetryPath = null;
       if (lifetime === token && open?.path === path) scheduleCheckpoint(path, attempt + 1);
     }, checkpointRetryMs);
     (retry as { unref?: () => void }).unref?.();
@@ -427,7 +440,6 @@ function openGeneration(path: string): Database {
     // hosted Windows runners.
     handle.exec("PRAGMA synchronous = NORMAL");
     handle.exec("PRAGMA wal_autocheckpoint = 0");
-    handle.exec(`PRAGMA journal_size_limit = ${SERVING_JOURNAL_SIZE_LIMIT}`);
     // Until that first statement this connection was invisible to another
     // process reclaiming the generation; from here on it blocks reclamation.
     if (!existsSync(path)) throw new RequestHistoryIndexStaleError("index generation reclaimed while opening");
@@ -515,7 +527,7 @@ function* refreshOnce(paths: IndexPaths, forcedReason: string | null): FlightSte
       // rebuild marker so status readers can distinguish rebuilds from tails.
       if (inserted > 0) {
         setMeta(generation.handle, HISTORY_META_KEYS.lastError, "");
-        scheduleCheckpoint(generation.path);
+        noteTailBytes(generation.path, Number(revision.size) - current.indexedOffset);
       }
     }
     if (reason === null) return settledFor(generation);
@@ -947,8 +959,16 @@ export async function withRequestHistoryIndex<T>(
   throw new RequestHistoryIndexBusyError();
 }
 
-/** Close the index; a refresh in flight is cancelled and its private build removed. */
-export function closeRequestHistoryIndex(): void {
+/**
+ * Close the index; a refresh in flight is cancelled and its private build
+ * removed. Closing the last connection checkpoints its WAL. By default a WAL
+ * of 1 MiB or more is handed to a worker for that; `checkpointOnWorker:
+ * "always"` hands over any non-empty WAL, for a caller on a serving path
+ * (ledger retention). Deferred closes settle on the event loop, so a caller
+ * that removes the index files afterwards must let them (tests:
+ * drainRequestHistoryIoForTests).
+ */
+export function closeRequestHistoryIndex(options: { checkpointOnWorker?: "large" | "always" } = {}): void {
   const target = flight;
   flight = null;
   lifetime += 1;
@@ -967,9 +987,10 @@ export function closeRequestHistoryIndex(): void {
     target.error = new RequestHistoryIndexClosedError();
     target.reject(target.error);
   }
-  closeOpenGeneration();
+  closeOpenGeneration(options.checkpointOnWorker === "always");
   cancelReclaim();
-  checkpointRetryPending = false;
+  checkpointRetryPath = null;
+  checkpointDebt = null;
   integrityReason = null;
   epoch += 1;
 }
