@@ -1,6 +1,7 @@
 import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -251,6 +252,7 @@ export function configuredReasoningSummarySupport(prov: OcxProviderConfig | unde
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
+/** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
@@ -315,6 +317,7 @@ export function applyProviderConfigHints(
     contextCap: previousContextCap,
     contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
+    supportsUltraFastTier: _staleUltraFastTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
@@ -355,6 +358,7 @@ export function applyProviderConfigHints(
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+    supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),

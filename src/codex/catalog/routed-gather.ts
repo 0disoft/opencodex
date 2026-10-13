@@ -1,6 +1,7 @@
 import { canInferVendorContext } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -319,6 +320,7 @@ function boundCustomNativeReasoning(
   return bounded;
 }
 
+/** Gather discovered and custom rows under one captured provider policy, including speed capabilities. */
 async function gatherRoutedModelsUncached(
   config: OcxConfig,
   capture: GatherFlightCapture,
@@ -359,6 +361,7 @@ async function gatherRoutedModelsUncached(
       const policy = fastPolicyForModel(apiProvider.provider, model.id, apiProvider.name);
       const supported = serviceTierSupportFromPolicy(policy);
       if (supported !== undefined) model.supportsServiceTier = supported;
+      model.supportsUltraFastTier = supportsConfiguredUltraFast(policy);
       if (supported === true && policy.fastTierDescription !== undefined) model.fastTierDescription = policy.fastTierDescription;
     }
   }
@@ -655,6 +658,7 @@ async function gatherRoutedModelsUncached(
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
       ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+      supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
       ...(supportsServiceTier === true && fastPolicy?.fastTierDescription !== undefined
         ? { fastTierDescription: fastPolicy.fastTierDescription }
         : {}),
