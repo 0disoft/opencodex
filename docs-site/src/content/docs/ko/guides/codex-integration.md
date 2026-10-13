@@ -35,7 +35,10 @@ codex 0.146(openai/codex#35830)부터는 `experimental_realtime_ws_base_url`이 
 WebSocket을 `api.openai.com`에 직접 붙입니다. Pool 모드에서는 통화가 opencodex가 고른 계정으로
 만들어지므로, 앱 자체 로그인으로 직접 붙는 join은 `realtime websocket handshake failed`(404)로
 실패합니다. 주입된 키는 join을 다시 opencodex(`GET /v1/live/{callId}`)로 보내고, Pool은 그
-session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. Direct 모드는 두 요청 모두
+session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. 클라이언트가 직접 만든
+통화는 예외입니다. ChatGPT 음성이 통화를 Codex 스레드로 넘기거나 Codex Desktop이 통화를 직접
+만들면 그 통화는 내 ChatGPT 로그인 소유이고 sideband join만 opencodex에 도착하므로, opencodex는
+그 join을 Pool 계정이 아니라 호출자 자신의 ChatGPT 자격 증명으로 보냅니다. Direct 모드는 두 요청 모두
 호출자의 현재 bearer를 쓰므로, 이 키는 join을 프록시 경로에 붙잡아 두는 역할만 합니다. 이 키는
 loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거되며, 사용자가 직접 적은
 `experimental_realtime_ws_base_url`은 덮어쓰지 않습니다.
@@ -195,6 +198,8 @@ $CODEX_HOME/opencodex.config.toml
 $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
+
+macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
 
 WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없거나 Codex 상태(`config.toml`, `auth.json`, `sessions`, `history.jsonl`)가 전혀 없을 때 `/mnt/c/Users/*/.codex/config.toml` 아래의 단일 Windows Codex Desktop home도 확인합니다. 후보가 정확히 하나면 그 디렉터리를 사용하므로 WSL app-server mode와 Windows Codex Desktop이 같은 config와 auth 파일을 공유합니다. 이 탐지를 덮으려면 `CODEX_HOME`을 명시하세요.
 
@@ -404,3 +409,14 @@ opencodex가 managed [background service](/ko/reference/cli/lifecycle/#백그라
 ## 메인 계정 재인증 취소
 
 메인 계정의 기기 코드 재인증을 취소할 때 DELETE 요청의 일시적 실패, 네트워크 오류, 알 수 없거나 아직 종료되지 않은 상태의 응답이 발생하면 진행 중인 흐름과 취소 실패 표시를 유지하여 취소를 다시 시도할 수 있게 합니다. 일반적으로는 상태 조회도 계속하므로 로그인이 완료되면 이를 확인할 수 있습니다. 흐름이 `pending` 또는 `committing`일 때 재시도 가능한 취소 실패와 GET 상태 조회의 2xx 이외 HTTP 응답이 겹치면, 응답 도착 순서와 관계없이 서버가 마지막으로 제공한 기기 코드·확인 URL·진행 단계를 유지하거나 복원하여 같은 흐름의 취소를 다시 시도할 수 있게 합니다. GET의 HTTP 실패는 상태 조회를 종료하지만, 두 번째 로그인 POST를 보내지 않고 취소를 다시 시도할 수 있습니다. 종료 상태인 `failed` 응답은 흐름을 해제하고 정규화된 실패 사유를 표시하며, `succeeded` 응답만 로그인 성공을 알립니다. `cancelled`로 확인된 응답은 흐름을 해제하여 새 기기 코드 로그인을 시작할 수 있게 합니다. HTTP 404와 `unknown_flow` 코드가 명확하게 반환된 경우에도 만료된 흐름 ID를 해제하여 새 기기 코드 로그인을 시작할 수 있게 하지만, 로그인 성공이나 취소 확정으로 표시하지 않습니다. 이전 흐름에서 늦게 도착한 POST·GET·DELETE 응답은 새 흐름을 변경하거나 새 흐름의 로그인이 성공했다고 알릴 수 없습니다.
+
+## 스트리밍 줄바꿈
+
+공유 SSE 디코더는 LF, CRLF 및 단독 CR 줄바꿈을 처리하며 네트워크 청크 사이에서 구분자가 나뉘어도 동작합니다. 호환 제공자는 LF 형식으로만 스트림을 만들 필요가 없습니다.
+
+
+### 계정 직접 지정과 크레딧 사용
+
+계정이 지정된 모델을 선택해도 크레딧 사용이 자동으로 허용되지는 않습니다. 저장된 계정은 인증 및 전송용 인증정보 준비 시에도 **한도 이후 크레딧 사용** 설정을 따릅니다. 페이싱이나 재시도 대기 후 Responses HTTP 또는 WebSocket 요청을 보내기 직전에도 현재 정책을 확인합니다. 제한된 요청은 인증 오류가 아니라 크레딧 정책을 안내합니다. 한도 초기화를 기다리거나 다른 계정을 선택하고, 크레딧 사용이 필요한 경우 해당 계정에서 명시적으로 허용하세요.
+
+저장된 계정을 사용하는 이미지 설명과 웹 검색 도우미도 재시도를 포함한 매 전송 직전에 이 정책을 확인합니다. 도우미 선택 이후 허용 설정이 바뀌거나 한도에 도달하면 해당 요청을 보내지 않고 정책 제한을 안내합니다. 독립 검색 릴레이는 초기화 시점에 맞춘 429를 반환하며, 호출자가 직접 제공한 Direct 인증정보의 기존 동작은 유지합니다.

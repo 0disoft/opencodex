@@ -1,12 +1,8 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
-
-export interface AnthropicModelRoute {
-  name: string;
-  match: string;
-  accounts: string[];
-  fallback?: boolean;
-}
+import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
+import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -179,6 +175,15 @@ export interface OcxClaudeCodeConfig {
   /** Compact-window tokens for auto-context. Default 829_800 (AUTO_COMPACT_WINDOW_DEFAULT). */
   autoCompactWindow?: number;
   /**
+   * Context accounting on Claude surfaces (devlog/_plan/261009_claude_1m_default/030). Absent
+   * (the default) = "1m": long-window models are offered at 1M wherever opencodex picks the
+   * default (launch env slots, Desktop pickers, Desktop 3P prefer1m, generated subagents).
+   * "200k" is the opt-in: nothing is marked [1m] automatically and no compact window is injected;
+   * a selector the user marks [1m] keeps it, and discovery and Desktop 3P keep offering 1M as a
+   * choice. The only stored value; "1m" deletes the key.
+   */
+  contextAccounting?: "200k";
+  /**
    * Local CONNECT proxy + TLS listener that intercepts Claude Code's own `api.anthropic.com`
    * traffic without any `ANTHROPIC_BASE_URL` rewrite (src/claude/intercept). Claude Code reaches
    * it via `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` in its settings env. Default: enabled on a
@@ -219,10 +224,12 @@ export interface OcxClaudeCodeConfig {
    * definition. Unset inherits the parent session effort.
    */
   subagentEffort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Optional roster-style model forced on subagents at the next routed Claude Code launch. */
+  subagentModelForce?: string;
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string };
+  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
+  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /**
@@ -512,6 +519,11 @@ export interface OcxConfig {
   skills?: OcxSkillsConfig;
   /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
   metricsExport?: { enabled?: boolean };
+  /**
+   * Opt-in recovery of a managed service proxy that stays alive but stops answering /healthz:
+   * a separate sentinel process terminates it so its supervisor restarts it (#6671).
+   */
+  serviceHealthRecovery?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
@@ -750,6 +762,8 @@ export interface OcxConfig {
   modelPinnedEfforts?: Record<string, string>;
   compactionRouting?: {
     model: string;
+    /** Incoming model allowlist: exact selectors or provider/*; omitted means all models. */
+    sourceModels?: string[];
     reasoningEffort?: string;
     /** Compaction triggers this override covers; omission means `["manual"]`. */
     triggers?: ("manual" | "auto")[];
@@ -1025,6 +1039,12 @@ export interface OcxConfig {
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
   /**
+   * Account ids, `__main__` included, allowed to keep serving from ChatGPT credits once one of
+   * their usage windows is full. Every other account is skipped by selection at 100% until its
+   * window resets, so spending credits is opt-in.
+   */
+  creditCodexAccountIds?: string[];
+  /**
    * Codex pool selection policy. Absent means no policy, so an existing install rotates exactly
    * as before.
    *
@@ -1042,6 +1062,8 @@ export interface OcxConfig {
    * upgrade against a number nobody chose.
    */
   spend?: OcxSpendConfig;
+  /** Historical salted pool aliases; h(pool,P) cannot map to Q != P for any configured provider P. */
+  spendPoolAliases?: Record<string, string>;
   /** Opt-in per-account activation of newly reset Codex quota windows. */
   codexQuotaAutoRefresh?: Record<string, {
     fiveHour?: boolean;
@@ -1167,6 +1189,18 @@ export interface OcxConfig {
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
   /**
+   * Sliding 60s transient-failure ratio for Codex pool placement. Default on.
+   * Set false to steer new threads from the consecutive counter only.
+   */
+  codexFailureWindow?: boolean;
+  /**
+   * What a manual pin does while its failure window is degraded.
+   * `hold` keeps using it and logs a warning. `detour-new-threads` places only new threads elsewhere.
+   */
+  codexPinnedTransientPolicy?: "hold" | "detour-new-threads";
+  /** Opt-in: retain one Codex WebSocket per account and thread across turns. Default off. */
+  codexWsReuseAcrossTurns?: boolean;
+  /**
    * Opt-in provider-origin circuit threshold for proven pre-connection reachability failures.
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
    */
@@ -1206,19 +1240,7 @@ export interface OcxConfig {
    * upstream has just rate-limited only ever runs after a refusal, so stranding it while a
    * second logged-in account sits idle is a defect rather than a configuration choice.
    */
-  anthropicAccountPool?: {
-    enabled?: boolean;
-    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
-    autoSwitchThreshold?: number;
-    /** New-session rotation strategy. Default quota (today's behaviour). */
-    strategy?: OcxAccountPoolRotationStrategy;
-    /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
-    stickyLimit?: number;
-    /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
-    quotaWindow?: OcxAccountPoolQuotaWindow;
-    /** Ordered model allowlists; inactive while the pool is disabled. Stored account IDs only. */
-    routes?: AnthropicModelRoute[];
-  };
+  anthropicAccountPool?: AnthropicAccountPoolConfig;
   /**
    * Generic OAuth multi-account PROACTIVE account preference (#2568, #695).
    *
@@ -1249,10 +1271,6 @@ export interface OcxConfig {
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
 }
-
-export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
-
-export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -1514,6 +1532,8 @@ export interface OcxSearchConfig {
 }
 
 export interface OcxVisionSidecarConfig {
+  /** Explicit Anthropic account pool; unset inherits the request's instance. */
+  anthropicInstance?: AnthropicInstanceId;
   /** Master switch. Default: enabled when the selected backend has a usable credential. */
   enabled?: boolean;
   /**
@@ -1533,6 +1553,8 @@ export interface OcxVisionSidecarConfig {
 }
 
 export interface OcxWebSearchSidecarConfig {
+  /** Explicit Anthropic account pool; unset inherits the request's instance. */
+  anthropicInstance?: AnthropicInstanceId;
   /** Master switch. Default: enabled when a forward (ChatGPT) provider exists and the caller is logged in. */
   enabled?: boolean;
   /**

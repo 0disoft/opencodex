@@ -2,6 +2,7 @@ import type { TFn, TKey } from "./i18n/shared";
 
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
+  anthropic2: "claude-green.svg",
   "anthropic-apikey": "claude-color.svg",
   "claude-cli": "claude-color.svg",
   "azure-openai": "openai.svg",
@@ -53,6 +54,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   "opencode-go": "opencode.svg",
   "opencode-zen": "opencode.svg",
   openrouter: "openrouter-color.svg",
+  opengateway: "opengateway.svg",
   opper: "opper.svg",
   qianfan: "qianfan-color.svg",
   /*
@@ -150,6 +152,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",
   openrouter: "OpenRouter",
+  opengateway: "OpenGateway",
   opper: "Opper",
   "opencode-go": "OpenCode Go",
   "opencode-free": "OpenCode Free",
@@ -187,6 +190,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const PROVIDER_DISPLAY_NAME_KEYS: Record<string, TKey> = {
+  anthropic2: "provider.name.anthropic2",
   "command-code": "provider.name.commandCodeAuth",
   commandcode: "provider.name.commandCodeApi",
   orcarouter: "provider.name.orcaRouterApi",
@@ -252,6 +256,7 @@ const MASKED_PROVIDER_ICONS: ReadonlySet<string> = new Set([
   "packycode.svg",
   "tokenlab.svg",
   "opper.svg",
+  "opengateway.svg",
   "siliconflow.svg",
   "synthetic.svg",
   "zenmux.svg",

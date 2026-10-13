@@ -44,7 +44,7 @@ async function dispatch(path: string, init: RequestInit, inputConfig: OcxConfig,
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  }), url, inputConfig, deps);
+  }), url, inputConfig, { ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
@@ -212,6 +212,7 @@ for (const switchDuringDiscovery of [false, true]) {
     const writes: unknown[] = [];
     const request = dispatch("/api/subagent-models", { method: "PUT", body: JSON.stringify({ models: ["mock/keep"] }) }, live, {
       fetchAllModels: discovery.fetchAllModels,
+      liveListenPort: () => 23456,
       writeDesktop3pConfig: (...args) => {
         writes.push(args);
         return { written: true, path: "fixture", fingerprint: "fedcba9876543210" };
@@ -232,6 +233,8 @@ for (const switchDuringDiscovery of [false, true]) {
     const reply = await request;
     expect(reply.status).toBe(200);
     expect(writes.length).toBe(switchDuringDiscovery ? 0 : 1);
+    // The live bound port wins over config.port (10100), as for every other management writer (#6598).
+    if (!switchDuringDiscovery) expect((writes[0] as unknown[])[0]).toBe(23456);
   });
 }
 

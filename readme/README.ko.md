@@ -310,7 +310,7 @@ OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추�
   eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 28개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 31개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.
@@ -359,7 +359,7 @@ JEV Combo는 키가 필요 없는 Ollama `tev1` 같은 자체 호스팅 결정 �
 <!-- sponsors:main-first-mention -->
 OpenAI (ChatGPT 로그인 또는 API 키), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (로컬 + Cloud), Cursor (experimental), OpenAI 호환 엔드포인트 전부 — 여기에 DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global과 CN (공식 PAT + CLI), SiliconFlow 등이 더 있습니다. 전체 목록은 `ocx init` 또는
 [프로바이더 문서](https://opencodex.me/ko/guides/providers/)에서 확인하세요.
 
@@ -443,8 +443,8 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## 개발
 
-소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지가 번들하는 Bun 런타임과는
-별개이며, 그 런타임은 설치된 `ocx` 명령만 씁니다.
+소스 개발에는 `PATH`에 `bun` CLI가 있어야 합니다. 배포된 npm 패키지는 설치된 `ocx` 명령용 Bun
+런타임을 번들하며, package script도 이 번들 의존성에서 Bun을 선택할 수 있습니다.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

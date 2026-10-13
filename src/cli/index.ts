@@ -8,6 +8,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { currentServingCommand, deferServiceChildToNewerRuntime, markDelegatedServiceReady, recordServingRuntime } from "../config/serving-runtimes";
 import { packageVersion } from "../lib/package-version";
+import { codexHomeIsAbsent } from "../codex/codex-home-owner";
+import { getCodexHome } from "../codex/paths";
+import { admitUpdateRestartChild } from "./update-restart-child";
+import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
+import { UpdateRestartRequired } from "./update-restart-candidate";
+import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
@@ -72,7 +78,7 @@ import {
   pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
-import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
+import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, runtimeSupervisorLine, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDownAsync, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
@@ -82,12 +88,12 @@ import {
   recheckRestartFailedStart, reobserveRestartReplacement,
   restartStartOutcome,
   waitForProxyReplacement,
-  runProxyRestart,
   runTrayProxyStart,
   type ProxyRestartLive,
-  type ProxyRestartResult,
   type ProxyRestartStartOutcome,
 } from "./tray-proxy";
+import { duplicateRuntimeMessage, runDesktopAwareProxyRestart } from "./desktop-runtime-guidance";
+import { reportRestartFailure } from "./restart-failure";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
@@ -142,12 +148,14 @@ import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntime
 import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
   reconcileClientStartupBeforeReady,
+  syncCodexBeforeCatalogObservation,
   syncClaudeAgentDefsAtProxyStartup,
 } from "./claude-agent-startup-sync";
 import {
   grokSyncFailureMessage,
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
+import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
 
@@ -200,15 +208,23 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
-if (process.argv[2] === "__codebuddy-mcp") {
-  const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
-  await runCodeBuddyMcpServer(process.argv[3] ?? "");
-  // The MCP stdio loop owns this process until stdin closes; do not fall through
-  // to ordinary CLI dispatch or exit after the handshake completes.
+if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (await import("../service/health-sentinel-main")).runHealthSentinelProcess());
+
+// The compiled executable also launches the isolated MCP servers.
+// Handle these private entrypoints before CLI preflight or command dispatch.
+if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {
+  if (process.argv[2] === "__codebuddy-mcp") {
+    const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
+    await runCodeBuddyMcpServer(process.argv[3] ?? "");
+  } else {
+    const { runCodingAgentMcpServer } = await import("../adapters/coding-agent/mcp-server");
+    await runCodingAgentMcpServer(process.argv[3] ?? "");
+  }
   await new Promise<never>(() => {});
 }
 
@@ -230,16 +246,10 @@ function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
   }
 }
 
-async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    // Runtime-state-first with identity: finds the proxy even when it started on a
-    // fallback port, and never mistakes a foreign 200 for our proxy.
-    const live = await findLiveProxy();
-    if (live) return live;
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
-  return null;
+async function waitForProxy(timeoutMs = 8_000, keepWaiting?: () => boolean): Promise<LiveProxy | null> {
+  // Runtime-state-first with identity: finds the proxy even when it started on a
+  // fallback port, and never mistakes a foreign 200 for our proxy.
+  return waitForLiveProxy({ find: findLiveProxy, timeoutMs, keepWaiting });
 }
 
 class StartCommandExit extends Error {
@@ -323,7 +333,7 @@ async function chooseListenPort(
         throw new StartCommandExit(serviceStayOutExitCode());
       }
       if (decision === "refuse-live-proxy") {
-        console.error(`⚠️  Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}). Use 'ocx stop' first.`);
+        console.error(duplicateRuntimeMessage(holder?.pid, preferred));
         throw new StartCommandExit(1);
       }
       if (decision === "refuse-unidentified-holder") {
@@ -371,6 +381,7 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  updateRestartChild?.check();
   // A supervised service child defers to a foreign recorded owner before doing
   // anything else. 'ocx service start' refuses this activation path already, but
   // the process managers below it — the Windows boot wrapper's restart loop and
@@ -437,7 +448,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       process.exit(serviceStayOutExitCode());
     }
     if (decision === "refuse" || decision === "await-parent") {
-      console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
+      console.error(duplicateRuntimeMessage(owner.live.pid ?? owner.pidSnapshot, owner.live.port));
       process.exit(1);
     }
     // Sibling path. The new instance takes over this home's ocx.pid / runtime-port.json while
@@ -466,6 +477,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     },
   });
 
+  updateRestartChild?.check();
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
     throw new Error(`client startup refused: ${clientState.reason}`);
@@ -550,7 +562,17 @@ async function handleStart(options: { block?: boolean } = {}) {
         let server: ReturnType<typeof serverModule.startServer>;
         for (let attempt = 0; ; attempt++) {
           try {
+            if (updateRestartChild && siblingStart) throw new Error("update_restart_sibling_refused");
+            updateRestartChild?.check(port, loadConfig().hostname ?? "");
             server = serverModule.startServer(port, { localAttestationSecret, readinessGate });
+            if (updateRestartChild) {
+              try { updateRestartChild.check(port, server.hostname); }
+              catch (error) {
+                try { await server.stop(true); }
+                catch (rollback) { throw new StartOwnershipRollbackUncertainError([error, rollback]); }
+                throw error;
+              }
+            }
             break;
           } catch (err) {
             try { await serverModule.waitForFailedStartRollback(err); }
@@ -578,14 +600,14 @@ async function handleStart(options: { block?: boolean } = {}) {
         }
         return { server, serverModule, port, readinessGate, localAttestationSecret, config };
       },
-      writePid: () => writePid(process.pid),
-      writeRuntime: bound => writeRuntimePort({
+      writePid: () => { updateRestartChild?.check(); writePid(process.pid); },
+      writeRuntime: bound => { updateRestartChild?.check(bound.port, bound.config.hostname ?? ""); writeRuntimePort({
         pid: process.pid,
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
         ...siblingRuntimeField(),
-      }),
+      }); updateRestartChild?.complete(); },
       stopBound: bound => bound.server.stop(true),
       removeRuntime: () => removeRuntimePortIfPidIs(process.pid),
       removePid: () => removePidIfValueIs(process.pid),
@@ -603,6 +625,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Records are visible now; background work may observe this runtime without a gap.
   scheduleCatalogPrewarm();
   installCrashGuards();
+  let healthSentinel: ReturnType<typeof startServiceHealthSentinel> = null; // opt-in #6671, started once ready
   // No pre-emptive snapshot here. `injectCodexConfig` journals the exact bytes it
   // is about to transform; snapshotting earlier only captured a baseline that could
   // already be stale by the time injection ran (#477).
@@ -615,15 +638,18 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Loopback-only (legacy mode still forward-tags) and respects syncResumeHistory opt-out.
   let historyGuardian: ReturnType<typeof startHistoryMigrationGuardian> | undefined;
   let routingHealer: { stop(): void } | undefined; // routing-healer.ts; stopped first in syncCleanup
+  let catalogHealer: { stop(): void } | undefined;
 
   let cleaned = false;
   let cleanupSucceeded = true;
   const syncCleanup = () => {
     if (cleaned) return cleanupSucceeded;
     cleaned = true;
+    try { catalogHealer?.stop(); } catch { /* best-effort */ }
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
+    try { healthSentinel?.stop(); } catch { /* best-effort */ }
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE });
@@ -634,10 +660,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     removeRuntimePort(process.pid);
     if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
       try {
-        const restored = restoreNativeCodex();
-        if (!restored.success) {
-          cleanupSucceeded = false;
-          console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+        if (!codexHomeIsAbsent(getCodexHome())) {
+          const restored = restoreNativeCodex();
+          if (!restored.success) {
+            cleanupSucceeded = false;
+            console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
+          }
         }
       } catch (error) {
         cleanupSucceeded = false;
@@ -703,9 +731,14 @@ async function handleStart(options: { block?: boolean } = {}) {
   // deferred until the best-effort Claude roster and Desktop registry settle. This
   // keeps /readyz closed across startup initialization without making an optional
   // Claude integration failure prevent the proxy from starting.
+  const catalogHealerModule = siblingStart ? null : await import("../codex/catalog-self-heal");
   const startupSync = await reconcileClientStartupBeforeReady(
     readinessGate,
-    gate => syncCodexOnStartIfEnabled(port, config, undefined, gate),
+    gate => syncCodexBeforeCatalogObservation(gate,
+      forwarding => syncCodexOnStartIfEnabled(port, config, undefined, forwarding),
+      () => {
+        if (catalogHealerModule && !siblingStart && !cleaned) catalogHealer = catalogHealerModule.startCodexCatalogSelfHeal({ port });
+      }),
     () => systemEnv.injected
       ? Promise.resolve(null)
       : syncClaudeAgentDefsAtProxyStartup(config, port),
@@ -717,6 +750,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
   await refreshOwnedRaycastCatalog(config, port);
+  if (!cleaned && !shuttingDown) healthSentinel = startServiceHealthSentinel(config); // after startup reconciliation; never mid-boot or mid-drain
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
@@ -822,9 +856,13 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     env: detachedStartEnvironment(),
   });
   options.onSpawn?.(child);
+  const spawnedAt = Date.now();
+  let childExited = false;
+  child.once("exit", () => { childExited = true; });
   child.unref();
 
-  const port = (await waitForProxy())?.port;
+  // A cold start can outlast 8 s on a busy Windows host; see ensure-readiness.ts.
+  const port = (await waitForProxy(ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting(spawnedAt, () => childExited)))?.port;
   if (!port) {
     console.error("❌ Proxy did not become healthy after starting.");
     process.exitCode = 1;
@@ -895,33 +933,11 @@ const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIM
 
 /** Reserve confirmation time within the shared restart deadline. */
 const RESTART_REOBSERVE_RESERVE_MS = 10_000;
-function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>): void {
-  if (result.phase === "identity") {
-    console.error("❌ Refusing to restart because the running proxy identity could not be attested.");
-  } else if (result.phase === "request") {
-    const code = result.error instanceof Error ? result.error.message : "";
-    if (code === "restart_capability_unsupported") {
-      console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
-      console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
-    } else if (code === "restart_version_skew") {
-      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
-      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
-    } else if (code === "restart_package_tree_unsettled") {
-      console.error("❌ The proxy's package files are still being replaced; wait for the install to finish, then run `ocx restart` again.");
-    } else {
-      console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
-    }
-  } else if (result.phase === "replacement") {
-    console.error("❌ Proxy restart was accepted, but no identity-verified replacement became healthy in time.");
-  } else {
-    console.error("❌ Proxy was not running and the fallback start did not become healthy.");
-  }
-}
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
-  const result = await runProxyRestart({
+  const result = await runDesktopAwareProxyRestart({
     findLive: () => discoverStableProxyForRestart({
       findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
@@ -939,6 +955,15 @@ async function handleProxyRestart(
       findLive: () => findLiveProxy({ deadlineAt: end, attempts: 2, acceptPackageTreeFenced: true }), expired: () => Date.now() >= end,
     })),
   });
+  if (!result.ok && result.phase === "request" && result.error instanceof UpdateRestartRequired) {
+    const candidate = result.error.candidate();
+    console.log(`🔄 Running proxy ${candidate.target.version} is older than this CLI (${candidate.cliVersion}); restarting it from the current installation...`);
+    const update = await restartFromCurrentInstallation(candidate, deadlineAt, detachedStartEnvironment());
+    if (update.ok) console.log(`✅ Proxy updated to ${update.live.version} (PID ${update.live.pid}).`);
+    else console.error(`❌ ${describeUpdateRestartFailure(update.code, update.reason)} (${update.code})`);
+    process.exitCode = update.ok ? 0 : 1;
+    return update.ok;
+  }
   if (!result.ok) reportRestartFailure(result);
   process.exitCode = result.ok ? 0 : 1;
   return result.ok;
@@ -1697,7 +1722,7 @@ async function handleStatus() {
   // are tagged `(local)`. A reader who sees neither draws the wrong conclusion from a correct
   // report — an agent read `xai ✗ not logged in` off a client and decided the hub could not
   // serve grok.
-  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub);
+  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub, status.json.connection.transport);
   if (remoteHubBanner) console.log(remoteHubBanner);
   // `(local)` only while connected: on a standalone install every line is local, and tagging
   // them all would be noise that trains the reader to skip the tag.
@@ -1769,6 +1794,7 @@ async function handleStatus() {
   console.log(`   Config: ${status.json.paths.config}${local}`);
   console.log(`   PID file: ${status.json.paths.pid}${local}`);
   console.log(`   Runtime: ${status.json.paths.runtime}${local}`);
+  if (runtimeSupervisorLine(status.json.startup)) console.log(`   ${runtimeSupervisorLine(status.json.startup)}`);
   console.log(`   Runtime source: ${status.json.runtime.source}${status.json.runtime.overrideEnv ? ` (${status.json.runtime.overrideEnv})` : ""}${local}`);
   // On a client this is the local default, which routing does not use — the hub applies its own.
   console.log(`   Default provider: ${status.json.defaultProvider}${local}`);
@@ -1777,7 +1803,9 @@ async function handleStatus() {
   if (status.json.hub) {
     for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
   }
-  console.log(`   Remote hub: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
+  console.log(status.json.remoteHub.link
+    ? `   Remote Link Home: ${status.json.connection.state} (${status.json.remoteHub.link.homePhrase}, ${status.json.remoteHub.link.linkId})`
+    : `   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }
@@ -1833,10 +1861,12 @@ async function handleStatus() {
   // that decide what a request can route to. The local block still prints — an operator debugging
   // a half-migrated machine needs to see it — but under a heading that says it is not in use, and
   // below the hub's, so the hub's is what a reader (or an agent) encounters first (#4236).
-  for (const line of remoteHubStatusLines(status.json.remoteHub)) console.log(`   ${line}`);
+  for (const line of remoteHubStatusLines(status.json.remoteHub, status.json.connection.transport)) console.log(`   ${line}`);
   if (status.json.remoteHub.connected) {
     console.log(status.json.remoteHub.stateSource === "unavailable"
-      ? "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
+      ? status.json.connection.transport === "link"
+        ? "   Local-only credential state (Home state is unavailable over Remote Link):"
+        : "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
       : "   Local-only (not used for routing while connected):");
   }
   console.log(`   OAuth logins${local}:`);

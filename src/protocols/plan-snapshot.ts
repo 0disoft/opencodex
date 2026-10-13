@@ -23,6 +23,7 @@ import { getRoutingProfile, POLICY_NAMESPACE, resolvePolicyProfileId } from "../
 import { resolveWireProtocolOverride } from "../server/adapter-resolve";
 import { nativeChatDeclineReason } from "../server/chat-native-eligibility";
 import { nativeMessagesDeclineReason } from "../server/messages-native-eligibility";
+import { messagesSelectorTargetsSecondaryInstance, messagesSecondaryInstanceUnavailable } from "../server/messages-native-selector";
 import { parseSyntheticRowId } from "../server/fast-row";
 import type { OcxConfig } from "../types";
 import { inboundWireForProtocol, type Protocol, type ProtocolReasonCode } from "./contract";
@@ -138,7 +139,7 @@ function candidateFor(
     const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
-  } else if (inbound === "messages" && resolveProtocolSettings(config).rollout.managedMessagesNative) {
+  } else if (inbound === "messages" && resolveProtocolSettings(config, settled.providerName).rollout.managedMessagesNative) {
     // The runtime rule itself. With the switch off nothing is judged, so the default preview
     // is exactly what it was before the managed native lane existed.
     // Pinned effort is judged from config and the route; blocked-skill elision and the web-search
@@ -161,6 +162,7 @@ function messagesPassthroughPossible(config: OcxConfig, model: string): boolean 
   if (config.claudeCode?.nativePassthrough === false) return false;
   if (!/^(claude|anthropic)/i.test(model)) return false;
   try {
+    if (messagesSelectorTargetsSecondaryInstance(config, model)) return false;
     return resolveInboundModel(model, config.claudeCode) === model;
   } catch {
     return false;
@@ -204,6 +206,9 @@ export function buildProtocolPlanSnapshot(
     // A synthetic row needs the proxy-owned adapter, so it never takes the passthrough.
     if (!syntheticRow && messagesPassthroughPossible(config, request.model)) reasonCodes.push("caller-credential-required");
     try {
+      if (messagesSecondaryInstanceUnavailable(config, routeKey)) {
+        return { ...base, routeKind: "unknown", candidates: [], reasonCodes: [...reasonCodes, "unknown-model"] };
+      }
       routeKey = resolveInboundModel(routeKey, config.claudeCode);
     } catch {
       return { ...base, routeKind: "unknown", candidates: [], reasonCodes };

@@ -1,9 +1,9 @@
 # Verification
 
-Current local check: 2026-10-02, Linux, Python 3.12.14 and aiohttp 3.13.5.
+Current local check: 2026-10-13, Linux, Python 3.12.14 and aiohttp 3.14.4.
 This integration preserves prior PR head
-`b3ff2be3c65e84aac0ceeedb343d107359da114d` and merges trusted `dev`
-`8b23fe340a53799aac5ad7654582a75df7ade7c8` without rewriting branch history.
+`d4405a8bc14bf0e7af3a7c5b38eb79d331af620b` and merges trusted `dev`
+`3bb7a5612c35c8079f5683a6d408a6907cf98bbe` without rewriting branch history.
 The merge was conflict-free. Probe and workflow source is byte-identical to the
 prior PR head; this follow-up updates verification metadata for that integration.
 The PR difference from this `dev` snapshot remains nine research/workflow files.
@@ -58,23 +58,42 @@ schema compatibility or actual mobile results.
 
 ## Repository checks
 
-The current isolated Linux worktree uses repository Bun 1.4.0. These checks
-passed on the integration above:
+The current isolated Linux worktree uses runtime Bun 1.4.2 and the repository
+selected test runner Bun 1.4.3. These checks passed on the integration above:
 
 ```sh
 bun run typecheck
 bun run structure:check
 bun run privacy:scan
+bun run skill:surface:check
+bun scripts/test-layout/plan.ts
 bun scripts/file-size-ratchet.ts
-git diff --check 8b23fe340a53799aac5ad7654582a75df7ade7c8
+git diff --check 3bb7a5612c35c8079f5683a6d408a6907cf98bbe
 ```
+
+The official wrapper selected Bun 1.4.3 through `OCX_TEST_RUNNER_BUN` for:
+
+```sh
+bun run test --parallel=1 ./tests/test-layout.test.ts \
+  ./tests/test-layout-tooling.test.ts \
+  ./tests/ci-workflows/file-size-ratchet.test.ts \
+  ./tests/ci-workflows/structure-ssot.test.ts \
+  ./tests/ci-workflows/repo-hygiene.test.ts \
+  ./tests/ci-workflows/ci-scope-gaps.test.ts
+```
+
+All 127 tests passed (941 assertions, no failures or skips). The layout planner
+reported zero moves and zero unresolved files; all nine generated management
+surface files were current. No generated output needed regeneration. The checks
+cover the merged layout, repository hygiene, and current CI runtime/test-runner
+roles; the Python suites exercise every executable specification this PR adds.
 
 The earlier Windows run (Python 3.14.3, aiohttp 3.14.3) and fixed-disk workaround
 are historical environment evidence, not the environment used for this refresh.
 The full local Bun suite was not rerun: this PR changes only the research unit
 and probe workflow relative to `dev`, and concurrent worktrees share this
-validation environment. All 63 focused probes and the applicable static gates
-were run instead. Wider repository coverage remains for CI associated with the
+validation environment. All 63 focused probes, the 127 focused Bun tests, and the applicable static
+gates were run instead. Wider repository coverage remains for CI associated with the
 new PR head, using the normal PR merge ref. No test budget or assertion was relaxed.
 
 ## Hosted checkpoint and review boundary
@@ -82,14 +101,18 @@ new PR head, using the normal PR merge ref. No test budget or assertion was rela
 For the previous PR head `b3ff2be3c65e84aac0ceeedb343d107359da114d`, maintainer
 review confirmed that probe job `110273026033` checked out merge ref `1b40f8a`
 (incorporating that head into `0328373`) and ran all 63 tests successfully.
-That is historical evidence; it does not attest to this new `8b23fe34` integration.
+That is historical evidence; it does not attest to this new `3bb7a561` integration.
 New associated run/job links, actual checkout SHA and tree must be recorded in
 the PR checkpoint after those checks complete. Run metadata alone is not checkout
 evidence, and no prior green result is relabeled as a new-head pass.
 
 The 2026-10-02 maintainer response dismissed only superseded correctness requests.
 It did not approve the RFC or waive independent workflow/boundary review.
-The PR remains Draft pending that review and an exact-head readiness decision.
+The PR remains Draft pending explicit maintainer workflow/security approval and
+an exact-head readiness decision. The author's later independent static-review
+evidence and hosted probe results concern the prior `d4405a8b` checkpoint; they
+do not replace the maintainer's approval or waive the hold. A green CodeRabbit check caused by
+Draft skipping is not a completed CodeRabbit review.
 
 ## Not executed / not established
 
@@ -103,4 +126,4 @@ The PR remains Draft pending that review and an exact-head readiness decision.
 The PR adds this research unit plus one workflow that runs it: devlog-probes.yml
 is a new CI lane, so the executable contract now executes on the PR merge ref rather
 than only locally. No executable configuration, release artifact, or native
-storage is changed. Independent review remains outstanding even with green CI.
+storage is changed. Explicit maintainer workflow/security approval remains outstanding even with green CI.

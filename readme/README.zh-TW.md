@@ -307,7 +307,7 @@ OpenCodex 在下列類別中追蹤行程保留狀態。每一類都有文件化�
   儲存為固定，不會被淘汰。
 - **4 個觀測緩衝區**（翻譯累加器、image/OAuth/Grok 尾端）會
   監控進行中的位元組壓力，但不淘汰。
-- **28 個狀態儲存註冊**負責到期清掃（間隔 60 秒）與
+- **31 個狀態儲存註冊**負責到期清掃（間隔 60 秒）與
   設定世代調和，以移除過期的供應商／帳號鍵。
 - **路徑與指紋 memo**（工作區中繼資料、強化身分、安裝
   salt、mode-hint 能力）使用插入順序 LRU 上限（8–128 筆）。
@@ -355,7 +355,7 @@ JEV Combo 也可以改用自架的決策模型，例如無需金鑰的 Ollama `t
 <!-- sponsors:main-first-mention -->
 OpenAI（ChatGPT 登入或 API key）、Anthropic、Google Gemini、xAI、Kimi、Azure OpenAI、Ollama
 （本機 + Cloud）、Cursor（實驗性），以及所有 OpenAI 相容端點——再加上 DeepSeek、
-Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、
+Groq、OpenRouter、OpenGateway、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、
 Qwen Cloud、Qoder Global 與 CN（官方 PAT + CLI）、SiliconFlow 等等。完整清單：`ocx init` 或
 [供應商文件](https://opencodex.me/zh-tw/guides/providers/)。
 
@@ -437,8 +437,8 @@ CLI／設定／管理 API 參考——由 [`docs-site/`](../docs-site) 建置，
 
 ## 開發
 
-從原始碼開發需要 `PATH` 上有 `bun` CLI。這與已發布 npm
-套件打包的 Bun 執行環境不同，後者只給已安裝的 `ocx` 命令使用。
+從原始碼開發需要 `PATH` 上有 `bun` CLI。已發布的 npm 套件為已安裝的 `ocx` 命令打包自己的
+Bun 執行環境；套件指令碼也可能透過這個打包依賴解析 Bun。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

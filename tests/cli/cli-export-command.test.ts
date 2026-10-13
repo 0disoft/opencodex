@@ -249,6 +249,10 @@ describe("ocx export human output (accept criterion 2)", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout.startsWith("{\n")).toBe(true);
+    logs.length = 0;
+    const structured = await run(["--client", "opencode", "--json"], { baseUrl: proxy.baseUrl });
+    expect(structured.code).toBe(0);
+    expect(JSON.parse(result.stdout.split("\n\n")[0]!)).toEqual(JSON.parse(structured.stdout));
     expect(result.stdout).toContain(join("opencode", "opencode.json"));
     expect(result.stdout).toContain("Merge this generated configuration into that file; do not replace it.");
     expect(result.stdout).toContain("export OPENCODEX_OPENCODE_API_KEY=");
@@ -619,4 +623,30 @@ describe("keyless exports use the live management admission policy", () => {
       }
     });
   }
+});
+
+describe("ocx export with an unresolvable client destination", () => {
+  test("exports and writes --out once, reporting the destination as unknown", async () => {
+    const proxy = fakeProxy();
+    const oldDataDir = process.env.ZCODE_DATA_DIR;
+    // A relative override is a ClientPathError, the same class the ZCode bootstrap
+    // resolver raises for malformed or relative dataBaseDir settings (#6932).
+    process.env.ZCODE_DATA_DIR = "relative-zcode-root";
+    try {
+      const target = join(tempDir(), "zcode-config.json");
+      const result = await run(["--client", "zcode", "--out", target], { baseUrl: proxy.baseUrl });
+      expect(result.code).toBe(0);
+      expect(existsSync(target)).toBe(true);
+      expect(result.stdout).toContain("Destination: unknown (");
+      expect(result.stdout).toContain("ZCODE_DATA_DIR");
+
+      logs = [];
+      const json = await run(["--client", "zcode", "--json"], { baseUrl: proxy.baseUrl });
+      expect(json.code).toBe(0);
+      expect(() => JSON.parse(json.stdout)).not.toThrow();
+    } finally {
+      if (oldDataDir === undefined) delete process.env.ZCODE_DATA_DIR;
+      else process.env.ZCODE_DATA_DIR = oldDataDir;
+    }
+  });
 });

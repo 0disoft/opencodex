@@ -1,3 +1,4 @@
+import { codexAccountModelRefusal, codexAccountModelRefusalHardStopCode, type CodexAccountModelRefusal } from "../../combos/failover";
 import { parseRetryAfterMs } from "../../combos";
 import type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
 import type { OcxUsage } from "../../types";
@@ -13,6 +14,7 @@ import {
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
@@ -36,6 +38,7 @@ export async function consumeComboFailure(
   const nonReplayable = isNonReplayableResponse(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
+  let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -60,10 +63,11 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
+      if (response.status === 400) codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
-        upstreamCode = normalized.code;
+        upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
       }
@@ -116,7 +120,9 @@ export async function consumeComboFailure(
     response: failureResponse,
     ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
+    ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(upstreamMessage !== undefined ? { upstreamMessage } : {}),
     ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota
@@ -216,4 +222,16 @@ export function buildComboChildHeaders(parentHeaders: HeadersInit): Headers {
   childHeaders.delete("content-length");
   childHeaders.delete("content-encoding");
   return childHeaders;
+}
+
+/**
+ * A member's local Ollama late-attribution refusal: the exact proxy-owned constant on the exact
+ * local wire shape, from a replayable attempt. The caller replaces only the client response with
+ * the literal constant envelope; classification inputs are never rewritten.
+ */
+export function isLateAttributionRefusal(failure: ConsumedComboFailure): boolean {
+  return !failure.nonReplayable
+    && failure.response.status === 413
+    && failure.upstreamCode === "request_too_large"
+    && failure.upstreamMessage === OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE;
 }

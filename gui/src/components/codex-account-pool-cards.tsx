@@ -6,11 +6,12 @@ import { displayAccountId } from "../lib/privacy";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "../account-priority";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
+import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
 import CodexCreditsRow from "./CodexCreditsRow";
-import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
+import { CodexPauseToggleLabel, CodexPinnedBadge, CodexTicketBadge } from "./codex-account-pool-helpers";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -40,9 +41,12 @@ export function CodexAccountPoolCards({
   autoSwitchDisabled,
   switchingId,
   pinnedId = null,
+  onUnpin,
   onReauth,
   onEditAlias,
   onRemove,
+  onToggleCreditsAfterLimit,
+  creditsAfterLimitUpdatingId = null,
   onCopyDoctor,
   doctorCopyOutcomeFor,
 }: {
@@ -71,9 +75,14 @@ export function CodexAccountPoolCards({
    * badge on the account the operator actually chose.
    */
   pinnedId?: string | null;
+  /** Opens the release confirm for the pinned card: selecting the badge again unpins. */
+  onUnpin: (account: CodexAccountEntry) => void;
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
+  /** Writes one account's "use credits after limit" switch, shown in its "more" disclosure. */
+  onToggleCreditsAfterLimit?: (account: CodexAccountEntry, enabled: boolean) => void;
+  creditsAfterLimitUpdatingId?: string | null;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
@@ -114,7 +123,8 @@ export function CodexAccountPoolCards({
                 </span>
               )}
               <AccountPriorityBadge value={a.priority} />
-              {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
+              <CreditsOnBadge enabled={a.creditsAfterLimit} />
+              {a.id === pinnedId && !a.paused && <CodexPinnedBadge t={t} onUnpin={() => onUnpin(a)} />}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
@@ -178,6 +188,15 @@ export function CodexAccountPoolCards({
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => void onEditAlias(a)}>
                   {t("prov.editAlias")}
                 </button>
+                {onToggleCreditsAfterLimit && (
+                  <AccountCreditsToggle
+                    accountLabel={a.alias ?? a.email}
+                    enabled={a.creditsAfterLimit}
+                    saving={creditsAfterLimitUpdatingId === a.id}
+                    disabled={creditsAfterLimitUpdatingId !== null}
+                    onChange={enabled => onToggleCreditsAfterLimit(a, enabled)}
+                  />
+                )}
                 <button
                   type="button"
                   className="btn-icon btn-icon-danger"

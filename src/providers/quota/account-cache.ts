@@ -1,6 +1,9 @@
+import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
+import { anthropicModelQuotaFor, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
 import { getValidAccessTokenForAccount } from "../../oauth";
-import { getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { credentialGeneration, getAccountCredential, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
+import { isAnthropicInstanceId, type AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
 import { ACCOUNT_QUOTA_TTL_MS, toFiniteNumber } from "../quota-wire";
 import { clearKiroAccountUsageState, hydrateKiroUsageVerdict, kiroPersistableVerdicts, reconcileKiroAccountUsageState } from "../kiro-usage";
@@ -34,6 +37,8 @@ export type AccountQuotaCacheEntry = {
   quotaFailureIsCurrent?: () => boolean;
   /** Private new-reader identity; never persisted or serialized. */
   identity?: string;
+  /** Private passive Anthropic ownership fence; not serialized with quota bars. */
+  anthropicCredentialGeneration?: string;
   isCurrent?: () => boolean;
 };
 /** Expired measurements become unknown; missing reset evidence never implies a fresh allowance. */
@@ -67,7 +72,10 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
         changed = true;
         continue;
       }
-      if (validReset(window.resetAt) && window.resetAt <= now) {
+      if ((window.passiveObservedAt !== undefined && (typeof window.passiveObservedAt !== "number"
+          || !Number.isFinite(window.passiveObservedAt) || window.passiveObservedAt <= 0 || window.passiveObservedAt > now
+          || now - window.passiveObservedAt >= ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS))
+        || validReset(window.resetAt) && window.resetAt <= now) {
         changed = true;
         continue;
       }
@@ -89,8 +97,19 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
   return hasQuotaRows(result) ? result : null;
 }
 
+function isAnthropicAccountCacheKey(key: string): boolean {
+  const separator = key.indexOf("\0");
+  return separator > 0 && isAnthropicInstanceId(key.slice(0, separator));
+}
+
 export const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
 export let explicitAccountEpoch = 0;
+let allAccountQuotaEpoch = 0;
+const providerAccountQuotaEpochs = new Map<string, number>();
+/** Instance-owned cache clears do not revoke an unrelated account's probe. */
+export function captureProviderAccountQuotaEpoch(provider: string): number {
+  return allAccountQuotaEpoch + (providerAccountQuotaEpochs.get(provider) ?? 0);
+}
 
 /**
  * Seed the cache from the last run, once.
@@ -120,7 +139,7 @@ export function hydrateAccountQuotaCache(): void {
     }
     // Disk stores observation time, not the Anthropic usage probe's clock.
     if (!accountQuotaCache.has(key)) {
-      const anthropic = key.startsWith("anthropic\u0000");
+      const anthropic = isAnthropicAccountCacheKey(key);
       accountQuotaCache.set(key, {
         ts: anthropic ? 0 : quota.updatedAt,
         quota: anthropic ? normalizeAnthropicQuota(quota, now)
@@ -141,7 +160,7 @@ export function persistAccountQuotaCache(): void {
     const liveKiro = new Map<string, ProviderAccount>(getAccountSet("kiro")?.accounts.map(account =>
       [accountCacheKey("kiro", account.id), account]) ?? []);
     for (const [key, entry] of accountQuotaCache) {
-      const quota = key.startsWith("anthropic\u0000") ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
+      const quota = isAnthropicAccountCacheKey(key) ? normalizeAnthropicQuota(entry.quota, now) : entry.quota;
       if (quota && key.startsWith("kiro\0")) {
         const account = liveKiro.get(key);
         if (account && entry.identity === kiroEvidenceIdentity(account))
@@ -175,7 +194,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic" || provider === "kiro" || provider === "google-antigravity"
+  return isAnthropicInstanceId(provider) || provider === "kiro" || provider === "google-antigravity"
     || explicitAccountReader(provider);
 }
 
@@ -202,8 +221,12 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
     if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
   }
+  if (isAnthropicInstanceId(provider) && entry?.anthropicCredentialGeneration) {
+    const credential = getAccountCredential(provider, accountId);
+    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
+  }
   if (entry?.isCurrent && !entry.isCurrent()) return null;
-  return provider === "anthropic" ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
+  return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
 
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
@@ -230,10 +253,11 @@ function anthropicHeaderResetAt(value: string | null): number | undefined {
   return Number.isFinite(new Date(timestamp).getTime()) ? timestamp : undefined;
 }
 
-export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota | null {
+export function parseAnthropicRateLimitHeaders(headers: Headers, status?: number): ProviderQuota | null {
   const fiveHourPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-5h-utilization"));
   const weeklyPercent = normalizeUtilizationFraction(headers.get("anthropic-ratelimit-unified-7d-utilization"));
-  if (fiveHourPercent === undefined && weeklyPercent === undefined) return null;
+  const customWindows = parseAnthropicFamilyHeaders(headers, Date.now(), status);
+  if (fiveHourPercent === undefined && weeklyPercent === undefined && !customWindows.length) return null;
   const fiveHourResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-5h-reset"));
   const weeklyResetAt = anthropicHeaderResetAt(headers.get("anthropic-ratelimit-unified-7d-reset"));
   return {
@@ -241,6 +265,7 @@ export function parseAnthropicRateLimitHeaders(headers: Headers): ProviderQuota 
     ...(fiveHourPercent !== undefined && fiveHourResetAt !== undefined ? { fiveHourResetAt } : {}),
     ...(weeklyPercent !== undefined ? { weeklyPercent } : {}),
     ...(weeklyPercent !== undefined && weeklyResetAt !== undefined ? { weeklyResetAt } : {}),
+    ...(customWindows.length ? { customWindows } : {}),
     updatedAt: Date.now(),
   };
 }
@@ -257,32 +282,50 @@ function normalizeUtilizationFraction(value: string | null): number | undefined 
  * erasing model-specific windows. The caller owns credential attribution; this guard
  * prevents a retired account key from being revived by an older config generation.
  */
-export function recordAnthropicAccountQuotaFromHeaders(
+export function recordAnthropicAccountQuotaFromHeadersForInstance(
+  instance: AnthropicInstanceId,
   accountId: string,
   headers: Headers,
   writerGeneration: number,
+  status?: number,
+  model?: string,
 ): void {
   if (!accountId) return;
-  const observed = parseAnthropicRateLimitHeaders(headers);
-  if (!observed) return;
-  const key = accountCacheKey("anthropic", accountId);
+  const key = accountCacheKey(instance, accountId);
+  const { observeAnthropicFamilyQuota, clearAnthropicRequestedFamilyQuota } = anthropicModelQuotaFor(instance);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  if (status !== undefined && status >= 200 && status < 300) clearAnthropicRequestedFamilyQuota(accountId, model);
+  const observed = parseAnthropicRateLimitHeaders(headers, status);
+  if (!observed) return;
   // Hydrate before writing, for the same reason `recordPassiveAccountQuota` does: this write
   // arrives unprompted from the request path, and `persistAccountQuotaCache` serializes the
   // whole map. Landing before any reader has hydrated would persist this single row and erase
   // every other provider's saved row.
   hydrateAccountQuotaCache();
   const candidate = accountQuotaCache.get(key);
-  const previous = candidate?.isCurrent?.() === false ? undefined : candidate;
+  const credential = getAccountCredential(instance, accountId);
+  const generation = credential && credentialGeneration(credential);
+  const previous = candidate?.isCurrent?.() === false
+    || candidate?.anthropicCredentialGeneration && candidate.anthropicCredentialGeneration !== generation ? undefined : candidate;
+  if (observed.customWindows) observeAnthropicFamilyQuota(accountId, observed.customWindows, observed.updatedAt);
   accountQuotaCache.set(key, {
     ...previous,
+    ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
     quota: normalizeAnthropicQuota({
       ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
+      ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
   persistAccountQuotaCache();
+}
+
+/** Legacy recorder: config/roster generation is numeric and distinct from bearer ownership. */
+export function recordAnthropicAccountQuotaFromHeaders(
+  accountId: string, headers: Headers, writerGeneration: number, status?: number, model?: string,
+): void {
+  recordAnthropicAccountQuotaFromHeadersForInstance("anthropic", accountId, headers, writerGeneration, status, model);
 }
 
 /**
@@ -358,7 +401,7 @@ export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
   let removed = 0;
   for (const [key, entry] of accountQuotaCache) {
     // Anthropic observations extend retention, never the usage probe's eligibility clock.
-    const retainedAt = key.startsWith("anthropic\u0000")
+    const retainedAt = isAnthropicAccountCacheKey(key)
       ? Math.max(entry.ts, entry.quota?.updatedAt ?? 0)
       : entry.ts;
     if (retainedAt + ACCOUNT_QUOTA_TTL_MS > now) continue;
@@ -403,8 +446,10 @@ export function resetProviderQuotaReconcileStateForTests(): void {
 
 /** Drop cached per-account rows (all, or just one provider's). */
 export function clearAccountQuotaCache(provider?: string): void {
-  explicitAccountEpoch += 1;
+  // Anthropic readers use provider-owned epochs; B cannot revoke an A flight.
+  if (provider !== "anthropic2") explicitAccountEpoch += 1;
   if (!provider) {
+    allAccountQuotaEpoch += 1;
     accountQuotaCache.clear();
     accountQuotaInflight.clear();
     clearKiroAccountUsageState();
@@ -414,6 +459,7 @@ export function clearAccountQuotaCache(provider?: string): void {
     cancelPendingAccountQuotaPersist();
     return;
   }
+  providerAccountQuotaEpochs.set(provider, (providerAccountQuotaEpochs.get(provider) ?? 0) + 1);
   hydrateAccountQuotaCache();
   const prefix = `${provider}\u0000`;
   for (const key of [...accountQuotaCache.keys()]) {
@@ -423,6 +469,17 @@ export function clearAccountQuotaCache(provider?: string): void {
   // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.
   for (const key of [...accountQuotaInflight.keys()]) {
     if (key.startsWith(prefix)) accountQuotaInflight.delete(key);
+  }
+  persistAccountQuotaCache();
+}
+
+/** Drop one account's cached bars and any joined probe so a reset is not ranked from the old window. */
+export function forgetCachedProviderAccountQuota(provider: string, accountId: string): void {
+  hydrateAccountQuotaCache();
+  const key = accountCacheKey(provider, accountId);
+  accountQuotaCache.delete(key);
+  for (const flight of [...accountQuotaInflight.keys()]) {
+    if (flight === key || flight.startsWith(key + "\u0000")) accountQuotaInflight.delete(flight);
   }
   persistAccountQuotaCache();
 }
@@ -442,7 +499,9 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new Error("account credential missing");
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
+  // Anthropic instances also skip a needs-reauth row; other providers keep their probe behavior.
   if (row.paused) throw new Error("account is paused; quota probe skipped");
+  if (row.needsReauth && isAnthropicInstanceId(provider)) throw new Error("account needs sign-in; quota probe skipped");
   const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;

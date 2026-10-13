@@ -31,7 +31,7 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 
 ## 종료 코드와 확인
 
-성공한 명령은 종료 코드 0을 반환합니다. 잘못된 사용법, 알 수 없는 명령이나 리소스, 실패한 API 작업, 필요한 서비스가 없음은 0이 아닌 종료 코드를 반환합니다. `ocx health`는 프록시가 건강할 때만 0을, 그렇지 않으면 1을 반환하므로 서비스 probe로 쓸 수 있습니다. 스크립트는 사람이 읽는 출력 대신 종료 코드를 확인해야 합니다.
+성공한 명령은 종료 코드 0을 반환합니다. 잘못된 사용법, 알 수 없는 명령이나 리소스, 실패한 API 작업, 필요한 서비스가 없음은 0이 아닌 종료 코드를 반환합니다. `ocx health`는 프록시가 건강할 때만 0을, 건강한 프록시가 없으면 1을, 잘못된 인수에는 2를 반환하므로 서비스 probe로 쓸 수 있습니다. 스크립트는 사람이 읽는 출력 대신 종료 코드를 확인해야 합니다.
 
 제거, 가져오기, 크레딧 소모, 업데이트처럼 확인을 알리는 파괴적 작업은 비대화형 사용 시 `--yes`가 필요합니다. 이 플래그는 명시적인 동의이며, 생략했다고 해서 동작이 조용히 확인되면 안 됩니다.
 
@@ -40,3 +40,21 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 `ocx --version`, `ocx -v`, `ocx version`은 스크립트가 읽기 좋은 한 줄짜리 버전을 출력하고 종료합니다.
 
 일반 도움말에는 두 개의 디스패치 대상이 의도적으로 빠져 있습니다. `__refresh-version [preview]`는 분리된 프로세스에서 업데이트 알림 캐시를 새로 고치고, `__gui-update-worker <job-id> [latest|preview] [restart]`는 대시보드 업데이트 작업을 실행합니다. 이들은 구현 세부 사항일 뿐이며 안정적인 사용자 명령이 아닙니다. 대시보드는 worker PID를 기록하고, worker가 죽은 활성 작업은 복구하며, PID가 없는 오래된 활성 기록은 10분 뒤 오래된 것으로 취급하고, 살아 있는 worker를 동시 업데이트로부터 보호합니다.
+
+## Capability argument validation
+
+`ocx capabilities`는 알 수 없는 인수, 반복된 플래그, 빈 `--route` 값을 종료 코드 64로 거부합니다. 유효한 경로에 등록된 기능이 없으면 종료 코드 4를 반환합니다.
+
+## Integer option values
+
+`--limit` 같은 정수 옵션은 안전하게 표현 가능한 십진 정수를 받습니다. `1_000`, `1,000` 같은 숫자 구분자는 허용합니다. 빈 값, 16진수, 지수 표기 및 소수는 요청을 보내기 전에 거부합니다.
+
+## Windows JSON configuration files
+
+`ocx config validate <file>`과 `ocx config import <file> --yes`는 선행 BOM이 있는 UTF-8 JSON도 읽습니다. 표준 입력(`-`)에도 적용되므로 Windows PowerShell이나 편집기의 UTF-8 내보내기를 사용할 수 있습니다. UTF-16은 지원하지 않습니다.
+
+## Default alias listing
+
+`ocx alias --json`은 `ocx alias list --json`과 같습니다. `--json`은 명시한 alias 작업의 앞이나 뒤에 둘 수 있습니다.
+
+`ocx logs --model`은 표시된 `provider/model`과 기본 모델 ID를 모두 지원합니다. 필터는 행 제한 전에 적용하며 `--follow`에도 동일합니다. 빈 필터 결과는 사람이 읽는 출력에서 안내하고 JSON/JSONL은 그대로 유지합니다. `ocx hub disable`은 [Remote Hub](/guides/remote-hub/#return-a-hub-to-standalone)를 참조하세요.

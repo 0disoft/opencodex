@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../config";
+import { readConfigFileSnapshot } from "../config/diagnostics";
+import { chatgptDesktopConfigIssue } from "../config/schema/chatgpt-desktop";
 import {
   chatgptShimLauncherPath,
   resolveChatgptCodexBinary,
@@ -19,6 +21,20 @@ const USAGE = `Usage (experimental, macOS only):
 function run(command: string, args: string[]) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 5000 });
   return { ok: result.status === 0, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+}
+
+/**
+ * Why the config file's `chatgptDesktop` block reads as absent, or null when it is valid, absent
+ * or the file cannot be parsed (the config loader reports that case itself).
+ */
+function chatgptDesktopIssueInFile(): string | null {
+  const { raw } = readConfigFileSnapshot();
+  if (raw === undefined) return null;
+  try {
+    return chatgptDesktopConfigIssue(JSON.parse(raw.replace(/^\uFEFF/, "")));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -90,7 +106,10 @@ export async function handleChatgptCommand(args: string[], platform: NodeJS.Plat
     const install = discoverApp();
     if (sub === "status") {
       const app = install ? appState(install, launcher) : { running: false, shim: false };
-      console.log(`app-server shim (experimental): ${config.chatgptDesktop?.appServerShim === true ? "on" : "off"}
+      const configIssue = config.chatgptDesktop?.appServerShim === true ? null : chatgptDesktopIssueInFile();
+      const flag = config.chatgptDesktop?.appServerShim === true ? "on"
+        : configIssue ? `off (config.json ${configIssue}; the whole chatgptDesktop block is ignored)` : "off";
+      console.log(`app-server shim (experimental): ${flag}
 launcher: ${existsSync(launcher) ? "present" : "absent"}
 app: ${install ? (app.running ? "running" : "not running") : "not installed"}
 CODEX_CLI_PATH launcher: ${app.shim ? "yes" : "no"}`);
@@ -101,23 +120,30 @@ CODEX_CLI_PATH launcher: ${app.shim ? "yes" : "no"}`);
       console.error("ChatGPT (com.openai.codex) was not found; install or open it once, then retry.");
       return 1;
     }
+    let binary: string | undefined;
     if (sub === "launch") {
       if (config.chatgptDesktop?.appServerShim !== true) {
-        console.error('Experimental shim disabled; set chatgptDesktop.appServerShim: true before launching.');
+        // Read the file only to explain a refusal; restore and a valid launch never touch it.
+        const configIssue = chatgptDesktopIssueInFile();
+        console.error(configIssue
+          ? `Experimental shim disabled: config.json ${configIssue}. The whole chatgptDesktop block is ignored until that is fixed.`
+          : "Experimental shim disabled; set chatgptDesktop.appServerShim: true before launching.");
         return 1;
       }
-      const binary = resolveChatgptCodexBinary(install.root);
+      binary = resolveChatgptCodexBinary(install.root) ?? undefined;
       if (!binary) {
         console.error(`No bundled app-server binary was found in ${install.root}; the shim cannot launch this build.`);
         return 1;
       }
-      const untrusted = untrustedChatgptBundleReason(install.root, binary);
-      if (untrusted) {
-        console.error(`Refusing to launch the shim: ${untrusted}.`);
-        return 1;
-      }
-      writeChatgptShimLauncher(undefined, binary);
     }
+    // Both relaunch paths execute the discovered bundle. Restore validates the app
+    // shell without requiring an app-server binary or the experimental opt-in flag.
+    const untrusted = untrustedChatgptBundleReason(install.root, binary);
+    if (untrusted) {
+      console.error(`Refusing to ${sub === "launch" ? "launch the shim" : "restore ChatGPT"}: ${untrusted}.`);
+      return 1;
+    }
+    if (binary) writeChatgptShimLauncher(undefined, binary);
     if (!(await quitApp(install, launcher))) {
       console.error("ChatGPT did not quit; quit it manually and retry.");
       return 1;

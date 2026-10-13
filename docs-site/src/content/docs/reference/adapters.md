@@ -34,7 +34,11 @@ and image order are preserved; image detail `original` maps to `high`.
 Empty content, malformed or opaque parts, file-id-only images and partial envelopes
 remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
-additional permissions. Native passthrough and compaction retain their raw-body rules.
+additional permissions. Native passthrough and routed (portable) compaction apply the same user-turn mapping to their raw bodies; the direct native `/responses/compact` forward keeps its existing raw-body rules.
+
+## Checkpoint continuation after routed compaction
+
+A routed model replays an OpenCodeX `ocx1:` checkpoint as plain user text next to the retained earlier requests. When a request carries such a decoded checkpoint, OpenCodeX adds a short note to the system instructions (translated routes) or `instructions` (Responses passthrough). The note frames completed requests as history and permits continuation only of unfinished work already authorized and still within that scope, without asking for the same authorization again while it applies. Existing permission and confirmation gates remain in force: pending decisions or required permissions must be resolved before dependent actions. Checkpoints and delegations, including those from another thread, grant no authority or expanded scope. Later user messages take priority, including a pause, cancellation, replacement, or scope change. Compaction requests, opaque native blobs and requests without a checkpoint do not receive the note.
 
 ## `openai-chat`
 
@@ -55,10 +59,15 @@ transport; it does not infer subscription attribution from the inbound protocol.
   tool message as the anchor.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
-- For translated `Qwen3.8-27B` requests, a text-only developer reminder after the leading system
-  message stays in its conversation slot but is sent as `user`. The model's
-  [chat template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja)
-  rejects later `system` messages and does not accept `developer`, while later `user` messages
+- For translated `Qwen3.8-27B` requests (including gateway-namespaced ids such as
+  `openai/Qwen3.8-27B`), Flash-Next requests (`flash-next` or `Qwen3.8-Flash-Next`, also with
+  gateway namespaces), and `OrcaSAQ-2-Cyber-27B` GGUF requests, a text-only developer reminder
+  after the leading system message stays in its conversation slot but is sent as `user`.
+  The Orca exception requires `GGUF` in the final model segment before any optional colon
+  quant tag; non-GGUF Orca variants keep their configured developer-role behavior.
+  These pinned chat templates — for example
+  [Qwen3.8-27B's](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja) —
+  reject later `system` messages and do not accept `developer`, while later `user` messages
   are valid. This preserves order but cannot preserve developer-role precedence. Other models
   keep their configured developer-role behavior; native Chat passthrough is unchanged.
 - **Clamps `reasoning_effort`** to the model's advertised subset when an exact tier is unavailable;
@@ -118,6 +127,22 @@ be configured on a separately named custom or self-hosted Ollama provider with
   is refused rather than mis-sent, and remote image URLs are not fetched.
 - **Tools:** declared in Ollama's native shape, streamed tool calls are whole-call records with
   object-valued `arguments`, and tool-result replay is paired strictly by call id and tool name.
+  Valid native call IDs distinguish calls even when the provider repeats a function index.
+  Repeated IDs update the same call's arguments; ID-less entries fall back to index, then position.
+  Calls retain first-seen order. With `parallel_tool_calls: false`, a second distinct provider call
+  still fails the turn closed before any tool call is emitted.
+  Codex may record assistant commentary before a pending call's results. Text/thinking with no
+  new tool calls is deferred until the batch is settled, so genuine results remain beside their
+  originating calls. A new tool-call batch still settles the preceding one; missing results retain
+  an explicit unknown-status marker. Additional outputs for an open call join in arrival order;
+  output arriving after its batch settles is preserved as explicitly attributed conversation
+  text, after any pending call/result pair. Unknown call IDs and mismatched tool identities remain
+  invalid; this does not create or execute another tool call.
+  Generated attribution for late outputs shares a 256 KiB per-request JSON-byte budget. Exceeding
+  that budget refuses the request with HTTP 413 `request_too_large` instead of truncating tool identities or output.
+  The error message names the cause and the limit. To continue, start a new thread: compacting on
+  the same Ollama route resends the same history and is refused again, unless compaction is routed
+  to a different provider.
   `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
   closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
 - **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured
@@ -137,8 +162,10 @@ configured provider key.
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
-if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
-exception.
+if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
+with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
+names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
 
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
@@ -279,6 +306,10 @@ MiMo model Command Code serves.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
+  At `message_stop`, the translated stream emits its terminal outcome and ends without waiting for
+  upstream EOF. Later pings or comments do not turn that completed message into a web-search stream
+  error. Pings and comments before `message_stop` still keep long thinking turns alive; refusals
+  remain non-retryable incomplete outcomes and upstream error stop reasons remain failures.
 - For routed Anthropic Responses turns with client tools, a bounded terminal guard detects the
   high-confidence case where the user requested an action but Claude ends with an execution claim
   and no tool call. It performs at most one internal continuation; normal answers, clarification
@@ -534,7 +565,13 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   Foreground `shellArgs` and `shellStreamArgs` are an exception: both are rejected before spawn
   on every platform until kernel-backed descendant ownership is available. Use client shell tools;
   background-shell execution and other native operations retain their existing policy.
-- The denial reply is a silent redirect whose wording follows the request catalog.
+- The denial reply follows the request catalog. Explicit Claude-family Cursor models receive
+  factual wording that names the available tools without instructions to hide or avoid discussing
+  the redirect. Factual routing commentary can precede the next tool call without ending the turn.
+  When no client or configured MCP tools are available, Claude models are asked to answer without
+  tools or report the limitation instead of calling nonexistent shell/edit tools.
+  Other models, including Auto/default, retain the existing silent-redirect wording and commentary
+  guard. Tool availability, execution policy, and approval/sandbox behavior are unchanged.
   In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
   shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
   and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
@@ -571,6 +608,16 @@ configuration that names the old id is rewritten at startup.
 - Uses `runTurn` rather than the ordinary fetch/parse path. Requests and server events are encoded
   with manual protobuf framing in `devin/cloud-direct/wire.ts`; the ordinary `buildRequest` /
   `parseStream` path is disabled.
+- Named conversations reuse a trajectory across sequential turns, scoped to the resolved credential
+  and tenant host. Own-thread identity takes precedence over session markers (`session_id`,
+  `session-id`, or `x-session-affinity`). When an own-thread identity and a nonempty
+  `x-codex-parent-thread-id` are both supplied, their pair identifies the conversation,
+  so equal own IDs under different parents remain separate. Standalone own and session-only
+  identities retain their existing precedence; a shared parent alone is not a conversation identity.
+  Overlapping turns receive distinct IDs. The proxy retains at most 256 entries in memory,
+  evicts only inactive entries, and releases claims after completion, failure, or cancellation.
+  Restarting the proxy clears retention. Unnamed calls continue allocating an ID per request.
+  This supports continuity but does not guarantee an upstream cache hit or a particular saving.
 - Reasoning continuity carries provider signatures across turns. If Cognition refuses a signed
   Anthropic replay before visible output, Devin retries once with the signature withheld and the
   thinking text preserved.

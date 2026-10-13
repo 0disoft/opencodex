@@ -8,7 +8,7 @@ import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
 import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
-import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
   CODEX_FORWARD_BASE_URL,
@@ -37,6 +37,7 @@ import {
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripRejectedSamplingParams } from "./request-strips";
+import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
@@ -46,7 +47,10 @@ import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuation
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
 import { observeOutbound } from "../../usage/cache-diagnostic";
+import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
+import { renderCompactionSearchHistoryItems } from "./compaction-search-history";
+import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -94,6 +98,22 @@ function applyCallerUserAgentFallback(
   if (userAgent) headers["User-Agent"] = userAgent;
 }
 
+/** Copy only explicitly opted-in caller metadata; provider-owned headers remain authoritative. */
+function applyConfiguredClientHeaderForwarding(
+  headers: Record<string, string>,
+  incoming: IncomingMeta,
+  provider: OcxProviderConfig,
+): void {
+  if (!Array.isArray(provider.forwardClientHeaders)) return;
+  for (const rawName of provider.forwardClientHeaders.slice(0, 64)) {
+    const name = normalizeForwardedClientHeaderName(rawName);
+    if (name === null) continue;
+    if (Object.keys(headers).some(existing => existing.toLowerCase() === name)) continue;
+    const value = incoming.headers.get(name);
+    if (value) headers[name] = value;
+  }
+}
+
 /** Replace every `input_image` part under a routed-compaction body with a short marker. */
 function stripInputImagesDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripInputImagesDeep);
@@ -116,17 +136,21 @@ function stripInputImagesDeep(value: unknown): unknown {
  * be applied here. Images go too: a summary needs no pixels, and a text-only
  * gateway would reject them.
  */
-function buildRoutedCompactionBody(body: unknown): unknown {
+function buildRoutedCompactionBody(body: unknown, responsesLite: boolean): unknown {
   if (!isPlainObject(body)) return body;
   // `text` goes with the tool fields: the summary must be prose, not schema-constrained JSON.
   const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, text: _text, ...rest } = body;
   const input = Array.isArray(body.input) ? body.input : [];
-  const kept = input.filter(item => !isPlainObject(item)
+  // Bridge restoration has already recovered any available real call/result pairs. Remaining
+  // hosted cells require tools, so they become bounded assistant reference notes.
+  const kept = renderCompactionSearchHistoryItems(input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
     // leaving it in would break the no-tools invariant even with `tools` removed.
-    || (item.type !== "compaction_trigger" && item.type !== "additional_tools"));
+    || (item.type !== "compaction_trigger" && item.type !== "additional_tools")));
   return {
     ...rest,
+    // Lite validates this flag even when the summarizer has no callable tools.
+    ...(responsesLite ? { parallel_tool_calls: false } : {}),
     input: [
       ...(stripInputImagesDeep(kept) as unknown[]),
       { type: "message", role: "user", content: [{ type: "input_text", text: COMPACT_PROMPT }] },
@@ -252,8 +276,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.headers) Object.assign(headers, provider.headers);
       }
       // Some Responses-compatible gateways select their Codex compatibility path from the real
-      // client fingerprint. This is a single non-credential fallback, not broader caller-header
-      // forwarding. Static provider headers remain authoritative in either auth mode.
+      // client fingerprint. Additional caller metadata is opt-in; static provider headers remain
+      // authoritative in either auth mode.
+      applyConfiguredClientHeaderForwarding(headers, incoming, provider);
       applyCallerUserAgentFallback(headers, incoming);
 
       const forward = provider.authMode === "forward";
@@ -374,7 +399,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // OpenAI model inheriting history a routed provider had damaged.
       outBody = repairLegacyDottedToolCallNames(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
-        outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        if (provider.preserveResponsesMessageMetadata !== true) {
+          outBody = stripInternalChatMessageMetadataPassthrough(outBody);
+        }
         // The same class of private field, one level up, but keyed on the DESTINATION rather than
         // on the canonical surface alone. `src/server/responses/compact.ts` spreads the caller's
         // raw body into the native `/responses/compact` request without passing through this
@@ -446,11 +473,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // sanitizers below can still run after it.
       outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
       if (parsed._compactionRequest === true && (!isCanonicalOpenAiForwardProvider(provider) || parsed._portableCompaction === true)) {
-        outBody = buildRoutedCompactionBody(outBody);
+        outBody = buildRoutedCompactionBody(outBody, new Headers(headers).get(CODEX_RESPONSES_LITE_HEADER) === "true");
       }
       // Run after routed compaction so nested input_image parts are replaced before a malformed
       // tool output is flattened to text and can no longer be inspected structurally.
       outBody = repairUnidentifiedToolOutputItems(outBody);
+      outBody = stripKimiEmptyAssistantMessages(outBody, url);
       if (parsed._plaintextV2AgentMessages === true && isCanonicalOpenAiForwardProvider(provider)) {
         const prepared = preparePlaintextV2AgentMessages(outBody);
         outBody = prepared.body;
@@ -473,6 +501,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
                   threadServingIdentityChanged,
+                  parsed._compactionRequest !== true,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
@@ -480,12 +509,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,
                   requirePlaintextReasoning: requiresPlaintextReasoningReplay(provider),
+                  onPlaintextReasoningBlanked: () => notePlaintextReasoningDropped(provider),
                 },
               ),
               provider,
             ),
           ),
           isXaiResponsesDestination(provider),
+          provider.preserveResponsesInputItemIds === true,
         ),
         isXaiSchemaTarget(provider),
       );
@@ -590,112 +621,121 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let compactionEncryptedContent: string | undefined;
       let compactionEncryptedContentBytes = 0;
       let completedSeen = false;
-      for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
-        let payload: unknown;
-        try { payload = JSON.parse(event.data); } catch { continue; }
-        if (!isPlainObject(payload)) continue;
-        switch (payload.type) {
-          case "response.output_text.delta":
-            if (typeof payload.delta === "string") {
-              const next = deltas + payload.delta;
-              const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              deltas = next;
-              reservation.commitRetained();
-              budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
-              deltasBytes = nextBytes;
-              if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
-            }
-            break;
-          case "response.output_text.done":
-            if (typeof payload.text === "string") {
-              const next = doneText + payload.text;
-              const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              doneText = next;
-              reservation.commitRetained();
-              budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
-              doneTextBytes = nextBytes;
-              if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
-            }
-            break;
-          case "response.failed":
-          case "error":
-            yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.incomplete":
-            yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
-            return;
-          case "response.completed":
-            {
-              completedSeen = true;
-              const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
-              const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
-              const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
-              if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
-                const nextEncryptedContent = compaction.encrypted_content;
-                const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
-                const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContent = nextEncryptedContent;
+      let ciphertextTransferred = false;
+      try {
+        for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
+          let payload: unknown;
+          try { payload = JSON.parse(event.data); } catch { continue; }
+          if (!isPlainObject(payload)) continue;
+          switch (payload.type) {
+            case "response.output_text.delta":
+              if (typeof payload.delta === "string") {
+                const next = deltas + payload.delta;
+                const nextBytes = appendedUtf8Bytes(deltasBytes, deltasLastCodeUnit, payload.delta);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                deltas = next;
                 reservation.commitRetained();
-                budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
-                compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                budget.releaseRetained(deltasBytes, { kind: "retained_collectors" });
+                deltasBytes = nextBytes;
+                if (payload.delta.length > 0) deltasLastCodeUnit = payload.delta.charCodeAt(payload.delta.length - 1);
               }
-              const next = responsesPayloadText(payload.response);
-              const nextBytes = Buffer.byteLength(next, "utf8");
-              const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
-              snapshot = next;
-              reservation.commitRetained();
-              budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
-              snapshotBytes = nextBytes;
-            }
-            {
-              const nextUsage = usageFromResponsesPayload(payload.response);
-              // The attached raw usage object can be event-sized (unknown keys carry arbitrary
-              // values); it stays reachable until the terminal yields, so charge it like the
-              // adjacent retained collectors or it would defeat the per-request memory cap.
-              const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
-                : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
-              if (nextRawBytes > 0) {
-                const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
-                usage = nextUsage;
+              break;
+            case "response.output_text.done":
+              if (typeof payload.text === "string") {
+                const next = doneText + payload.text;
+                const nextBytes = appendedUtf8Bytes(doneTextBytes, doneTextLastCodeUnit, payload.text);
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                doneText = next;
                 reservation.commitRetained();
-              } else {
-                usage = nextUsage;
+                budget.releaseRetained(doneTextBytes, { kind: "retained_collectors" });
+                doneTextBytes = nextBytes;
+                if (payload.text.length > 0) doneTextLastCodeUnit = payload.text.charCodeAt(payload.text.length - 1);
               }
-              if (usageRawBytes > 0) {
-                budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+              break;
+            case "response.failed":
+            case "error":
+              yield { type: "error", message: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.incomplete":
+              yield { type: "incomplete", reason: responsesErrorMessage(payload.response ?? payload) };
+              return;
+            case "response.completed":
+              {
+                completedSeen = true;
+                const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
+                const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
+                const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
+                if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
+                  const nextEncryptedContent = compaction.encrypted_content;
+                  const nextEncryptedContentBytes = Buffer.byteLength(nextEncryptedContent, "utf8");
+                  const reservation = budget.reserveTransient(nextEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContent = nextEncryptedContent;
+                  reservation.commitRetained();
+                  budget.releaseRetained(compactionEncryptedContentBytes, { kind: "retained_collectors" });
+                  compactionEncryptedContentBytes = nextEncryptedContentBytes;
+                }
+                const next = responsesPayloadText(payload.response);
+                const nextBytes = Buffer.byteLength(next, "utf8");
+                const reservation = budget.reserveTransient(nextBytes, { kind: "retained_collectors" });
+                snapshot = next;
+                reservation.commitRetained();
+                budget.releaseRetained(snapshotBytes, { kind: "retained_collectors" });
+                snapshotBytes = nextBytes;
               }
-              usageRawBytes = nextRawBytes;
-            }
-            break;
+              {
+                const nextUsage = usageFromResponsesPayload(payload.response);
+                // The attached raw usage object can be event-sized (unknown keys carry arbitrary
+                // values); it stays reachable until the terminal yields, so charge it like the
+                // adjacent retained collectors or it would defeat the per-request memory cap.
+                const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
+                  : Buffer.byteLength(JSON.stringify(nextUsage.rawUsage), "utf8");
+                if (nextRawBytes > 0) {
+                  const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
+                  usage = nextUsage;
+                  reservation.commitRetained();
+                } else {
+                  usage = nextUsage;
+                }
+                if (usageRawBytes > 0) {
+                  budget.releaseRetained(usageRawBytes, { kind: "retained_collectors" });
+                }
+                usageRawBytes = nextRawBytes;
+              }
+              break;
+          }
+          // Buffered text is still upstream progress, but gateway keepalives are not.
+          // Yield after accounting, directly to the consumer: no progress queue or content leak.
+          if (
+            !completedSeen
+            && (payload.type === "response.output_text.delta"
+              || payload.type === "response.reasoning_summary_text.delta"
+              || payload.type === "response.reasoning_text.delta")
+            && typeof payload.delta === "string"
+            && payload.delta.length > 0
+          ) {
+            yield { type: "heartbeat" };
+          }
         }
-        // Buffered text is still upstream progress, but gateway keepalives are not.
-        // Yield after accounting, directly to the consumer: no progress queue or content leak.
-        if (
-          !completedSeen
-          && (payload.type === "response.output_text.delta"
-            || payload.type === "response.reasoning_summary_text.delta"
-            || payload.type === "response.reasoning_text.delta")
-          && typeof payload.delta === "string"
-          && payload.delta.length > 0
-        ) {
-          yield { type: "heartbeat" };
-        }
+        // Gateways differ in which of these they emit; prefer the authoritative
+        // completed snapshot so text is never double-counted.
+        const text = snapshot || doneText || deltas;
+        if (text) yield { type: "text_delta", text };
+        const done: AdapterEvent = {
+          type: "done",
+          ...(usage ? { usage } : {}),
+          ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+        };
+        // Exact event ownership survives buffered collection without charging a second copy.
+        transferCompactionCiphertextLease(done, budget, compactionEncryptedContentBytes);
+        ciphertextTransferred = true;
+        yield done;
+      } finally {
+        budget.releaseRetained(
+          deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes
+            + (ciphertextTransferred ? 0 : compactionEncryptedContentBytes),
+          { kind: "retained_collectors" },
+        );
       }
-      // Gateways differ in which of these they emit; prefer the authoritative
-      // completed snapshot so text is never double-counted.
-      const text = snapshot || doneText || deltas;
-      if (text) yield { type: "text_delta", text };
-      budget.releaseRetained(
-        deltasBytes + doneTextBytes + snapshotBytes + usageRawBytes,
-        { kind: "retained_collectors" },
-      );
-      yield {
-        type: "done",
-        ...(usage ? { usage } : {}),
-        ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
-      };
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {

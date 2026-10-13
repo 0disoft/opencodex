@@ -332,7 +332,7 @@ OpenCodex отслеживает состояние, удерживаемое п
   хранилища native control replay: оно закреплено и не вытесняется.
 - **4 наблюдаемых буфера** (аккумуляторы транслятора, хвосты image/OAuth/Grok)
   мониторятся по байтовому давлению in-flight без вытеснения.
-- **28 регистраций state-store** выполняют sweeps истечения (интервал 60 с) и сверку
+- **31 регистрация state-store** выполняет sweeps истечения (интервал 60 с) и сверку
   поколений конфигурации, чтобы удалять устаревшие ключи провайдеров и аккаунтов.
 - **Мемо пути и отпечатков** (метаданные рабочей области, усиленные идентификаторы,
   соли установки, возможности mode-hint) используют LRU-потолки в порядке вставки
@@ -386,7 +386,7 @@ Combo JEV может вместо этого обращаться к самос�
 <!-- sponsors:main-first-mention -->
 OpenAI (вход ChatGPT или API-ключ), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (локально + Cloud), Cursor (экспериментально) и любой OpenAI-совместимый endpoint — плюс DeepSeek,
-Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
+Groq, OpenRouter, OpenGateway, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, Qoder Global и CN (официальный PAT + CLI), SiliconFlow и другие. Полный список: `ocx init` или
 [документация по провайдерам](https://opencodex.me/ru/guides/providers/).
 
@@ -473,8 +473,8 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Разработка
 
-Разработка из исходников требует CLI `bun` в вашем `PATH`. Это отдельно от встроенного рантайма Bun
-опубликованного npm-пакета, который используют только установленные команды `ocx`.
+Разработка из исходников требует CLI `bun` в вашем `PATH`. Опубликованный npm-пакет содержит свой рантайм Bun
+для установленных команд `ocx`; скрипты пакета также могут находить Bun через эту встроенную зависимость.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git

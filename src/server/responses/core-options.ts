@@ -1,3 +1,4 @@
+import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
 import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
 import type { RouteResult } from "../../router";
@@ -15,6 +16,7 @@ import type { ExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import type { CallerDirectAuth } from "../../providers/caller-authorization";
 import type { CompactionRoutingOverride } from "./compaction-routing";
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import type { NativeReasoningOwner } from "../../responses/reasoning-replay-cache";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import type { UpstreamHostAdmissionLease } from "../../codex/upstream-host-health";
@@ -24,8 +26,12 @@ import type { PolicyRequestScope } from "./policy-request-scope";
 export interface ConsumedComboFailure {
   response: Response;
   classificationText: string;
+  /** Complete bounded-envelope evidence captured before display truncation; never serialized. */
+  codexModelRefusal?: CodexAccountModelRefusal;
   /** Structured upstream `error.code` when present in the failure body. */
   upstreamCode?: string;
+  /** Sanitized structured `error.message`; compared only against proxy-owned constants, never emitted. */
+  upstreamMessage?: string;
   /** Complete structured provider type, retained for conservative recovery classification. */
   upstreamType?: string;
   /** Valid numeric/date value used only for cooldown calculation. */
@@ -68,7 +74,7 @@ export interface HandleResponsesOptions {
   compactionRecoveryKind?: "compaction-v1" | "compaction-v2";
   onCompactionRecoveryRoute?: (route: RouteResult) => void;
   onCompactionRecoveryAdapterEvent?: (event: AdapterEvent) => void;
-  /** Physical-send reports already delivered to the shared used setter, including booking settlement. */
+  /** Physical-send reports already delivered to the shared ledger, including exact booking settlement. */
   onCompactionRecoverySendsReported?: (count: number) => void;
   /** Private holder for the Kiro serving-account lease. */
   accountLoad?: { lease: AccountLease | null; cancelled: boolean };
@@ -131,6 +137,10 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  nativeReasoningReplay?: ReadonlyMap<string, string>;
+  nativeReasoningMint?: { owner?: NativeReasoningOwner };
+  /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
+  droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
   protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
@@ -153,6 +163,10 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
+  comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
+  /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
+  comboDispatchPermit?: SingleUseDispatchPermit;
   /** Internal handoff: this combo was selected by shadow-call interception. */
   shadowCallIntercepted?: boolean;
   /** Internal handoff: the memory phase this turn belongs to, so combo children keep its routing. */

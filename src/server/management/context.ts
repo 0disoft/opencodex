@@ -48,6 +48,7 @@ export interface ManagementApiDeps {
   /** Bound to this server's lifecycle owner; absent in direct route tests. */
   listLowQuotaEvents?: (limit?: number) => LowQuotaEvent[];
   /** Bound Claude intercept state, injectable for isolated management-route tests. */
+  ensureClaudeIntercept?: () => Promise<import("../../claude/intercept/runtime").ClaudeInterceptOutcome>;
   getClaudeInterceptState?: typeof import("../../claude/intercept/runtime").getClaudeInterceptState;
   /** Reconciliation seam for field-scoped rollback tests. */
   reconcileClaudeFirstPartySettings?: typeof import("../../claude/first-party-settings").reconcileClaudeFirstPartySettings;
@@ -63,8 +64,8 @@ export interface ManagementApiDeps {
   refreshOwnedCatalogIntegrations?: typeof refreshOwnedCatalogIntegrations;
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
   platform?: NodeJS.Platform;
-  toggleCodexMultiAgentV2?: (enabled: boolean) => void;
-  toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
+  toggleCodexMultiAgentV2?: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void;
+  toggleDefaultModeRequestUserInput?: (enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
   /** Test-only destination for best-effort Claude agent-definition sync. */
   claudeAgentConfigDir?: string;
@@ -151,7 +152,7 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog">;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;
@@ -159,7 +160,7 @@ export interface ManagementApiDeps {
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
-  /** The port this runtime listens on; a join is refused unless it is the configured port. */
+  /** Bound public inference port, not the ingress receiving this management request. */
   liveListenPort?: () => number | undefined;
   now?: () => number;
 }
@@ -189,4 +190,11 @@ export interface ManagementContext {
   guiSessionIssuance: import("../gui-session").GuiSessionIssuance | null;
   convergeCodexCatalog: () => Promise<CatalogDisposition>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
+}
+
+/** A management-only ingress cannot supply the port used by generated inference clients. */
+export function managementInferencePort(ctx: Pick<ManagementContext, "config" | "deps">): number {
+  // Lifecycle owns the actual port (including CLI overrides/ephemeral binds); direct route
+  // fixtures fall back to config without consulting another runtime's state file.
+  return ctx.deps.liveListenPort?.() ?? ctx.config.port;
 }

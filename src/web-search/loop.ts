@@ -1,6 +1,7 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxConfig, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
@@ -11,7 +12,7 @@ import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
 import type { WebSearchBackendId } from "./index";
-import { clearableDeadline } from "../lib/abort";
+import { pacingHeaderDeadline } from "./header-deadline";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
@@ -298,6 +299,7 @@ export interface WebSearchLoopDeps {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
+  beforeSidecarDispatch?: () => void;
   /** Cumulative per-iteration deadline for DNS/TCP/TLS and final response headers only. */
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
@@ -321,7 +323,7 @@ export interface WebSearchLoopDeps {
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -352,6 +354,8 @@ export interface WebSearchLoopDeps {
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
     | Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null>;
+  /** Release a credential-hop permit if this iteration ended before the adapter used it. */
+  onIterationEnd?: () => void;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called only when the final bridged Responses stream reaches completed or incomplete. */
@@ -382,9 +386,6 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const messages: OcxMessage[] = [...parsed.context.messages];
   const loopT0 = Date.now();
   const allTools = parsed.context.tools ?? [];
-  // For the forced-answer pass we drop the synthetic web_search tool so the model MUST answer from the
-  // results already in `messages` (can't search again) — this guarantees a non-empty final answer.
-  const toolsNoWebSearch = allTools.filter(t => !t.webSearch);
   let searchesExecuted = 0;
   let executedSearchCount = 0;
   // Queries whose search already failed this turn — repeats are short-circuited so a model that keeps
@@ -438,8 +439,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
-    // On the forced-answer pass the synthetic web_search tool is gone, so the model MUST answer
-    // from the results already in `messages`. A weak model can still produce a thin answer that
+    // On the forced-answer pass the model is asked to answer from the results already in
+    // `messages`. A weak model can still produce a thin answer that
     // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
     // (iteration-locally — never mutate the shared `messages`) to actually use the gathered results.
     // Only when a REAL search ran (executedSearchCount, not empty-query/limit/repeat placeholders).
@@ -455,12 +456,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
       ...(recoveringEmptyAnswer ? { options: { ...parsed.options, toolChoice: "none" as const } } : {}),
-      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : forceAnswer ? toolsNoWebSearch : allTools },
+      context: { ...parsed.context, messages: iterMessages, tools: recoveringEmptyAnswer ? [] : allTools },
     };
-    // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
+    // One cumulative header deadline spans key rotations and reset sends, excluding local pacing.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
     // the returned response body through AbortSignal.any().
-    let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
     try {
       /**
        * Build and fetch one web-search iteration on the given adapter, under the iteration
@@ -493,7 +494,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = deps.fetchForRequest?.(request, iterParsed) ?? routedProviderFetch;
+        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter) ?? routedProviderFetch);
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -503,7 +504,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
+              sendBudget: deps.incomingMeta.sendBudget,
+              onPhysicalSend: deps.incomingMeta.onPhysicalSend,
               executor: requestFetch,
+              onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -565,7 +569,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // The deliberate backoff must not consume the cumulative response-header deadline:
         // start a fresh one so the replay gets a new connect budget (504 stays reserved for real
         // upstream latency).
-        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
         // Stall-watchdog seam between bounded retry fetches.
         yield { type: "heartbeat" };
         prepared = await fetchOnce(adapter, "rate-limit-429");
@@ -573,18 +577,36 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while ((prepared.response.status === 429
-        || (prepared.response.status === 403 && deps.incomingMeta?.providerName === "anthropic" && !accountRefusalOutputStarted)
+        || (prepared.response.status === 401 && isAnthropicInstanceId(deps.incomingMeta?.providerName)
+          && !accountRefusalOutputStarted)
+        || (prepared.response.status === 403
+          && (isAnthropicInstanceId(deps.incomingMeta?.providerName) || deps.incomingMeta?.providerName === "google-antigravity")
+          && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
-        // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
-        // it, but proceed immediately to the rotated fetch under the SAME deadline signal.
-        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        const retainRefusal = prepared.response.status === 403
+          && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
+        // Keep the bounded refusal readable until the sibling actually returns headers.
+        // Other rotation paths retain their existing cancellation boundary.
+        if (!retainRefusal) {
+          try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        }
         adapter = rotated.adapter;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
-        prepared = await fetchOnce(adapter, rotated.recoveryKind);
+        let replacement: IterationResponse;
+        try {
+          replacement = await fetchOnce(adapter, rotated.recoveryKind);
+        } catch (error) {
+          if (!retainRefusal || signal.aborted || headerDeadline.didExpire() || isTranslatorBudgetExceededError(error)) throw error;
+          break; // Format the original 403 safely; replacement diagnostics are not client errors.
+        }
+        if (retainRefusal) {
+          try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        }
+        prepared = replacement;
       }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
@@ -625,6 +647,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       headerDeadline.clear();
+      deps.onIterationEnd?.();
     }
   };
 
@@ -764,7 +787,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               ? await runExaWebSearch(query, deps.exaApiKey, settings, signal)
               : { text: "", sources: [], error: "exa backend selected without an exaApiKey" };
           } else {
-            outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome);
+            outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.beforeSidecarDispatch);
           }
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
         } catch (e) {
@@ -885,8 +908,13 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
           // Loop (search + re-ask) ONLY when the model's actionable output is purely web_search. A real
           // tool call (e.g. shell/apply_patch) means this turn is terminal for Codex — finalize so those
-          // calls reach Codex. forceAnswer also finalizes.
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+          // calls reach Codex.
+          // The budget check happens per query inside runSearchCall, so a
+          // forced pass that emits one more web_search call is served the
+          // limit-reached result instead of failing the turn (#6464: stripping
+          // the declaration makes some models emit the raw call as visible
+          // text).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall;
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -959,6 +987,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return;
         }
       }
+      yield { type: "error", message: "web-search loop exceeded its iteration cap" };
     } finally {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
