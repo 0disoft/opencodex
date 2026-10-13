@@ -18,6 +18,7 @@ import {
   REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES,
   REQUEST_HISTORY_WORKER_MIN_BYTES,
   requestHistoryDb,
+  requestHistoryCheckpointStateForTests,
   RequestHistoryIndexBusyError,
   RequestHistoryIndexClosedError,
   setRequestHistoryBudgetsForTests,
@@ -464,5 +465,61 @@ describe("request-history serving-thread I/O", () => {
     appendFileSync(usageLogPath(), `${row(7000)}\n`);
     expect((await openRequestHistoryIndex()).indexedRows).toBe(41);
     expect(walSalt(meta.dbPath)).toBe(salt);
+  });
+
+  test("a checkpoint retry never starts while a tail is still writing", async () => {
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 20 });
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const reader = new Database(first.dbPath, { readonly: true });
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    const big = (start: number) => Array.from({ length: 6 }, (_, index) => row(start + index, { pad: "t".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big(8000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    // Wait for the held-back checkpoint to finish and arm its retry.
+    for (let index = 0; index < 2000 && !(requestHistoryCheckpointStateForTests().running === null && requestHistoryCheckpointStateForTests().retryPending); index++) await turn();
+    expect(requestHistoryCheckpointStateForTests().retryPending).toBe(true);
+
+    // A tail spread over many steps; the retry timer fires while it runs.
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 20, sliceMs: 0 });
+    appendFileSync(usageLogPath(), `${big(9000).join("\n")}\n`);
+    let settled = false;
+    const tail = openRequestHistoryIndex().finally(() => { settled = true; });
+    let startedDuringTail = false;
+    while (!settled) {
+      if (requestHistoryCheckpointStateForTests().running !== null) startedDuringTail = true;
+      await turn();
+    }
+    expect((await tail).indexedRows).toBe(22);
+    expect(startedDuringTail).toBe(false);
+    reader.exec("COMMIT");
+    reader.close();
+  }, 30_000);
+
+  test("a checkpoint that finishes after close leaves no retry state for the reopened index", async () => {
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 60_000 });
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const reader = new Database(first.dbPath, { readonly: true });
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    const big = (start: number) => Array.from({ length: 6 }, (_, index) => row(start + index, { pad: "u".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big(10_000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    expect(requestHistoryCheckpointStateForTests().running).toBe(first.dbPath);
+    // Close while the held-back checkpoint runs, then reopen the same generation.
+    closeRequestHistoryIndex();
+    expect((await openRequestHistoryIndex()).dbPath).toBe(first.dbPath);
+    await drainRequestHistoryIoForTests();
+    expect(requestHistoryCheckpointStateForTests().retryPending).toBe(false);
+    reader.exec("COMMIT");
+    reader.close();
+
+    const sizeBefore = statSync(first.dbPath).size;
+    appendFileSync(usageLogPath(), `${big(11_000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(22);
+    await drainRequestHistoryIoForTests();
+    expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
   });
 });

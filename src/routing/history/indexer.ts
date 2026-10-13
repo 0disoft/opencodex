@@ -224,7 +224,7 @@ let checkpointJob: Promise<void> | null = null;
 let checkpointJobPath: string | null = null;
 // The generation whose checkpoint a reader held back and a timer will retry;
 // its tails wait for that retry. Other generations are unaffected.
-let checkpointRetryPath: string | null = null;
+let checkpointRetry: { path: string; lifetime: number } | null = null;
 // Serving handles whose close waits for a worker to hold the file first.
 const deferredCloses = new Set<Promise<void>>();
 // A worker rebuild hands reclamation over once its worker has exited (it held
@@ -400,12 +400,18 @@ const CHECKPOINT_ATTEMPTS = 12;
  * bound. The worker truncates the WAL, so its size measures what is owed.
  */
 function noteTail(path: string): void {
-  if (checkpointRetryPath === path) return;
+  if (checkpointRetry?.path === path && checkpointRetry.lifetime === lifetime) return;
   let walBytes = 0;
   try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
   if (walBytes >= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) scheduleCheckpoint(path);
 }
 
+/**
+ * Start a checkpoint job. Callers start it only when no serving write into
+ * `path` can follow in the same flight: at the end of a tail, or from the
+ * retry timer while no flight runs. A flight that starts while the job runs
+ * waits for it before its tail (refreshOnce).
+ */
 function scheduleCheckpoint(path: string, attempt = 1): void {
   if (checkpointJob) return;
   const token = lifetime;
@@ -416,15 +422,32 @@ function scheduleCheckpoint(path: string, attempt = 1): void {
   checkpointJob = trackIo(run).then(() => {
     checkpointJob = null;
     checkpointJobPath = null;
+    // A close since the job started owns no retry state of this one.
+    if (lifetime !== token) return;
     if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
     // A reader pinned part of the WAL, and nothing guarantees another tail
     // soon: retry while this generation is still the one being served.
-    checkpointRetryPath = path;
-    const retry = setTimeout(() => {
-      if (checkpointRetryPath === path) checkpointRetryPath = null;
-      if (lifetime === token && open?.path === path) scheduleCheckpoint(path, attempt + 1);
-    }, checkpointRetryMs);
-    (retry as { unref?: () => void }).unref?.();
+    const marker = { path, lifetime: token };
+    checkpointRetry = marker;
+    const arm = () => {
+      const retry = setTimeout(() => {
+        if (checkpointRetry !== marker) return;
+        if (lifetime !== token || open?.path !== path) {
+          checkpointRetry = null;
+          return;
+        }
+        // A refresh in flight may still write into this generation between
+        // its steps; the checkpoint must not run under it.
+        if (flight) {
+          arm();
+          return;
+        }
+        checkpointRetry = null;
+        scheduleCheckpoint(path, attempt + 1);
+      }, checkpointRetryMs);
+      (retry as { unref?: () => void }).unref?.();
+    };
+    arm();
   });
 }
 
@@ -997,7 +1020,7 @@ export function closeRequestHistoryIndex(options: { checkpointOnWorker?: "large"
   }
   closeOpenGeneration(options.checkpointOnWorker === "always");
   cancelReclaim();
-  checkpointRetryPath = null;
+  checkpointRetry = null;
   integrityReason = null;
   epoch += 1;
 }
@@ -1134,6 +1157,11 @@ export function setRequestHistoryBudgetsForTests(
 
 /** Where a full rebuild runs: by ledger size (auto), always inline, or always on the worker. */
 export type RequestHistoryRebuildWorkerMode = "auto" | "inline" | "worker";
+
+/** Test seam: the generation a checkpoint job is working on, and whether a retry is armed. */
+export function requestHistoryCheckpointStateForTests(): { running: string | null; retryPending: boolean } {
+  return { running: checkpointJob ? checkpointJobPath : null, retryPending: checkpointRetry !== null };
+}
 
 /** Test seam: pin where full rebuilds run; null restores the size rule. */
 export function setRequestHistoryRebuildWorkerForTests(mode: RequestHistoryRebuildWorkerMode | null): void {
