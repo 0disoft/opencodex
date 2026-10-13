@@ -29,7 +29,10 @@ import type { RebuildWorkerReply, RebuildWorkerRequest } from "./rebuild-protoco
 declare const self: Worker;
 
 let build: Database | null = null;
-let held: Database | null = null;
+// Generations this worker keeps open so the serving thread's open or close is
+// never the first or last connection: the superseded one (its close
+// checkpoints here) and the newly published one.
+let held: Database[] = [];
 
 function closeQuietly(handle: Database | null): void {
   try { handle?.close(); } catch { /* already closed */ }
@@ -43,6 +46,13 @@ function failure(error: unknown): RebuildWorkerReply {
     message: error instanceof Error ? error.message : String(error),
     code: typeof code === "string" ? code : null,
   };
+}
+
+function holdOpen(path: string): void {
+  const generation = new Database(path, { readwrite: true });
+  held.push(generation);
+  generation.exec("PRAGMA journal_mode = WAL");
+  generation.query("SELECT value FROM schema_meta LIMIT 1").get();
 }
 
 function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
@@ -67,26 +77,31 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
     }
     case "publish": {
       renameSync(request.buildPath, request.generationPath);
-      const generation = new Database(request.generationPath, { readwrite: true });
-      held = generation;
-      generation.exec("PRAGMA journal_mode = WAL");
-      generation.query("SELECT value FROM schema_meta LIMIT 1").get();
+      holdOpen(request.generationPath);
+      return { type: "held" };
+    }
+    case "hold": {
+      holdOpen(request.path);
       return { type: "held" };
     }
     case "release": {
-      closeQuietly(held);
-      held = null;
+      for (const generation of held) closeQuietly(generation);
+      held = [];
       return { type: "released" };
     }
     case "checkpoint": {
       const db = new Database(request.path, { readwrite: true });
       try {
         db.exec("PRAGMA busy_timeout = 1000");
-        db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
+        const result = db.query("PRAGMA wal_checkpoint(PASSIVE)").get() as
+          | { busy: number; log: number; checkpointed: number }
+          | undefined;
+        // A reader pinning older frames leaves part of the WAL behind.
+        const complete = result !== undefined && result.busy === 0 && result.checkpointed >= result.log;
+        return { type: "checkpointed", complete };
       } finally {
         closeQuietly(db);
       }
-      return { type: "checkpointed" };
     }
     case "reclaim": {
       let removed = 0;

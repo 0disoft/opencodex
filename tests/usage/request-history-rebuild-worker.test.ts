@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -19,6 +19,7 @@ import {
   requestHistoryDb,
   RequestHistoryIndexBusyError,
   RequestHistoryIndexClosedError,
+  setRequestHistoryBudgetsForTests,
   setRequestHistoryRebuildWorkerForTests,
   setRequestHistoryStepObserverForTests,
   withRequestHistoryIndex,
@@ -97,6 +98,7 @@ afterEach(async () => {
   closeRequestHistoryIndex();
   await drainRequestHistoryIoForTests();
   setRequestHistoryRebuildWorkerForTests(null);
+  setRequestHistoryBudgetsForTests(null);
   setRequestHistoryStepObserverForTests(null);
   await flushConfigDirHardeningForTests();
   await flushWindowsSecretAclReapsBeforeRemoval(testDir);
@@ -167,7 +169,7 @@ describe("request-history rebuild worker", () => {
 
     const read = openRequestHistoryIndex();
     const outcome = read.then(() => null, (error: unknown) => error);
-    expect(phases).toContain("worker-build");
+    expect(phases).toContain("worker-hold");
     closeRequestHistoryIndex();
     expect(await outcome).toBeInstanceOf(RequestHistoryIndexClosedError);
 
@@ -197,7 +199,7 @@ describe("request-history rebuild worker", () => {
     const phases = observePhases();
 
     const read = openRequestHistoryIndex();
-    expect(phases).toContain("worker-build");
+    expect(phases).toContain("worker-hold");
     const replacement = join(getConfigDir(), "usage.replacement.jsonl");
     writeFileSync(replacement, `${rows(7, 1000).join("\n")}\n`);
     renameSync(replacement, usageLogPath());
@@ -210,6 +212,23 @@ describe("request-history rebuild worker", () => {
     expect(phases.filter(phase => phase === "worker-build").length).toBeGreaterThanOrEqual(2);
     await drainRequestHistoryIoForTests();
     expect(indexFiles("b")).toEqual([]);
+  });
+
+  test("a worker rebuild holds the superseded generation and reclaims it once its worker exits", async () => {
+    setRequestHistoryRebuildWorkerForTests("worker");
+    writeLedger(`${rows(60).join("\n")}\n`);
+    const phases = observePhases();
+    const first = await openRequestHistoryIndex();
+    phases.length = 0;
+    const second = await rebuildRequestHistoryIndex();
+    expect(second.dbPath).not.toBe(first.dbPath);
+    // The worker took the old generation before the serving thread let go of it.
+    expect(phases.indexOf("worker-hold")).toBeGreaterThanOrEqual(0);
+    expect(phases.indexOf("worker-hold")).toBeLessThan(phases.indexOf("worker-build"));
+    // The manual rebuild waits for the handoff, so the old files are gone here.
+    expect(existsSync(first.dbPath)).toBe(false);
+    expect(indexFiles("g")).toEqual([basename(second.dbPath)]);
+    expect(second.indexedRows).toBe(60);
   });
 });
 
@@ -255,6 +274,30 @@ describe("request-history serving-thread I/O", () => {
     // The pages reached the database file, which only a checkpoint does.
     expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
     expect((await openRequestHistoryIndex()).indexedRows).toBe(18);
+  });
+
+  test("a checkpoint a reader held back is retried after the reader lets go", async () => {
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 20 });
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const sizeBefore = statSync(first.dbPath).size;
+    const reader = new Database(first.dbPath, { readonly: true });
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    const big = Array.from({ length: 8 }, (_, index) => row(700 + index, { pad: "q".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big.join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(18);
+    await drainRequestHistoryIoForTests();
+    // The pinned snapshot kept the new frames in the WAL.
+    expect(statSync(first.dbPath).size - sizeBefore).toBeLessThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+    reader.exec("COMMIT");
+    reader.close();
+    // No further tail arrives; the retry alone moves the pages.
+    for (let attempt = 0; attempt < 200 && statSync(first.dbPath).size - sizeBefore <= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await drainRequestHistoryIoForTests();
+    }
+    expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
   });
 
   test("a build that fails to initialize removes its private file", () => {

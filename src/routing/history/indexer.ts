@@ -213,6 +213,9 @@ let flight: Flight | null = null;
 let reclaimQueue: ReclaimQueue | null = null;
 // At most one WAL checkpoint job at a time.
 let checkpointJob: Promise<void> | null = null;
+// A worker rebuild hands reclamation over once its worker has exited (it held
+// the superseded generation open until then); a manual rebuild waits for it.
+let reclaimHandoff: Promise<void> | null = null;
 let integrityReason: string | null = null;
 let epoch = 0;
 // Advances on every close; work queued before a close must not start afterwards.
@@ -347,14 +350,29 @@ function scheduleReclaim(paths: string[], maxWalBytes: number): void {
  * WAL above the bound, a worker checkpoints it (PASSIVE: readers are never
  * blocked, and a pinned reader only defers it to a later tail).
  */
-function scheduleCheckpoint(path: string): void {
+const CHECKPOINT_RETRY_MS = 5_000;
+let checkpointRetryMs = CHECKPOINT_RETRY_MS;
+const CHECKPOINT_ATTEMPTS = 12;
+
+function scheduleCheckpoint(path: string, attempt = 1): void {
   if (checkpointJob) return;
   let walBytes = 0;
   try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
   if (walBytes < REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) return;
+  const token = lifetime;
   const job = new IndexWorkerJob();
-  checkpointJob = trackIo(job.checkpoint(path).then(() => job.dispose(), () => job.dispose()))
-    .then(() => { checkpointJob = null; });
+  let complete = false;
+  const run = job.checkpoint(path).then(done => { complete = done; }, () => undefined).then(() => job.dispose());
+  checkpointJob = trackIo(run).then(() => {
+    checkpointJob = null;
+    if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
+    // A reader pinned part of the WAL, and nothing guarantees another tail
+    // soon: retry while this generation is still the one being served.
+    const retry = setTimeout(() => {
+      if (lifetime === token && open?.path === path) scheduleCheckpoint(path, attempt + 1);
+    }, checkpointRetryMs);
+    (retry as { unref?: () => void }).unref?.();
+  });
 }
 
 function openGeneration(path: string): Database {
@@ -476,14 +494,16 @@ function* rebuildSteps(
   stepPhase = "prepare";
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   removeAbandonedBuilds(dir);
+  const onWorker = revision !== null && rebuildOnWorker(revision);
   // Rows of a superseded generation stay unreachable for the whole build, and
   // health evidence computed from them stops being served from cache.
-  retireOpenGeneration(paths.reclaimMaxWalBytes);
+  // The worker path retires it only once its worker holds it open.
+  if (!onWorker) retireOpenGeneration(paths.reclaimMaxWalBytes);
   epoch += 1;
   const { buildPath } = newGenerationNames(dir);
   removeBuildFiles(buildPath);
-  if (revision !== null && rebuildOnWorker(revision)) {
-    return yield* workerRebuildSteps(paths, reason, revision, buildPath);
+  if (onWorker) {
+    return yield* workerRebuildSteps(paths, reason, revision!, buildPath);
   }
   // Captured once: a later test reset cannot redirect this publication.
   const io = publishIo;
@@ -563,7 +583,14 @@ function* rebuildSteps(
     },
   });
   stepPhase = "publish-open";
-  return adoptPublished(paths, generationPath, revision, path => io.openGeneration(path, openGeneration));
+  const settled = adoptPublished(paths, generationPath, revision, path => io.openGeneration(path, openGeneration));
+  scheduleReclaimAfter(paths, generationPath);
+  return settled;
+}
+
+/** Older generations and the single-file index from before generations go once nothing has them open. */
+function scheduleReclaimAfter(paths: IndexPaths, generationPath: string): void {
+  scheduleReclaim([...supersededGenerations(paths.dir, generationPath), paths.legacyPath], paths.reclaimMaxWalBytes);
 }
 
 /** Open a just-published generation, check it is still current, and make it the serving index. */
@@ -585,9 +612,6 @@ function adoptPublished(
   integrityReason = null;
   epoch += 1;
   open = { handle, path: generationPath };
-  // Older generations and the single-file index from before generations go
-  // once nothing has them open, after this refresh has already settled.
-  scheduleReclaim([...supersededGenerations(dir, generationPath), paths.legacyPath], paths.reclaimMaxWalBytes);
   return settledFor(open);
 }
 
@@ -602,6 +626,11 @@ function rebuildOnWorker(revision: UsageLogRevision): boolean {
  * checks the ledger, names the generation, and opens it once the worker has
  * published it and holds it open; every other synchronous SQLite and file
  * step of the build runs on the worker (see ./rebuild-worker).
+ *
+ * The worker first holds the superseded generation open, so the serving
+ * thread's close of it is not the last connection and checkpoints nothing;
+ * the worker's own close does that. Reclamation therefore starts only after
+ * the worker has exited.
  */
 function* workerRebuildSteps(
   paths: IndexPaths,
@@ -611,16 +640,27 @@ function* workerRebuildSteps(
 ): FlightSteps {
   const { dir } = paths;
   const worker: { job: IndexWorkerJob | null } = { job: null };
+  const token = lifetime;
+  let adopted: string | null = null;
   try {
+    stepPhase = "worker-hold";
+    const previous = open?.path ?? null;
+    yield* awaitIo({
+      kind: "io",
+      phase: "worker-hold",
+      runAsync: async () => {
+        const job = new IndexWorkerJob();
+        worker.job = job;
+        if (previous !== null) await job.hold(previous);
+      },
+    });
+    stepPhase = "prepare";
+    retireOpenGeneration(paths.reclaimMaxWalBytes);
     stepPhase = "worker-build";
     yield* awaitIo({
       kind: "io",
       phase: "worker-build",
-      runAsync: async () => {
-        const job = new IndexWorkerJob();
-        worker.job = job;
-        await job.build(buildPath, reason, revision);
-      },
+      runAsync: async () => { await worker.job!.build(buildPath, reason, revision); },
     });
     stepPhase = "publish-meta";
     if (!sameLedger(revision, sourceIdentity())) {
@@ -633,14 +673,23 @@ function* workerRebuildSteps(
       runAsync: () => worker.job!.publish(buildPath, generationPath),
     });
     stepPhase = "publish-open";
-    return adoptPublished(paths, generationPath, revision, path => publishIo.openGeneration(path, openGeneration));
+    const settled = adoptPublished(paths, generationPath, revision, path => publishIo.openGeneration(path, openGeneration));
+    adopted = generationPath;
+    return settled;
   } finally {
     // Runs on success (after the serving thread opened the generation), on
     // failure, and on close. The worker releases its handle and exits first;
     // only then can an unpublished build be removed (Windows keeps open files).
     const job = worker.job;
-    if (job) trackIo(job.afterExit(() => removeBuildFilesWithRetry(buildPath)));
-    else removeBuildFiles(buildPath);
+    if (job) {
+      const published = adopted;
+      reclaimHandoff = trackIo(job.afterExit(async () => {
+        await removeBuildFilesWithRetry(buildPath);
+        if (published !== null && lifetime === token && open?.path === published) scheduleReclaimAfter(paths, published);
+      }));
+    } else {
+      removeBuildFiles(buildPath);
+    }
   }
 }
 
@@ -894,6 +943,7 @@ export async function rebuildRequestHistoryIndex(): Promise<RequestHistoryIndexM
   if (!driveFlight(target, sliceMs, "async")) scheduleFlight(target);
   const { meta } = await target.promise;
   // The operator asked for a clean index directory: wait for old files too.
+  await reclaimHandoff;
   await reclaimQueue?.done;
   if (lifetime !== token) throw new RequestHistoryIndexClosedError();
   return meta;
@@ -1000,9 +1050,12 @@ export function setRequestHistoryStepObserverForTests(observer: ((sample: Reques
   stepObserver = observer;
 }
 
-export function setRequestHistoryBudgetsForTests(budgets: { sliceMs?: number; syncBudgetMs?: number } | null): void {
+export function setRequestHistoryBudgetsForTests(
+  budgets: { sliceMs?: number; syncBudgetMs?: number; checkpointRetryMs?: number } | null,
+): void {
   sliceMs = budgets?.sliceMs ?? REQUEST_HISTORY_SLICE_MS;
   syncBudgetMs = budgets?.syncBudgetMs ?? REQUEST_HISTORY_SYNC_BUDGET_MS;
+  checkpointRetryMs = budgets?.checkpointRetryMs ?? CHECKPOINT_RETRY_MS;
 }
 
 /** Where a full rebuild runs: by ledger size (auto), always inline, or always on the worker. */

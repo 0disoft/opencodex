@@ -101,9 +101,16 @@ export class IndexWorkerJob {
     await this.request({ type: "publish", buildPath, generationPath }, "held");
   }
 
-  /** Checkpoint a published generation's WAL off the serving thread. */
-  async checkpoint(path: string): Promise<void> {
-    await this.request({ type: "checkpoint", path }, "checkpointed");
+  /** Hold an existing generation open until dispose(), so the serving thread's close of it is never the last. */
+  async hold(path: string): Promise<void> {
+    this.held = true;
+    await this.request({ type: "hold", path }, "held");
+  }
+
+  /** Checkpoint a published generation's WAL off the serving thread; false when a reader left frames behind. */
+  async checkpoint(path: string): Promise<boolean> {
+    const reply = await this.request({ type: "checkpoint", path }, "checkpointed");
+    return reply.type === "checkpointed" && reply.complete;
   }
 
   /** Reclaim superseded databases off the serving thread; resolves with how many were removed. */
