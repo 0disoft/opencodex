@@ -117,7 +117,7 @@ export const REQUEST_HISTORY_SYNC_BUDGET_MS = 50;
  * entry can still settle a small cold index in one call.
  */
 export const REQUEST_HISTORY_WORKER_MIN_BYTES = 1024 * 1024;
-/** Ledger bytes tailed into a generation since its last checkpoint from which a worker checkpoints it. */
+/** WAL size after a tail from which a worker checkpoints (and truncates) the serving generation's WAL. */
 export const REQUEST_HISTORY_CHECKPOINT_WAL_BYTES = 4 * 1024 * 1024;
 /**
  * WAL size from which closing the last serving connection is handed to a
@@ -219,10 +219,9 @@ let flight: Flight | null = null;
 let reclaimQueue: ReclaimQueue | null = null;
 // At most one WAL checkpoint job at a time.
 let checkpointJob: Promise<void> | null = null;
-// Ledger bytes tailed into a generation since its last complete checkpoint.
-// Counted here: the WAL file keeps its high-water size after a checkpoint, so
-// its size cannot tell how much is left to checkpoint.
-let checkpointDebt: { path: string; bytes: number } | null = null;
+// The generation that job works on: tails into it wait until the job is done,
+// so the WAL restart after the checkpoint (a header sync) is the worker's.
+let checkpointJobPath: string | null = null;
 // The generation whose checkpoint a reader held back and a timer will retry;
 // its tails wait for that retry. Other generations are unaffected.
 let checkpointRetryPath: string | null = null;
@@ -396,28 +395,28 @@ const CHECKPOINT_RETRY_MS = 5_000;
 let checkpointRetryMs = CHECKPOINT_RETRY_MS;
 const CHECKPOINT_ATTEMPTS = 12;
 
-/** Count tailed bytes against a generation and checkpoint it on a worker once they pass the bound. */
-function noteTailBytes(path: string, bytes: number): void {
-  if (checkpointDebt?.path !== path) checkpointDebt = { path, bytes: 0 };
-  checkpointDebt.bytes += bytes;
-  if (checkpointDebt.bytes >= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES && checkpointRetryPath !== path) scheduleCheckpoint(path);
+/**
+ * After a tail, checkpoint the generation on a worker once its WAL passes the
+ * bound. The worker truncates the WAL, so its size measures what is owed.
+ */
+function noteTail(path: string): void {
+  if (checkpointRetryPath === path) return;
+  let walBytes = 0;
+  try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
+  if (walBytes >= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) scheduleCheckpoint(path);
 }
 
 function scheduleCheckpoint(path: string, attempt = 1): void {
   if (checkpointJob) return;
   const token = lifetime;
-  const debt = checkpointDebt?.path === path ? checkpointDebt.bytes : 0;
   const job = new IndexWorkerJob();
   let complete = false;
   const run = job.checkpoint(path).then(done => { complete = done; }, () => undefined).then(() => job.dispose());
+  checkpointJobPath = path;
   checkpointJob = trackIo(run).then(() => {
     checkpointJob = null;
-    if (complete) {
-      // Bytes tailed while the checkpoint ran stay owed.
-      if (checkpointDebt?.path === path) checkpointDebt.bytes = Math.max(0, checkpointDebt.bytes - debt);
-      return;
-    }
-    if (attempt >= CHECKPOINT_ATTEMPTS) return;
+    checkpointJobPath = null;
+    if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
     // A reader pinned part of the WAL, and nothing guarantees another tail
     // soon: retry while this generation is still the one being served.
     checkpointRetryPath = path;
@@ -514,6 +513,15 @@ function* refreshOnce(paths: IndexPaths, forcedReason: string | null): FlightSte
       // Truncated source: offsets no longer make sense.
       reason = "source truncated; index rebuilt";
     } else if (current.indexedOffset < Number(revision.size)) {
+      if (checkpointJobPath === generation.path && checkpointJob) {
+        // A worker is checkpointing this generation and then restarts its WAL
+        // with a write of its own; a serving-thread write first would take
+        // that restart (a header sync). Async readers wait; the routing-time
+        // sync entry reports busy.
+        stepPhase = "checkpoint-wait";
+        const pending = checkpointJob;
+        yield* awaitIo({ kind: "io", phase: "checkpoint-wait", runAsync: () => pending });
+      }
       stepPhase = "tail";
       const inserted = yield* ingestSteps(generation.handle, revision.path, current.indexedOffset, {
         expected: revision,
@@ -527,7 +535,7 @@ function* refreshOnce(paths: IndexPaths, forcedReason: string | null): FlightSte
       // rebuild marker so status readers can distinguish rebuilds from tails.
       if (inserted > 0) {
         setMeta(generation.handle, HISTORY_META_KEYS.lastError, "");
-        noteTailBytes(generation.path, Number(revision.size) - current.indexedOffset);
+        noteTail(generation.path);
       }
     }
     if (reason === null) return settledFor(generation);
@@ -990,7 +998,6 @@ export function closeRequestHistoryIndex(options: { checkpointOnWorker?: "large"
   closeOpenGeneration(options.checkpointOnWorker === "always");
   cancelReclaim();
   checkpointRetryPath = null;
-  checkpointDebt = null;
   integrityReason = null;
   epoch += 1;
 }

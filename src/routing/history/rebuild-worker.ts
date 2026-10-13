@@ -94,12 +94,18 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
       const db = new Database(request.path, { readwrite: true });
       try {
         db.exec("PRAGMA busy_timeout = 1000");
-        const result = db.query("PRAGMA wal_checkpoint(PASSIVE)").get() as
+        // TRUNCATE copies every frame back and empties the WAL; it waits up to
+        // the busy timeout for readers, and reports busy when one held on.
+        const result = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as
           | { busy: number; log: number; checkpointed: number }
           | undefined;
-        // A reader pinning older frames leaves part of the WAL behind.
-        const complete = result !== undefined && result.busy === 0 && result.checkpointed >= result.log;
-        return { type: "checkpointed", complete };
+        if (result === undefined || result.busy !== 0) return { type: "checkpointed", complete: false };
+        // The first write into an emptied WAL writes and syncs its header.
+        // Do it here (rewriting user_version unchanged), while the indexer
+        // holds its tails back, so that sync never lands on the serving thread.
+        const version = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+        db.exec(`PRAGMA user_version = ${Number(version) | 0}`);
+        return { type: "checkpointed", complete: true };
       } finally {
         closeQuietly(db);
       }

@@ -388,4 +388,39 @@ describe("request-history serving-thread I/O", () => {
     expect(() => createBuildDatabase(buildPath, "test", null)).toThrow();
     expect(existsSync(buildPath)).toBe(false);
   });
+
+  test("many small tails keep the WAL bounded: a worker truncates it once it passes the bound", async () => {
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    let maxWal = 0;
+    // Each tail commits rows, index pages and meta; tiny ledger growth, large WAL growth.
+    for (let index = 0; index < 300; index++) {
+      appendFileSync(usageLogPath(), `${row(5000 + index)}\n`);
+      expect((await openRequestHistoryIndex()).indexedRows).toBe(11 + index);
+      maxWal = Math.max(maxWal, existsSync(`${first.dbPath}-wal`) ? statSync(`${first.dbPath}-wal`).size : 0);
+    }
+    await drainRequestHistoryIoForTests();
+    const walAfter = existsSync(`${first.dbPath}-wal`) ? statSync(`${first.dbPath}-wal`).size : 0;
+    // Without the size trigger these tails left tens of MB of WAL behind.
+    expect(maxWal).toBeLessThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES + 512 * 1024);
+    expect(walAfter).toBeLessThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+  }, 60_000);
+
+  test("a tail that arrives during a worker checkpoint waits; the sync entry reports busy", async () => {
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const big = Array.from({ length: 6 }, (_, index) => row(3000 + index, { pad: "k".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big.join("\n")}\n`);
+    const phases = observePhases();
+    // This tail passes the bound and starts the checkpoint job.
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    appendFileSync(usageLogPath(), `${row(4000)}\n`);
+    expect(() => openRequestHistoryIndexSync()).toThrow(RequestHistoryIndexBusyError);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(17);
+    expect(phases).toContain("checkpoint-wait");
+    await drainRequestHistoryIoForTests();
+    // The checkpoint moved the tail into the database file and emptied the WAL.
+    expect(statSync(first.dbPath).size).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+    expect(statSync(`${first.dbPath}-wal`).size).toBeLessThan(64 * 1024);
+  });
 });
