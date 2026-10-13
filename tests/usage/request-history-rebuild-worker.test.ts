@@ -1,19 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { newGenerationNames } from "../../src/routing/history/generations";
+import { createBuildDatabase } from "../../src/routing/history/build-file";
 import {
   closeRequestHistoryIndex,
   drainRequestHistoryIoForTests,
   openRequestHistoryIndex,
   openRequestHistoryIndexSync,
   rebuildRequestHistoryIndex,
+  REQUEST_HISTORY_CHECKPOINT_WAL_BYTES,
   REQUEST_HISTORY_WORKER_MIN_BYTES,
+  requestHistoryDb,
   RequestHistoryIndexBusyError,
   RequestHistoryIndexClosedError,
   setRequestHistoryRebuildWorkerForTests,
@@ -232,5 +235,34 @@ describe("request-history generation names", () => {
     mkdirSync(dir, { recursive: true });
     const names = Array.from({ length: 12 }, () => basename(newGenerationNames(dir, 1_790_000_000_000).generationPath));
     expect([...names].sort()).toEqual(names);
+  });
+});
+
+describe("request-history serving-thread I/O", () => {
+  test("serving connections never autocheckpoint; an index worker checkpoints a large tail", async () => {
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    expect((requestHistoryDb().query("PRAGMA wal_autocheckpoint").get() as { wal_autocheckpoint: number }).wal_autocheckpoint).toBe(0);
+    const sizeBefore = statSync(first.dbPath).size;
+    // About 7 MiB of accepted rows: past the checkpoint bound in one tail.
+    const big = Array.from({ length: 8 }, (_, index) => row(500 + index, { pad: "p".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big.join("\n")}\n`);
+    const tailed = await openRequestHistoryIndex();
+    expect(tailed.indexedRows).toBe(18);
+    expect(statSync(`${first.dbPath}-wal`).size).toBeGreaterThanOrEqual(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+
+    await drainRequestHistoryIoForTests();
+    // The pages reached the database file, which only a checkpoint does.
+    expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(18);
+  });
+
+  test("a build that fails to initialize removes its private file", () => {
+    const dir = historyIndexDir(getConfigDir());
+    mkdirSync(dir, { recursive: true });
+    const buildPath = join(dir, "b000000000000001-0000000001-0000000001.sqlite");
+    writeFileSync(buildPath, "this is not a sqlite database, and it is long enough to have a header".repeat(4));
+    expect(() => createBuildDatabase(buildPath, "test", null)).toThrow();
+    expect(existsSync(buildPath)).toBe(false);
   });
 });

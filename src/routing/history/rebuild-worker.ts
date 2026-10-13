@@ -1,5 +1,6 @@
 /**
- * Rebuild worker for the request-history index (#6990).
+ * Worker for the request-history index (#6990): full rebuilds, WAL
+ * checkpoints and reclamation of superseded generations.
  *
  * Runs every synchronous SQLite and file step of a full rebuild on its own
  * thread: creating the private build, ingesting the ledger, switching it to
@@ -11,11 +12,17 @@
  * Hosted Windows runners stalled the serving loop for 0.5-1.2 s inside those
  * steps while using almost no CPU; cooperative yielding cannot split a single
  * blocking open, close or commit.
+ *
+ * The serving connection never checkpoints on its own (`wal_autocheckpoint =
+ * 0`): a checkpoint syncs the database file. A job on this worker runs it, and
+ * reclaims old generations (open, journal switch, checkpoint, delete), so
+ * neither lands on the serving thread either.
  */
 
 import { Database } from "bun:sqlite";
 import { renameSync } from "node:fs";
 import { createBuildDatabase, finishBuildMeta } from "./build-file";
+import { reclaimDatabase } from "./generations";
 import { ingestSteps } from "./ingest";
 import type { RebuildWorkerReply, RebuildWorkerRequest } from "./rebuild-protocol";
 
@@ -70,6 +77,21 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
       closeQuietly(held);
       held = null;
       return { type: "released" };
+    }
+    case "checkpoint": {
+      const db = new Database(request.path, { readwrite: true });
+      try {
+        db.exec("PRAGMA busy_timeout = 1000");
+        db.query("PRAGMA wal_checkpoint(PASSIVE)").get();
+      } finally {
+        closeQuietly(db);
+      }
+      return { type: "checkpointed" };
+    }
+    case "reclaim": {
+      let removed = 0;
+      for (const path of request.paths) if (reclaimDatabase(path, request.maxWalBytes)) removed += 1;
+      return { type: "reclaimed", removed };
     }
   }
 }

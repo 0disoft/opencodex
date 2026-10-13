@@ -288,8 +288,8 @@ describe("request-history refresh off the event loop (#6990)", () => {
     writeFileSync(`${legacy}-wal`, "old wal");
     const meta = await openRequestHistoryIndex();
     expect(dirname(meta.dbPath)).toBe(historyIndexDir(getConfigDir()));
-    // Reclamation runs after the refresh settles, one file per timer turn.
-    for (let index = 0; index < 3; index++) await turn();
+    // Reclamation runs on an index worker after the refresh settles.
+    await drainRequestHistoryIoForTests();
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(`${legacy}-wal`)).toBe(false);
   });
@@ -419,7 +419,7 @@ test("a serving refresh leaves an old index with a large WAL for a manual rebuil
 });
 
 
-test("superseded generations are reclaimed one per timer turn after the refresh settles", async () => {
+test("superseded generations are reclaimed by an index worker after the refresh settles", async () => {
   writeLedger(rowsFor(5));
   const first = await openRequestHistoryIndex();
   const dir = historyIndexDir(getConfigDir());
@@ -430,10 +430,7 @@ test("superseded generations are reclaimed one per timer turn after the refresh 
   noteRequestHistoryIndexError(Object.assign(new Error("database disk image is malformed"), { code: "SQLITE_CORRUPT" }));
   const rebuilt = await openRequestHistoryIndex();
   const older = [...retained, first.dbPath];
-  expect(older.every(path => existsSync(path))).toBe(true);
-  await turn();
-  expect(older.filter(path => existsSync(path)).length).toBe(older.length - 1);
-  for (let index = 0; index < older.length + 2; index++) await turn();
+  await drainRequestHistoryIoForTests();
   expect(older.filter(path => existsSync(path))).toEqual([]);
   expect(existsSync(rebuilt.dbPath)).toBe(true);
 });
@@ -480,13 +477,13 @@ test("a superseded generation with a large pinned WAL is parked, not checkpointe
   renameSync(replacement, usageLogPath());
   const rebuilt = await openRequestHistoryIndex();
   expect(rebuilt.indexedRows).toBe(3);
-  for (let index = 0; index < 4; index++) await turn();
+  await drainRequestHistoryIoForTests();
   // Parked: still open here, so reclamation leaves it alone.
   expect(existsSync(first.dbPath)).toBe(true);
 
   // Teardown closes the parked handle; the next refresh reclaims the file.
   closeRequestHistoryIndex();
   await openRequestHistoryIndex();
-  for (let index = 0; index < 4; index++) await turn();
+  await drainRequestHistoryIoForTests();
   expect(existsSync(first.dbPath)).toBe(false);
 });

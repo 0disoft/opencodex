@@ -89,6 +89,16 @@ export function removeBuildFiles(path: string): void {
   for (const suffix of SQLITE_SIDE_SUFFIXES) unlinkQuietly(`${path}${suffix}`);
 }
 
+/** removeBuildFiles, retried while Windows still reports a file in use after its last handle closed. */
+export async function removeBuildFilesWithRetry(path: string, attempts = 5, delayMs = 200): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    removeBuildFiles(path);
+    const left = [path, ...SQLITE_SIDE_SUFFIXES.map(suffix => `${path}${suffix}`)].some(file => existsSync(file));
+    if (!left || attempt >= attempts) return;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+}
+
 function processAlive(pid: number): boolean {
   if (pid === process.pid) return true;
   try {

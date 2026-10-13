@@ -7,6 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import type { UsageLogRevision } from "../../usage/log";
+import { removeBuildFiles } from "./generations";
 import { setMeta } from "./ingest";
 import { HISTORY_DDL, HISTORY_META_KEYS, HISTORY_SCHEMA_VERSION } from "./schema";
 
@@ -43,6 +44,8 @@ export function createBuildDatabase(buildPath: string, reason: string, revision:
     return build;
   } catch (error) {
     try { build.close(); } catch { /* already unusable */ }
+    // A build that failed to initialize is nobody's to publish.
+    removeBuildFiles(buildPath);
     throw error;
   }
 }

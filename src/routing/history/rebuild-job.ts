@@ -1,8 +1,9 @@
 /**
- * The indexer's side of one rebuild worker (#6990): spawn it, send one request
+ * The indexer's side of one index worker (#6990): spawn it, send one request
  * at a time, and take it down again. Every exit settles: a worker that errors
- * or exits rejects the pending request, and dispose() resolves only once the
- * thread has closed, so the caller can then remove an unpublished build.
+ * or exits rejects the pending request. dispose() is bounded; afterExit()
+ * runs cleanup only once the thread has really exited, so files the thread
+ * may still hold are never removed under it.
  */
 
 import { spawnWorker } from "../../lib/worker-embed";
@@ -32,10 +33,18 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export class RebuildWorkerJob {
+/** True when `promise` settles within `ms`; the timer is cleared either way so it never keeps a process alive. */
+function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), ms); });
+  return Promise.race([promise.then(() => true, () => true), expired]).finally(() => clearTimeout(timer));
+}
+
+export class IndexWorkerJob {
   private readonly worker: Worker;
   private pending: PendingRequest | null = null;
   private exited = false;
+  private exitedCleanly = false;
   private held = false;
   private disposal: Promise<void> | null = null;
   private readonly closed: Promise<void>;
@@ -92,10 +101,35 @@ export class RebuildWorkerJob {
     await this.request({ type: "publish", buildPath, generationPath }, "held");
   }
 
-  /** Release the held generation, stop the thread and wait until it has exited. */
+  /** Checkpoint a published generation's WAL off the serving thread. */
+  async checkpoint(path: string): Promise<void> {
+    await this.request({ type: "checkpoint", path }, "checkpointed");
+  }
+
+  /** Reclaim superseded databases off the serving thread; resolves with how many were removed. */
+  async reclaim(paths: string[], maxWalBytes: number): Promise<number> {
+    const reply = await this.request({ type: "reclaim", paths, maxWalBytes }, "reclaimed");
+    return reply.type === "reclaimed" ? reply.removed : 0;
+  }
+
+  /** Release the held generation and stop the thread; waits a bounded time for it to exit. */
   dispose(): Promise<void> {
     this.disposal ??= this.shutDown();
     return this.disposal;
+  }
+
+  /**
+   * Dispose, then run `cleanup` once the thread has exited. A thread that
+   * overran the bound (blocked in native I/O) gets its cleanup when it does
+   * exit; the returned promise does not wait for that.
+   */
+  async afterExit(cleanup: () => void | Promise<void>): Promise<void> {
+    await this.dispose();
+    if (this.exitedCleanly) {
+      await cleanup();
+      return;
+    }
+    void this.closed.then(() => delay(storageWorkerOsJoinSettleMs())).then(cleanup).catch(() => undefined);
   }
 
   private async shutDown(): Promise<void> {
@@ -104,14 +138,16 @@ export class RebuildWorkerJob {
         this.pending = { expect: "released", resolve, reject };
         this.worker.postMessage({ type: "release" } satisfies RebuildWorkerRequest);
       });
-      await Promise.race([released.catch(() => undefined), delay(RELEASE_TIMEOUT_MS)]);
+      await settlesWithin(released, RELEASE_TIMEOUT_MS);
     }
     this.fail(new Error("request-history rebuild worker stopped"));
     try { this.worker.terminate(); } catch { /* already gone */ }
-    await Promise.race([this.closed, delay(CLOSE_TIMEOUT_MS)]);
+    const closedInTime = await settlesWithin(this.closed, CLOSE_TIMEOUT_MS);
+    if (!closedInTime) return;
     // Bun does not expose the OS thread join; Windows needs this gap before
     // the build files a terminated thread held can be removed.
     const settleMs = storageWorkerOsJoinSettleMs();
     if (settleMs > 0) await delay(settleMs);
+    this.exitedCleanly = true;
   }
 }

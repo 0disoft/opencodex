@@ -58,13 +58,13 @@ import {
   newestGenerationPath,
   newGenerationNames,
   RECLAIM_SERVING_MAX_WAL_BYTES,
-  reclaimDatabase,
   removeAbandonedBuilds,
   removeBuildFiles,
+  removeBuildFilesWithRetry,
   supersededGenerations,
 } from "./generations";
 import { createBuildDatabase, finishBuildMeta } from "./build-file";
-import { RebuildWorkerJob } from "./rebuild-job";
+import { IndexWorkerJob } from "./rebuild-job";
 
 export {
   REQUEST_HISTORY_INSERT_BATCH,
@@ -117,6 +117,8 @@ export const REQUEST_HISTORY_SYNC_BUDGET_MS = 50;
  * entry can still settle a small cold index in one call.
  */
 export const REQUEST_HISTORY_WORKER_MIN_BYTES = 1024 * 1024;
+/** WAL size after a tail commit from which a worker checkpoints the serving generation. */
+export const REQUEST_HISTORY_CHECKPOINT_WAL_BYTES = 4 * 1024 * 1024;
 // A serving connection must not park the event loop behind another process's
 // write lock; contention fails fast and the ingest retries after a yield.
 const BUSY_TIMEOUT_MS = 25;
@@ -195,15 +197,12 @@ interface Flight {
   error?: unknown;
 }
 
-// Old databases waiting to be reclaimed. Each one may checkpoint up to the WAL
-// bound in a single statement, so the queue takes one file per timer turn and
-// never runs inside a refresh step.
+// Old databases being reclaimed by an index worker: reclaiming opens each one,
+// switches its journal mode (a checkpoint) and deletes it, none of which may
+// run on the serving thread. One job per publication; a newer list replaces it.
 interface ReclaimQueue {
-  pending: string[];
-  maxWalBytes: number;
-  timer: ReturnType<typeof setTimeout> | null;
+  job: IndexWorkerJob;
   done: Promise<void>;
-  finish: () => void;
 }
 
 let open: OpenGeneration | null = null;
@@ -212,6 +211,8 @@ let open: OpenGeneration | null = null;
 let parked: Database[] = [];
 let flight: Flight | null = null;
 let reclaimQueue: ReclaimQueue | null = null;
+// At most one WAL checkpoint job at a time.
+let checkpointJob: Promise<void> | null = null;
 let integrityReason: string | null = null;
 let epoch = 0;
 // Advances on every close; work queued before a close must not start afterwards.
@@ -321,31 +322,39 @@ function cancelReclaim(): void {
   const queue = reclaimQueue;
   reclaimQueue = null;
   if (!queue) return;
-  if (queue.timer) clearTimeout(queue.timer);
-  queue.finish();
+  // Its pending request rejects, which settles `done`.
+  trackIo(queue.job.dispose());
 }
 
 /** Replace any queued reclaim: a later list covers everything an earlier one held. */
 function scheduleReclaim(paths: string[], maxWalBytes: number): void {
   cancelReclaim();
-  if (paths.length === 0) return;
-  let finish!: () => void;
-  const done = new Promise<void>(resolve => { finish = resolve; });
-  const queue: ReclaimQueue = { pending: [...paths], maxWalBytes, timer: null, done, finish };
-  const step = () => {
-    queue.timer = null;
-    if (reclaimQueue !== queue) return;
-    const next = queue.pending.shift();
-    if (next === undefined) {
-      reclaimQueue = null;
-      queue.finish();
-      return;
-    }
-    reclaimDatabase(next, queue.maxWalBytes);
-    queue.timer = setTimeout(step, 0);
-  };
-  reclaimQueue = queue;
-  queue.timer = setTimeout(step, 0);
+  // Only files that exist: most publications have nothing to reclaim and spawn no worker.
+  const pending = paths.filter(path => existsSync(path));
+  if (pending.length === 0) return;
+  const job = new IndexWorkerJob();
+  const done = job.reclaim(pending, maxWalBytes).then(() => undefined, () => undefined).then(() => {
+    if (reclaimQueue?.job === job) reclaimQueue = null;
+    trackIo(job.dispose());
+  });
+  reclaimQueue = { job, done };
+  trackIo(done);
+}
+
+/**
+ * Serving connections never autocheckpoint: a checkpoint syncs the database
+ * file, which cost up to a second on hosted Windows. Once a tail leaves the
+ * WAL above the bound, a worker checkpoints it (PASSIVE: readers are never
+ * blocked, and a pinned reader only defers it to a later tail).
+ */
+function scheduleCheckpoint(path: string): void {
+  if (checkpointJob) return;
+  let walBytes = 0;
+  try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
+  if (walBytes < REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) return;
+  const job = new IndexWorkerJob();
+  checkpointJob = trackIo(job.checkpoint(path).then(() => job.dispose(), () => job.dispose()))
+    .then(() => { checkpointJob = null; });
 }
 
 function openGeneration(path: string): Database {
@@ -358,6 +367,7 @@ function openGeneration(path: string): Database {
     // fsync out of every serving-thread commit; FULL cost up to a second on
     // hosted Windows runners.
     handle.exec("PRAGMA synchronous = NORMAL");
+    handle.exec("PRAGMA wal_autocheckpoint = 0");
     // Until that first statement this connection was invisible to another
     // process reclaiming the generation; from here on it blocks reclamation.
     if (!existsSync(path)) throw new RequestHistoryIndexStaleError("index generation reclaimed while opening");
@@ -443,7 +453,10 @@ function* refreshOnce(paths: IndexPaths, forcedReason: string | null): FlightSte
       });
       // A clean tail ingest proves the index is healthy: clear any earlier
       // rebuild marker so status readers can distinguish rebuilds from tails.
-      if (inserted > 0) setMeta(generation.handle, HISTORY_META_KEYS.lastError, "");
+      if (inserted > 0) {
+        setMeta(generation.handle, HISTORY_META_KEYS.lastError, "");
+        scheduleCheckpoint(generation.path);
+      }
     }
     if (reason === null) return settledFor(generation);
   }
@@ -597,14 +610,14 @@ function* workerRebuildSteps(
   buildPath: string,
 ): FlightSteps {
   const { dir } = paths;
-  const worker: { job: RebuildWorkerJob | null } = { job: null };
+  const worker: { job: IndexWorkerJob | null } = { job: null };
   try {
     stepPhase = "worker-build";
     yield* awaitIo({
       kind: "io",
       phase: "worker-build",
       runAsync: async () => {
-        const job = new RebuildWorkerJob();
+        const job = new IndexWorkerJob();
         worker.job = job;
         await job.build(buildPath, reason, revision);
       },
@@ -626,7 +639,7 @@ function* workerRebuildSteps(
     // failure, and on close. The worker releases its handle and exits first;
     // only then can an unpublished build be removed (Windows keeps open files).
     const job = worker.job;
-    if (job) trackIo(job.dispose().then(() => removeBuildFiles(buildPath)));
+    if (job) trackIo(job.afterExit(() => removeBuildFilesWithRetry(buildPath)));
     else removeBuildFiles(buildPath);
   }
 }
