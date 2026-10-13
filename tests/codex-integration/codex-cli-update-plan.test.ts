@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { npmInvocation } from "../../src/update/npm-invocation.mjs";
 
 import { scanCodexAppServerProcesses } from "../../src/codex/app-server-processes";
 import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenance";
@@ -330,6 +331,28 @@ describe("registry configuration isolation", () => {
     return call.args.join(" ");
   }
 
+  function cachePath(call: Pick<CapturedCall, "args" | "options">): string | undefined {
+    if (!call.options.windowsVerbatimArguments) {
+      return call.args.find(arg => arg.startsWith("--cache="))?.slice("--cache=".length);
+    }
+    expect(call.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    // Decode one cmd escape layer, retaining spaces and literal carets in the
+    // quoted argument. Splitting on whitespace truncates Windows profile paths.
+    const line = call.args[3]?.replace(/\^([\s\S])/g, "$1");
+    return line?.match(/"--cache=([^"]*)"/)?.[1];
+  }
+
+  test.each(["plain", "profile with spaces", "profile^with&metacharacters"])(
+    "the Windows cache argument preserves the entire %s path", profile => {
+      const cache = `C:\\Users\\${profile}\\Temp\\owned\\npm-cache`;
+      const invocation = npmInvocation(["view", "pkg@latest", "version", `--cache=${cache}`], "win32", {
+        PATH: "C:\\Program Files\\nodejs", PATHEXT: ".CMD", SystemRoot: "C:\\Windows",
+      }, { cwd: "C:\\project", exists: path => path === "C:\\Program Files\\nodejs\\npm.cmd" });
+      expect(invocation).not.toBeNull();
+      expect(cachePath(invocation!)).toBe(cache);
+    },
+  );
+
   /** Which registry field this invocation queried, read off the argv line. */
   function queriedField(call: CapturedCall): string {
     const line = argvLine(call);
@@ -435,7 +458,8 @@ describe("registry configuration isolation", () => {
     // A project .npmrc in the launch directory would otherwise redirect the scope;
     // the query must run from the sentinel-anchored isolation dir instead.
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    resolveCodexCliUpdateTarget("latest", spawn);
+    expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+    expect(calls.length).toBe(3);
     for (const call of calls) {
       const cwd = call.options.cwd as string;
       expect(cwd).not.toBe(process.cwd());
@@ -627,15 +651,12 @@ describe("registry configuration isolation", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
     const target = resolveCodexCliUpdateTarget("latest", spawn);
     expect(target.kind).toBe("resolved");
+    expect(calls.length).toBe(3);
     for (const call of calls) {
       const cwd = call.options.cwd as string;
-      const line = argvLine(call);
-      expect(line).toContain("--cache=");
-      const cacheFlag = line.match(/--cache=(\S+)/);
-      expect(cacheFlag).not.toBeNull();
       // The cache root (and therefore npm's _logs directory beneath it) must live
       // inside the owned isolation dir, not under an ambient ~/.npm.
-      expect(cacheFlag![1]!.startsWith(cwd)).toBe(true);
+      expect(cachePath(call)).toBe(join(cwd, "npm-cache"));
     }
   });
 
