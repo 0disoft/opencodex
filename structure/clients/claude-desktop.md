@@ -231,8 +231,21 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. Draining adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Body completion removes the input-cleanup listeners,
+the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
+(refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with
+the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). That front-side discard is bounded:
+once the reply has flushed to the client socket (`finish`), the connection is dropped after
+`PICKER_ABANDONED_INPUT_LINGER_MS` (30 s), so a peer that keeps trickling an abandoned upload cannot
+hold it until shutdown (#6984). The timer is armed only after the reply has left the process, so
+it cannot cut a reply that is still being written; `finish` is not peer receipt, though, and a client
+that also stops reading for the whole budget can still lose unread reply bytes when the drop fires.
+A connection that closes first cancels the timer. Body completion removes the input-cleanup listeners,
 leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
 `tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
 protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
@@ -253,7 +266,7 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
 the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
-Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Initialization journals the config identity, new fingerprint and public
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Zero inode identities and changed `ctimeNs` between the path snapshot and opened descriptor are rejected. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
@@ -373,16 +386,25 @@ occupied" once a catalog exceeded 365 routes, because stale assignments are reta
 the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
-code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+distinction. At render time each stored slot becomes a unique `claude-fable-5-pXXX` wire
+id, disjoint from the historical three-character hash namespace. Desktop 2.31226 recognizes
+the fable prefix in its effort fallback, whereas a suffixed Opus id misses its canonical table
+(#7006). This is client compatibility, not authoritative per-provider effort metadata.
+Claude Desktop strips terminal
 dates when comparing active-session model identity, so writing
 the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
-suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+suppress `set_model` between them (#3782). The registry accepts dates and previous
+`claude-opus-4-8-pXXX` wire IDs during migration. If an
 active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
 route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
 the conflicting routed row or compatibility binding is omitted with a warning, and the real
 Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
 `src/claude/desktop-profile.ts` owns the slot range and wire conversion.
+The native launcher (`src/cli/claude.ts`) clears proxy-only profile IDs, except genuine
+IDs known from the registry or declared models/profile. Active synthetic bindings take
+priority over stale declarations. Discovery uses `resolvableDesktop3pAlias` in
+`src/claude/desktop-3p.ts`: synthetic IDs must decode to their advertised route;
+real Anthropic IDs retain identity passthrough.
 
 Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed

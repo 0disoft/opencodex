@@ -93,6 +93,10 @@ credentials must never be replayed on the same token, and local runtimes have no
 preserve. It is opt-in: when the option is absent the feature is off; object presence enables
 it unless `enabled: false`.
 
+### Anthropic API-key credit exhaustion
+
+Anthropic API-key pools with at least two keys automatically try a sibling key when a complete HTTP `400` or `402` error states that the credit balance is too low to access the Anthropic API. This applies to `invalid_request_error`, `billing_error`, and `permission_error` before any text or tool output. Key rotation and pool strategies skip the failed key for one hour, because an empty balance only clears when credits are added; when every key is out of credit, requests still use the active key and return Anthropic's original error; choosing the key as active in the dashboard, or restarting the proxy, clears that hold after a top-up. Replacement sends share the request's send limit. Ordinary `400` errors stay terminal, and this does not enable same-key retries or change OAuth account routing. A header override that sends a different credential cannot cool or rotate the selected pool key.
+
 ### Which account a request spends
 
 The question people ask before connecting an account is whether opencodex will draw on the
@@ -513,7 +517,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 103 built-in presets: 84 key-based, 15 OAuth, three local, and one default
+opencodex ships 104 built-in presets: 85 key-based, 15 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -606,6 +610,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
+| Modelflare | `https://modelflare.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -655,6 +660,19 @@ prefixes remain separate: `tokenlab/gpt-5.6-terra` sends `gpt-5.6-terra` upstrea
 TokenLab's [terms](https://tokenlab.sh/tos) and [privacy policy](https://tokenlab.sh/privacy-policy)
 apply to requests sent to this service. The preset pins the row near the top of the Add provider
 picker and marks it as a sponsor, and nothing else about routing or defaults changes.
+
+**Modelflare** is an OpenAI-compatible relay at `https://modelflare.dev/v1`. Select **Modelflare**
+in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add modelflare`, and
+give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
+environment. The preset uses Chat Completions and seeds four models that
+were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
+do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
+can call only that group's models, so use a Smart key for the full seeded set, or pass
+`--default-model` with a model your key's group serves.
+`deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
+Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
@@ -894,9 +912,13 @@ served over `/v1/responses`. Create a key in
 [the Meta developer console](https://dev.meta.ai/docs/authentication) — Meta calls this
 variable `MODEL_API_KEY`, but opencodex derives the env var from the provider id, so
 export it as **`META_MODEL_API_KEY`** (or paste it during `ocx init`). The account needs a
-payment method before it will serve requests, and every call is metered per token. Two
-models are seeded — `meta-model/muse-spark-1.3` and `meta-model/muse-spark-1.3-contributor`
-— with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh` ladder and a 1M context window.
+payment method before it will serve requests, and every call is metered per token. Three
+models are seeded, each with a 1M context window: `meta-model/muse-spark-1.3` and
+`meta-model/muse-spark-1.3-contributor` with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh`
+ladder, and `meta-model/muse-wonder-1.0` (Muse Wonder, preview) with `minimal` through `max`.
+Muse Wonder is Standard mode only on the Model API: it has no Contributor tier and costs
+$4 per 1M input and $20 per 1M output tokens. Muse Wonder Full is available only inside Muse
+Code subscriptions, so it is not seeded.
 Discovery stays off until an authenticated roster is verified, because Meta serves image and
 voice models on the same host.
 
@@ -925,11 +947,14 @@ The management OAuth provider list therefore omits Meta Muse for raw-admin-token
 open a session-authenticated dashboard to use that login flow. This changes discovery only,
 not the admission checks on login start or manual continuation.
 
-Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
+All three seeded `meta-muse` models (Muse Spark 1.3, its Contributor tier and Muse Wonder)
+expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use
 `User-Agent: muse-build/1.3.0 (opencodex compatibility)` so Meta accepts the Muse Code
 effort contract. An explicit provider User-Agent overrides this default and may cause
-`max` to be rejected. The `meta-model` and OpenCode Go effort ladders remain unchanged.
+`max` to be rejected. On `meta-model` only Muse Wonder accepts `max`; its Spark rows and
+OpenCode Go keep the `xhigh` ceiling. Advertising `max` is the model's contract and does not
+prove your Muse Code plan covers Muse Wonder.
 
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
