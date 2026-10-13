@@ -15,6 +15,7 @@ import {
   openRequestHistoryIndexSync,
   rebuildRequestHistoryIndex,
   REQUEST_HISTORY_CHECKPOINT_WAL_BYTES,
+  REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES,
   REQUEST_HISTORY_WORKER_MIN_BYTES,
   requestHistoryDb,
   RequestHistoryIndexBusyError,
@@ -230,6 +231,22 @@ describe("request-history rebuild worker", () => {
     expect(indexFiles("g")).toEqual([basename(second.dbPath)]);
     expect(second.indexedRows).toBe(60);
   });
+
+  test("an old generation with unreadable tables does not stop a worker rebuild", async () => {
+    setRequestHistoryRebuildWorkerForTests("worker");
+    writeLedger(`${rows(100).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    closeRequestHistoryIndex();
+    await drainRequestHistoryIoForTests();
+    const damage = new Database(first.dbPath, { readwrite: true });
+    damage.exec("DROP TABLE schema_meta");
+    damage.close();
+
+    const rebuilt = await openRequestHistoryIndex();
+    expect(rebuilt.dbPath).not.toBe(first.dbPath);
+    expect(rebuilt.indexedRows).toBe(100);
+    expect(rebuilt.lastError).toBe("index unreadable; rebuilt");
+  });
 });
 
 describe("request-history generation names", () => {
@@ -298,6 +315,28 @@ describe("request-history serving-thread I/O", () => {
       await drainRequestHistoryIoForTests();
     }
     expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+  });
+
+  test("closing with a large WAL detaches at once and checkpoints on a worker", async () => {
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const first = await openRequestHistoryIndex();
+    const big = Array.from({ length: 2 }, (_, index) => row(900 + index, { pad: "c".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big.join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(12);
+    await drainRequestHistoryIoForTests();
+    expect(statSync(`${first.dbPath}-wal`).size).toBeGreaterThanOrEqual(REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES);
+    const sizeBefore = statSync(first.dbPath).size;
+
+    closeRequestHistoryIndex();
+    // The serving thread checkpointed nothing: the pages are still only in the WAL.
+    expect(statSync(first.dbPath).size).toBe(sizeBefore);
+    expect(() => requestHistoryDb()).toThrow();
+
+    await drainRequestHistoryIoForTests();
+    expect(statSync(first.dbPath).size).toBeGreaterThan(sizeBefore);
+    // The last close checkpointed and emptied the WAL (macOS SQLite keeps the empty file).
+    expect(existsSync(`${first.dbPath}-wal`) ? statSync(`${first.dbPath}-wal`).size : 0).toBe(0);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(12);
   });
 
   test("a build that fails to initialize removes its private file", () => {

@@ -119,6 +119,15 @@ export const REQUEST_HISTORY_SYNC_BUDGET_MS = 50;
 export const REQUEST_HISTORY_WORKER_MIN_BYTES = 1024 * 1024;
 /** WAL size after a tail commit from which a worker checkpoints the serving generation. */
 export const REQUEST_HISTORY_CHECKPOINT_WAL_BYTES = 4 * 1024 * 1024;
+/**
+ * WAL size from which closing the last serving connection is handed to a
+ * worker (that close checkpoints the WAL). Below it the checkpoint is about
+ * one ordinary commit's work and runs inline, as every close did before.
+ */
+export const REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES = 1024 * 1024;
+// After a checkpoint the next writer restarts the WAL; this trims the file
+// then, so its size tracks unchecked frames rather than a high-water mark.
+const SERVING_JOURNAL_SIZE_LIMIT = 1024 * 1024;
 // A serving connection must not park the event loop behind another process's
 // write lock; contention fails fast and the ingest retries after a yield.
 const BUSY_TIMEOUT_MS = 25;
@@ -208,11 +217,15 @@ interface ReclaimQueue {
 let open: OpenGeneration | null = null;
 // Handles of superseded generations whose WAL was too large to checkpoint on
 // the serving loop. They take no more writes; teardown closes them.
-let parked: Database[] = [];
+let parked: OpenGeneration[] = [];
 let flight: Flight | null = null;
 let reclaimQueue: ReclaimQueue | null = null;
 // At most one WAL checkpoint job at a time.
 let checkpointJob: Promise<void> | null = null;
+// A retry is scheduled for a checkpoint a reader held back; tails wait for it.
+let checkpointRetryPending = false;
+// Serving handles whose close waits for a worker to hold the file first.
+const deferredCloses = new Set<Promise<void>>();
 // A worker rebuild hands reclamation over once its worker has exited (it held
 // the superseded generation open until then); a manual rebuild waits for it.
 let reclaimHandoff: Promise<void> | null = null;
@@ -293,12 +306,36 @@ function sameLedger(before: UsageLogRevision | null, after: UsageLogRevision | n
 
 /** Teardown: close the open generation and any parked handles. */
 function closeOpenGeneration(): void {
-  const handles = open ? [open.handle, ...parked] : parked;
+  const generations = open ? [open, ...parked] : parked;
   open = null;
   parked = [];
-  for (const handle of handles) {
+  for (const generation of generations) closeServingHandle(generation);
+}
+
+/**
+ * Close a serving connection without checkpointing on the serving thread.
+ * Closing the last connection checkpoints the whole WAL in one statement; for
+ * a WAL above REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES a worker first opens
+ * the file, so this close is not the last one and the worker's close
+ * checkpoints instead. The handle is detached at once and closed once the
+ * worker holds the file (or, if it cannot, closed here as before).
+ */
+function closeServingHandle(generation: OpenGeneration, alreadyHeld = false): void {
+  const { handle, path } = generation;
+  let walBytes = 0;
+  try { walBytes = statSync(`${path}-wal`).size; } catch { /* no WAL */ }
+  if (alreadyHeld || walBytes < REQUEST_HISTORY_DEFERRED_CLOSE_WAL_BYTES) {
     try { handle.close(); } catch { /* already closed */ }
+    return;
   }
+  const job = new IndexWorkerJob();
+  const closing = job.hold(path).then(() => undefined, () => undefined).then(() => {
+    try { handle.close(); } catch { /* already closed */ }
+    return job.dispose();
+  });
+  const tracked = trackIo(closing);
+  deferredCloses.add(tracked);
+  void tracked.then(() => { deferredCloses.delete(tracked); });
 }
 
 /**
@@ -308,17 +345,17 @@ function closeOpenGeneration(): void {
  * parked instead and closed at teardown. A parked generation is superseded:
  * it receives no commits, so no autocheckpoint runs on it either.
  */
-function retireOpenGeneration(maxWalBytes: number): void {
+function retireOpenGeneration(maxWalBytes: number, alreadyHeld = false): void {
   if (!open) return;
-  const { handle, path } = open;
+  const generation = open;
   open = null;
   let walBytes = 0;
-  try { walBytes = statSync(`${path}-wal`).size; } catch { /* no WAL */ }
+  try { walBytes = statSync(`${generation.path}-wal`).size; } catch { /* no WAL */ }
   if (walBytes > maxWalBytes) {
-    parked.push(handle);
+    parked.push(generation);
     return;
   }
-  try { handle.close(); } catch { /* already closed */ }
+  closeServingHandle(generation, alreadyHeld);
 }
 
 function cancelReclaim(): void {
@@ -336,7 +373,9 @@ function scheduleReclaim(paths: string[], maxWalBytes: number): void {
   const pending = paths.filter(path => existsSync(path));
   if (pending.length === 0) return;
   const job = new IndexWorkerJob();
-  const done = job.reclaim(pending, maxWalBytes).then(() => undefined, () => undefined).then(() => {
+  // A serving handle still waiting to close would make its file look in use.
+  const closing = Promise.all([...deferredCloses]);
+  const done = closing.then(() => job.reclaim(pending, maxWalBytes)).then(() => undefined, () => undefined).then(() => {
     if (reclaimQueue?.job === job) reclaimQueue = null;
     trackIo(job.dispose());
   });
@@ -355,7 +394,7 @@ let checkpointRetryMs = CHECKPOINT_RETRY_MS;
 const CHECKPOINT_ATTEMPTS = 12;
 
 function scheduleCheckpoint(path: string, attempt = 1): void {
-  if (checkpointJob) return;
+  if (checkpointJob || (attempt === 1 && checkpointRetryPending)) return;
   let walBytes = 0;
   try { walBytes = statSync(`${path}-wal`).size; } catch { return; }
   if (walBytes < REQUEST_HISTORY_CHECKPOINT_WAL_BYTES) return;
@@ -368,7 +407,9 @@ function scheduleCheckpoint(path: string, attempt = 1): void {
     if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
     // A reader pinned part of the WAL, and nothing guarantees another tail
     // soon: retry while this generation is still the one being served.
+    checkpointRetryPending = true;
     const retry = setTimeout(() => {
+      checkpointRetryPending = false;
       if (lifetime === token && open?.path === path) scheduleCheckpoint(path, attempt + 1);
     }, checkpointRetryMs);
     (retry as { unref?: () => void }).unref?.();
@@ -386,6 +427,7 @@ function openGeneration(path: string): Database {
     // hosted Windows runners.
     handle.exec("PRAGMA synchronous = NORMAL");
     handle.exec("PRAGMA wal_autocheckpoint = 0");
+    handle.exec(`PRAGMA journal_size_limit = ${SERVING_JOURNAL_SIZE_LIMIT}`);
     // Until that first statement this connection was invisible to another
     // process reclaiming the generation; from here on it blocks reclamation.
     if (!existsSync(path)) throw new RequestHistoryIndexStaleError("index generation reclaimed while opening");
@@ -642,6 +684,7 @@ function* workerRebuildSteps(
   const worker: { job: IndexWorkerJob | null } = { job: null };
   const token = lifetime;
   let adopted: string | null = null;
+  let held = false;
   try {
     stepPhase = "worker-hold";
     const previous = open?.path ?? null;
@@ -651,11 +694,13 @@ function* workerRebuildSteps(
       runAsync: async () => {
         const job = new IndexWorkerJob();
         worker.job = job;
-        if (previous !== null) await job.hold(previous);
+        // Best effort: an unreadable old generation (a rebuild trigger itself)
+        // must not stop the rebuild; its close then runs as before.
+        if (previous !== null) held = await job.hold(previous).then(() => true, () => false);
       },
     });
     stepPhase = "prepare";
-    retireOpenGeneration(paths.reclaimMaxWalBytes);
+    retireOpenGeneration(paths.reclaimMaxWalBytes, held);
     stepPhase = "worker-build";
     yield* awaitIo({
       kind: "io",
@@ -924,6 +969,7 @@ export function closeRequestHistoryIndex(): void {
   }
   closeOpenGeneration();
   cancelReclaim();
+  checkpointRetryPending = false;
   integrityReason = null;
   epoch += 1;
 }

@@ -51,8 +51,9 @@ function failure(error: unknown): RebuildWorkerReply {
 function holdOpen(path: string): void {
   const generation = new Database(path, { readwrite: true });
   held.push(generation);
-  generation.exec("PRAGMA journal_mode = WAL");
-  generation.query("SELECT value FROM schema_meta LIMIT 1").get();
+  // Any first statement attaches this connection to the WAL; it reads only
+  // the header, so a generation with damaged tables can still be held.
+  generation.query("PRAGMA schema_version").get();
 }
 
 function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
