@@ -53,7 +53,7 @@ const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
   const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
-  return { ...baseScopedEnv(), NO_COLOR: "1", [profile.tokenEnv]: apiKey,
+  return { ...baseScopedEnv(), NO_COLOR: "1", QODER_EXPOSE_TOKEN_USAGE: "true", [profile.tokenEnv]: apiKey,
     ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 
