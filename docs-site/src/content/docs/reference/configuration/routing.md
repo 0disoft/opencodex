@@ -376,9 +376,14 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
 The history index is disposable - deleting the `routing-history/` directory
 triggers an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
-rebuild-index` forces one. A rebuild runs in the background in short slices,
-so the proxy keeps serving requests on a large ledger. Until it finishes,
+rebuild-index` forces one. A rebuild runs in the background (on a worker
+thread once the ledger passes 1 MiB), so the proxy keeps serving requests on a
+large ledger. Until it finishes,
 history queries wait for it and routing profiles treat historical health as
-unknown evidence (the profile's `unknownEvidence.health` policy applies). Indexes
-from older versions (`routing-history.sqlite`) are removed after the first
-rebuild. Nothing in this system auto-tunes weights, budgets, or candidate sets.
+unknown evidence (the profile's `unknownEvidence.health` policy applies), and
+the request-history and analytics endpoints may answer `503` with
+`Retry-After: 1`. Indexes from older versions (`routing-history.sqlite`) are
+removed after the first rebuild once no process has them open; if the old file
+still has a large write-ahead log, the running proxy leaves it and `ocx logs
+rebuild-index` removes it. Nothing in this system auto-tunes weights, budgets,
+or candidate sets.

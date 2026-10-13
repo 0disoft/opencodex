@@ -181,6 +181,12 @@ export interface IngestOptions {
   beforeWrite?: () => void;
   /** Monotonic milliseconds that size sub-transactions; tests inject a scripted clock. */
   now?: () => number;
+  /**
+   * Stop at this byte offset instead of the size observed when the ingest
+   * opens the ledger, so a rebuild that starts later (on a worker) still
+   * indexes the snapshot its refresh recorded.
+   */
+  endOffset?: number;
 }
 
 /**
@@ -209,7 +215,7 @@ export function* ingestSteps(
     const sameFile = (candidate: { dev: number | bigint; ino: number | bigint }) =>
       Number(candidate.dev) === Number(options.expected.dev) && Number(candidate.ino) === Number(options.expected.ino);
     if (!sameFile(stat)) throw new RequestHistoryIndexStaleError("usage log changed while indexing");
-    const size = Number(stat.size);
+    const size = options.endOffset === undefined ? Number(stat.size) : Math.min(Number(stat.size), options.endOffset);
     const openFd = fd;
     let nextOffset = fromOffset;
     const assertSourceUnchanged = () => {

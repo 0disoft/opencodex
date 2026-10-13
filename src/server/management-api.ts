@@ -122,6 +122,23 @@ function pathInManagementNamespace(pathname: string, prefix: string, includeChil
  * Cherry-picked from @Wibias's PR #1676, which solved this before the boundary work
  * reached it. See devlog/_fin/260814_lab_core_decoupling/.
  */
+const REQUEST_HISTORY_INDEX_UNAVAILABLE_CODES = new Set(["request_history_index_busy", "request_history_index_closed"]);
+
+/**
+ * A request-history read that met a rebuild in progress or a closing index is
+ * transient: list, row, route-decision and analytics routes all answer 503
+ * with Retry-After. Matched by code so this dispatcher never loads the indexer.
+ */
+function requestHistoryIndexUnavailableResponse(error: unknown): Response | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code !== "string" || !REQUEST_HISTORY_INDEX_UNAVAILABLE_CODES.has(code)) return null;
+  const message = error instanceof Error ? error.message : "request-history index is unavailable";
+  return new Response(JSON.stringify({ error: { type: "server_error", code, message } }), {
+    status: 503,
+    headers: { "content-type": "application/json", "Retry-After": "1" },
+  });
+}
+
 async function handleRoutingProfileRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/routing-profiles")) return null;
   const { handleRoutingProfileRoutes } = await import("./management/routing-profile-routes");
@@ -379,6 +396,8 @@ export async function handleManagementAPI(
         headers: { "content-type": "application/json", "Retry-After": "1" },
       });
     }
+    const historyIndexUnavailable = requestHistoryIndexUnavailableResponse(error);
+    if (historyIndexUnavailable) return historyIndexUnavailable;
     if (!(error instanceof CatalogGatherBusyError)) throw error;
     return new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
       status: 503,

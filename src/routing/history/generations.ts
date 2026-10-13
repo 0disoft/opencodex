@@ -49,10 +49,28 @@ export function newestGenerationPath(dir: string): string | null {
   return best === null ? null : join(dir, best);
 }
 
-/** Private build path and the generation name it publishes to. */
+function generationMs(name: string): number {
+  const id = GENERATION_FILE.exec(name)?.[1];
+  return id === undefined ? -1 : Number(id.slice(0, 15));
+}
+
+/**
+ * Private build path and a generation name. Readers pick the newest name by
+ * string order, so the name sorts strictly above every generation already in
+ * `dir`, even after the wall clock moved back or another machine's clock ran
+ * ahead, and every field is zero-padded so digits compare in place. A rebuild
+ * calls this again just before publishing and uses that generation name.
+ */
 export function newGenerationNames(dir: string, now = Date.now()): { buildPath: string; generationPath: string } {
   sequence += 1;
-  const id = `${String(Math.max(0, Math.trunc(now))).padStart(15, "0")}-${process.pid}-${sequence}`;
+  let newestMs = -1;
+  for (const name of listNames(dir)) newestMs = Math.max(newestMs, generationMs(name));
+  const ms = Math.max(0, Math.trunc(now), newestMs + 1);
+  const id = [
+    String(ms).padStart(15, "0"),
+    String(process.pid).padStart(10, "0"),
+    String(sequence).padStart(10, "0"),
+  ].join("-");
   return { buildPath: join(dir, `b${id}.sqlite`), generationPath: join(dir, `g${id}.sqlite`) };
 }
 

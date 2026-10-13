@@ -5,7 +5,7 @@
 | Architect decision | Disposition | Reason |
 | --- | --- | --- |
 | A-D1 resumable ingest, 64 KiB reads, rows+bytes transaction cap, 10 ms slice, setImmediate | Amended | Same 64 KiB generator. Slice 25 ms. Yield with `setTimeout(0)`: the architect's out-of-process probe served HTTP with both primitives (setImmediate 149 vs setTimeout 299 probes, max 2.5 ms each); main's in-process probe starved under setImmediate (p50 50 ms) and not under setTimeout(0) (p50 0.1 ms). At 25 ms slices the ~1 ms timer clamp costs ~4 %. Repo precedent `src/usage/log.ts:1461`. Batch cap stays rows (500) plus one commit per yield. |
-| A-D2 bounded sync entry, one background flight, no repeated budget | Accepted | Plan D3; volume rule (pending ingest <= 1 MiB finishes synchronously) keeps small tails deterministic. |
+| A-D2 bounded sync entry, one background flight, no repeated budget | Accepted | Plan D3. The synchronous entry stops at its time budget and hands the rest to the background flight; the volume rule (pending ingest <= 1 MiB finishes synchronously) was removed after reflection gap 2. |
 | A-D3 generation files + atomic manifest | Rejected in r1, adopted after reflection (generations without a manifest) | See reflection gap 1. Readers select the newest `g…` name, so no manifest file is needed. |
 | A-D4 coordinator lock DB, busy_timeout defeats budget | Partly accepted | No coordinator DB: generations remove the publication race, and in-transaction counts make concurrent tails safe. busy_timeout 25 ms; SQLITE_BUSY yields and retries, never rebuilds. |
 | A-D5 detect replacement, conservative cleanup | Accepted | Directory listing on every refresh and before every tail commit; abandoned builds removed only when the owning pid is dead. |
@@ -14,7 +14,7 @@
 | A-D8 no integrity scan on refresh, classify CORRUPT/NOTADB | Accepted | Plan D6. |
 | A-D9 close cancels with captured paths and token | Accepted | Plan D8. |
 | A-D10 carry specific reason | Accepted | Plan D7. |
-| A-D11 keep test assertions; generation path fixtures | Accepted; path fixtures unchanged | File name unchanged because A-D3 is rejected. |
+| A-D11 keep test assertions; generation path fixtures | Accepted | A-D3 was adopted after reflection, so fixtures locate the index through `meta.dbPath` instead of a fixed file name. |
 | A-D12 modular leaf modules, no Lab | Accepted | `ingest.ts` split; boundary test in verifier list. |
 
 ## Reflection (round `6990-architect-reflection-r1`): MISALIGNED, gaps resolved in the plan

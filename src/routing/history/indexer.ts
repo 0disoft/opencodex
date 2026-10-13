@@ -35,7 +35,6 @@ import {
   type UsageLogRevision,
 } from "../../usage/log";
 import {
-  HISTORY_DDL,
   HISTORY_META_KEYS,
   HISTORY_SCHEMA_VERSION,
   historyIndexDir,
@@ -64,6 +63,8 @@ import {
   removeBuildFiles,
   supersededGenerations,
 } from "./generations";
+import { createBuildDatabase, finishBuildMeta } from "./build-file";
+import { RebuildWorkerJob } from "./rebuild-job";
 
 export {
   REQUEST_HISTORY_INSERT_BATCH,
@@ -110,6 +111,12 @@ export const REQUEST_HISTORY_DEFAULT_PAGE_SIZE = 50;
 export const REQUEST_HISTORY_SLICE_MS = 25;
 /** Longest stretch the routing-time sync entry keeps the event loop. */
 export const REQUEST_HISTORY_SYNC_BUDGET_MS = 50;
+/**
+ * Ledger size from which a full rebuild runs on a worker thread. Below it the
+ * cooperative inline build finishes in a few steps, and the routing-time sync
+ * entry can still settle a small cold index in one call.
+ */
+export const REQUEST_HISTORY_WORKER_MIN_BYTES = 1024 * 1024;
 // A serving connection must not park the event loop behind another process's
 // write lock; contention fails fast and the ingest retries after a yield.
 const BUSY_TIMEOUT_MS = 25;
@@ -153,12 +160,14 @@ type IoOutcome = { ok: true } | { ok: false; error: unknown };
  * A file operation a flight step asks its driver to run. The routing-time sync
  * driver runs `runSync` inline, as before; the async drivers start `runAsync`
  * and resume the flight from a timer once it settles, so a slow rename or an
- * on-access scan waits off the serving loop.
+ * on-access scan waits off the serving loop. A request without `runSync`
+ * (the worker rebuild) is never run by the sync driver: it hands the flight
+ * off and the background driver starts it.
  */
 interface IoRequest {
   kind: "io";
   phase: string;
-  runSync: () => void;
+  runSync?: () => void;
   runAsync: () => Promise<void>;
 }
 
@@ -172,6 +181,8 @@ interface Flight {
   waiting: IoRequest | null;
   /** A settled I/O outcome not yet delivered; the next drive consumes it exactly once. */
   pendingOutcome: IoOutcome | null;
+  /** An async-only request the sync driver handed off; the next async drive starts it. */
+  deferred: IoRequest | null;
   promise: Promise<Settled>;
   resolve: (value: Settled) => void;
   reject: (error: unknown) => void;
@@ -207,6 +218,7 @@ let epoch = 0;
 let lifetime = 0;
 let sliceMs = REQUEST_HISTORY_SLICE_MS;
 let syncBudgetMs = REQUEST_HISTORY_SYNC_BUDGET_MS;
+let rebuildWorkerMode: RequestHistoryRebuildWorkerMode = "auto";
 
 interface IndexPaths {
   dir: string;
@@ -275,15 +287,6 @@ function sameLedger(before: UsageLogRevision | null, after: UsageLogRevision | n
     && Number(after.size) >= Number(before.size);
 }
 
-function recordSourceMeta(dbHandle: Database, revision: UsageLogRevision | null): void {
-  setMeta(dbHandle, HISTORY_META_KEYS.sourcePath, revision?.path ?? "");
-  setMeta(dbHandle, HISTORY_META_KEYS.sourceDev, revision?.dev ?? 0);
-  setMeta(dbHandle, HISTORY_META_KEYS.sourceIno, revision?.ino ?? 0);
-  setMeta(dbHandle, HISTORY_META_KEYS.sourceBirthtimeMs, revision?.birthtimeMs ?? 0);
-  setMeta(dbHandle, HISTORY_META_KEYS.sourceSize, revision?.size ?? 0);
-  setMeta(dbHandle, HISTORY_META_KEYS.sourceMtimeMs, revision?.mtimeMs ?? 0);
-}
-
 /** Teardown: close the open generation and any parked handles. */
 function closeOpenGeneration(): void {
   const handles = open ? [open.handle, ...parked] : parked;
@@ -350,6 +353,11 @@ function openGeneration(path: string): Database {
   try {
     handle.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     handle.exec("PRAGMA journal_mode = WAL");
+    // The index is a rebuildable projection: a crash may lose its last tail
+    // commits (rows and offset together), never consistency. NORMAL keeps an
+    // fsync out of every serving-thread commit; FULL cost up to a second on
+    // hosted Windows runners.
+    handle.exec("PRAGMA synchronous = NORMAL");
     // Until that first statement this connection was invisible to another
     // process reclaiming the generation; from here on it blocks reclamation.
     if (!existsSync(path)) throw new RequestHistoryIndexStaleError("index generation reclaimed while opening");
@@ -459,31 +467,20 @@ function* rebuildSteps(
   // health evidence computed from them stops being served from cache.
   retireOpenGeneration(paths.reclaimMaxWalBytes);
   epoch += 1;
-  const { buildPath, generationPath } = newGenerationNames(dir);
+  const { buildPath } = newGenerationNames(dir);
   removeBuildFiles(buildPath);
+  if (revision !== null && rebuildOnWorker(revision)) {
+    return yield* workerRebuildSteps(paths, reason, revision, buildPath);
+  }
   // Captured once: a later test reset cannot redirect this publication.
   const io = publishIo;
   const resource: { renamed: boolean; pending: Promise<void> | null } = { renamed: false, pending: null };
-  let build: Database | null = new Database(buildPath, { create: true, readwrite: true });
+  let build: Database | null = createBuildDatabase(buildPath, reason, revision);
   let published = false;
+  let generationPath = "";
   try {
-    // A private build file needs no crash durability: an interrupted build is
-    // discarded. WAL is enabled just before publication for future readers.
-    // MEMORY keeps in-process ROLLBACK without a rollback file: DELETE created
-    // and removed one per commit, which dominated commit time on Windows
-    // (devlog/_plan/261013_rt284_l1_owner_bundle/060_windows_rebuild_lag.md).
-    build.exec("PRAGMA journal_mode = MEMORY");
-    build.exec("PRAGMA synchronous = OFF");
-    build.exec(HISTORY_DDL);
+    // WAL is enabled just before publication for future readers.
     const fresh = build;
-    fresh.transaction(() => {
-      setMeta(fresh, HISTORY_META_KEYS.schemaVersion, HISTORY_SCHEMA_VERSION);
-      setMeta(fresh, HISTORY_META_KEYS.indexedOffset, 0);
-      setMeta(fresh, HISTORY_META_KEYS.indexedRows, 0);
-      setMeta(fresh, HISTORY_META_KEYS.builtAtMs, Date.now());
-      setMeta(fresh, HISTORY_META_KEYS.lastError, reason);
-      recordSourceMeta(fresh, revision);
-    })();
     stepPhase = "ingest";
     if (revision !== null) yield* ingestSteps(fresh, revision.path, 0, { expected: revision });
     // Publication runs as separate steps so each synchronous part is its own
@@ -493,11 +490,7 @@ function* rebuildSteps(
     if (!sameLedger(revision, sourceIdentity())) {
       throw new RequestHistoryIndexStaleError("usage log changed while rebuilding");
     }
-    // The specific reason survives publication (#6990 used to overwrite it).
-    fresh.transaction(() => {
-      setMeta(fresh, HISTORY_META_KEYS.lastError, reason);
-      setMeta(fresh, HISTORY_META_KEYS.builtAtMs, Date.now());
-    })();
+    finishBuildMeta(fresh, reason);
     yield;
     stepPhase = "publish-wal";
     fresh.exec("PRAGMA journal_mode = WAL");
@@ -505,6 +498,10 @@ function* rebuildSteps(
     stepPhase = "publish-close";
     build.close();
     build = null;
+    // Named at publication, above every generation already published, so a
+    // generation another process published during this build cannot outrank it.
+    const target = newGenerationNames(dir).generationPath;
+    generationPath = target;
     // Recorded by the operation itself: a close can return this generator
     // while the rename is still in flight, and its outcome must still decide
     // whether the build is cleanup's to remove.
@@ -512,11 +509,11 @@ function* rebuildSteps(
       kind: "io",
       phase: "publish-rename",
       runSync: () => {
-        io.renameSync(buildPath, generationPath);
+        io.renameSync(buildPath, target);
         resource.renamed = true;
       },
       runAsync: () => {
-        const operation = io.rename(buildPath, generationPath).then(() => { resource.renamed = true; });
+        const operation = io.rename(buildPath, target).then(() => { resource.renamed = true; });
         resource.pending = trackIo(operation);
         return operation;
       },
@@ -553,8 +550,19 @@ function* rebuildSteps(
     },
   });
   stepPhase = "publish-open";
+  return adoptPublished(paths, generationPath, revision, path => io.openGeneration(path, openGeneration));
+}
+
+/** Open a just-published generation, check it is still current, and make it the serving index. */
+function adoptPublished(
+  paths: IndexPaths,
+  generationPath: string,
+  revision: UsageLogRevision | null,
+  openPublished: (path: string) => Database,
+): Settled {
+  const { dir } = paths;
   assertPublishable(dir, generationPath, revision);
-  const handle = io.openGeneration(generationPath, openGeneration);
+  const handle = openPublished(generationPath);
   try {
     assertPublishable(dir, generationPath, revision);
   } catch (error) {
@@ -568,6 +576,59 @@ function* rebuildSteps(
   // once nothing has them open, after this refresh has already settled.
   scheduleReclaim([...supersededGenerations(dir, generationPath), paths.legacyPath], paths.reclaimMaxWalBytes);
   return settledFor(open);
+}
+
+function rebuildOnWorker(revision: UsageLogRevision): boolean {
+  if (rebuildWorkerMode === "inline") return false;
+  if (rebuildWorkerMode === "worker") return true;
+  return Number(revision.size) >= REQUEST_HISTORY_WORKER_MIN_BYTES;
+}
+
+/**
+ * Full rebuild of a large ledger on a worker thread. The serving thread only
+ * checks the ledger, names the generation, and opens it once the worker has
+ * published it and holds it open; every other synchronous SQLite and file
+ * step of the build runs on the worker (see ./rebuild-worker).
+ */
+function* workerRebuildSteps(
+  paths: IndexPaths,
+  reason: string,
+  revision: UsageLogRevision,
+  buildPath: string,
+): FlightSteps {
+  const { dir } = paths;
+  const worker: { job: RebuildWorkerJob | null } = { job: null };
+  try {
+    stepPhase = "worker-build";
+    yield* awaitIo({
+      kind: "io",
+      phase: "worker-build",
+      runAsync: async () => {
+        const job = new RebuildWorkerJob();
+        worker.job = job;
+        await job.build(buildPath, reason, revision);
+      },
+    });
+    stepPhase = "publish-meta";
+    if (!sameLedger(revision, sourceIdentity())) {
+      throw new RequestHistoryIndexStaleError("usage log changed while rebuilding");
+    }
+    const generationPath = newGenerationNames(dir).generationPath;
+    yield* awaitIo({
+      kind: "io",
+      phase: "worker-publish",
+      runAsync: () => worker.job!.publish(buildPath, generationPath),
+    });
+    stepPhase = "publish-open";
+    return adoptPublished(paths, generationPath, revision, path => publishIo.openGeneration(path, openGeneration));
+  } finally {
+    // Runs on success (after the serving thread opened the generation), on
+    // failure, and on close. The worker releases its handle and exits first;
+    // only then can an unpublished build be removed (Windows keeps open files).
+    const job = worker.job;
+    if (job) trackIo(job.dispose().then(() => removeBuildFiles(buildPath)));
+    else removeBuildFiles(buildPath);
+  }
 }
 
 function startFlight(forcedReason: string | null, reclaimMaxWalBytes = RECLAIM_SERVING_MAX_WAL_BYTES): Flight {
@@ -587,6 +648,7 @@ function startFlight(forcedReason: string | null, reclaimMaxWalBytes = RECLAIM_S
     reject,
     waiting: null,
     pendingOutcome: null,
+    deferred: null,
     timer: null,
     running: false,
     handedOff: false,
@@ -622,6 +684,13 @@ function driveFlight(target: Flight, budgetMs: number, mode: DriveMode): boolean
   const deadline = performance.now() + budgetMs;
   target.running = true;
   try {
+    if (target.deferred) {
+      if (mode === "sync") return false;
+      const request = target.deferred;
+      target.deferred = null;
+      startIo(target, request);
+      return false;
+    }
     for (;;) {
       const observer = stepObserver;
       const phaseBefore = stepPhase;
@@ -644,8 +713,12 @@ function driveFlight(target: Flight, budgetMs: number, mode: DriveMode): boolean
           startIo(target, request);
           return false;
         }
+        if (!request.runSync) {
+          target.deferred = request;
+          return false;
+        }
         const ioStarted = observer ? performance.now() : 0;
-        target.pendingOutcome = runIoSync(request);
+        target.pendingOutcome = runIoSync(request.runSync);
         if (observer) observer({ phase: request.phase, startedAt: ioStarted, ms: performance.now() - ioStarted });
       }
       if (performance.now() >= deadline) return false;
@@ -658,9 +731,9 @@ function driveFlight(target: Flight, budgetMs: number, mode: DriveMode): boolean
   }
 }
 
-function runIoSync(request: IoRequest): IoOutcome {
+function runIoSync(run: () => void): IoOutcome {
   try {
-    request.runSync();
+    run();
     return { ok: true };
   } catch (error) {
     return { ok: false, error };
@@ -778,6 +851,7 @@ export function closeRequestHistoryIndex(): void {
     // An I/O request still in flight settles on its own; its outcome is dropped.
     target.waiting = null;
     target.pendingOutcome = null;
+    target.deferred = null;
     target.done = true;
     target.failed = true;
     // Runs every pending `finally`: statements finalized, ledger fd and build
@@ -916,6 +990,14 @@ export function setRequestHistoryStepObserverForTests(observer: ((sample: Reques
 export function setRequestHistoryBudgetsForTests(budgets: { sliceMs?: number; syncBudgetMs?: number } | null): void {
   sliceMs = budgets?.sliceMs ?? REQUEST_HISTORY_SLICE_MS;
   syncBudgetMs = budgets?.syncBudgetMs ?? REQUEST_HISTORY_SYNC_BUDGET_MS;
+}
+
+/** Where a full rebuild runs: by ledger size (auto), always inline, or always on the worker. */
+export type RequestHistoryRebuildWorkerMode = "auto" | "inline" | "worker";
+
+/** Test seam: pin where full rebuilds run; null restores the size rule. */
+export function setRequestHistoryRebuildWorkerForTests(mode: RequestHistoryRebuildWorkerMode | null): void {
+  rebuildWorkerMode = mode ?? "auto";
 }
 
 type HistoryQueryRow = {
