@@ -5,6 +5,8 @@
 Installation inspection follows the [runtime inspection contract](runtime.md#lifecycle),
 and explicit Windows observation follows its [separate read-only contract](runtime.md#explicit-codex-cli-installation-observation).
 
+Explicit Codex CLI installation observation does not discover a Codex home or read/write its state. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
 The read-only CLI update plan binds npm executable selection to the inspected launcher PATH.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 and the `LD_*`/`DYLD_*` loader families; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
