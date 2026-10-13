@@ -132,7 +132,7 @@
   "kiro-auto-selection.test.ts": "providers/kiro", "kiro-quota-metrics.test.ts": "providers/kiro",
   "management-provider-request-pacing.test.ts": "server", "desktop-supervised-restart.test.ts": "clients",
   "cli-restart-handoff.test.ts": "cli", "restart-replacement.test.ts": "server",
-  "deepseek-artifact-tool-schema.test.ts": "providers", "client-config-export-output-limit.test.ts": "config",
+  "deepseek-artifact-tool-schema.test.ts": "providers", "client-config-export-output-limit.test.ts": "config", "qoder-client.test.ts": "clients",
   "codex-account-clear-paused.test.ts": "codex-integration", "responses-skills-snapshot.test.ts": "responses",
   "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
   "openai-chat-tool-call-id-remint.test.ts": "adapters/openai", "coding-agent-json-lines-scaling.test.ts": "providers",

@@ -579,6 +579,16 @@
       ]
     },
     {
+      "path": "clients/qoder.md",
+      "tier": 5,
+      "title": "Qoder Client Integration",
+      "scope": "Qoder settings.json provider and custom-model ownership, export and loopback placeholder rules.",
+      "documents": [
+        "src/clients/",
+        "src/integrations/"
+      ]
+    },
+    {
       "path": "desktop-shell.md",
       "tier": 6,
       "title": "Desktop shell",
