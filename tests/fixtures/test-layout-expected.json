@@ -838,6 +838,7 @@
   "openai-chat-hardening.test.ts": "adapters/openai", "openai-empty-assistant-history.test.ts": "adapters/openai", "openai-chat-image-normalization.test.ts": "adapters/openai",
   "openai-chat-inline-think-tags.test.ts": "adapters/openai",
   "openai-chat-invalid-tool-call-diagnostics.test.ts": "adapters/openai",
+  "openai-chat-mistral-content.test.ts": "adapters/openai",
   "openai-chat-model-suffix.test.ts": "adapters/openai", "openai-chat-native-policy.test.ts": "adapters/openai",
   "openai-chat-parallel-stream.test.ts": "adapters/openai", "openai-chat-path-override.test.ts": "adapters/openai",
   "openai-chat-qwen38-leading-system.test.ts": "adapters/openai",
