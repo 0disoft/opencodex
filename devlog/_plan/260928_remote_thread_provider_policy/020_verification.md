@@ -3,12 +3,24 @@
 Current local check: 2026-10-13, Linux, Python 3.12.14 and aiohttp 3.14.4.
 This integration preserves prior PR head
 `d4405a8bc14bf0e7af3a7c5b38eb79d331af620b` and merges trusted `dev`
-`3bb7a5612c35c8079f5683a6d408a6907cf98bbe` without rewriting branch history.
-The merge was conflict-free. Probe and workflow source is byte-identical to the
-prior PR head; this follow-up updates verification metadata for that integration.
+`6da2774369aa32552e318e333902499683d053bc` without rewriting branch history.
+Both integrations were conflict-free. Probe and workflow source is byte-identical
+to the prior PR head; this follow-up updates verification metadata only.
 The PR difference from this `dev` snapshot remains nine research/workflow files.
 All inputs, accounts, tokens, thread ids, and database rows are synthetic.
 No native Codex process, user home, installed config, or real service was accessed.
+
+The 63 Python probes, 127 Bun tests, and repository gates below were executed on
+the `3bb7a561` integration, committed locally as
+`f53277df9e73ff8839107431680bbb1695792604`. The subsequent `6da27743` integration
+changes only the project version from 2.84.0 to 2.85.0 in `package.json` and
+`desktop/src-tauri/{Cargo.toml,Cargo.lock,tauri.conf.json}`. Probe, workflow, test,
+runtime, and test-runner source plus dependency pins remain byte-identical;
+`package.json` differs only in its version value. Those 190 tests were not
+repeated for this metadata-only follow-up. The current integration's privacy
+scan and diff check were rerun. The release version check confirmed all four
+sources carry 2.85.0; the focused working-tree version test passed (one test,
+two assertions, nine tests filtered out). No hosted CI result is claimed for it.
 
 From the repository root:
 
@@ -17,7 +29,7 @@ cd devlog/_plan/260928_remote_thread_provider_policy/probes
 python3 -m unittest -v test_native_policy test_probe test_loopback_bridge
 ```
 
-**Current inventory and local execution: 63 tests, 0 failures, across three suites.**
+**Inventory and local execution on the `3bb7a561` integration: 63 tests, 0 failures, across three suites.**
 
 - 23 tests specify the proposed native policy: opt-out, trusted-origin scoping,
   explicit arrays, null semantics, parent/ancestor exceptions, immutable policy,
@@ -59,7 +71,7 @@ schema compatibility or actual mobile results.
 ## Repository checks
 
 The current isolated Linux worktree uses runtime Bun 1.4.2 and the repository
-selected test runner Bun 1.4.3. These checks passed on the integration above:
+selected test runner Bun 1.4.3. These checks passed on the `3bb7a561` integration:
 
 ```sh
 bun run typecheck
@@ -96,12 +108,22 @@ validation environment. All 63 focused probes, the 127 focused Bun tests, and th
 gates were run instead. Wider repository coverage remains for CI associated with the
 new PR head, using the normal PR merge ref. No test budget or assertion was relaxed.
 
+The version-only follow-up used:
+
+```sh
+bun scripts/release-version-sources.ts check 2.85.0
+bun run test --parallel=1 ./tests/ci-workflows/release-version-sources.test.ts \
+  -t 'every version source in the working tree carries package.json'
+bun run privacy:scan
+git diff --check 6da2774369aa32552e318e333902499683d053bc
+```
+
 ## Hosted checkpoint and review boundary
 
 For the previous PR head `b3ff2be3c65e84aac0ceeedb343d107359da114d`, maintainer
 review confirmed that probe job `110273026033` checked out merge ref `1b40f8a`
 (incorporating that head into `0328373`) and ran all 63 tests successfully.
-That is historical evidence; it does not attest to this new `3bb7a561` integration.
+That is historical evidence; it does not attest to this new `6da27743` integration.
 New associated run/job links, actual checkout SHA and tree must be recorded in
 the PR checkpoint after those checks complete. Run metadata alone is not checkout
 evidence, and no prior green result is relabeled as a new-head pass.
