@@ -7,6 +7,9 @@ import {
   recognizedUpstreamError,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { outboundCredentials, type OutboundCredentialRegistry } from "../lib/outbound-credential-registry";
+import { configuredCredentials, type ConfiguredCredentials } from "./configured-credentials";
+import { codexWsWrapperStatus } from "./responses/codex-ws-wire";
 
 /** First bounded upstream diagnostics shared by request contexts and final rows. */
 export interface UpstreamErrorDiagnostics {
@@ -24,6 +27,9 @@ export interface UpstreamErrorPayload {
   type?: unknown;
   code?: unknown;
   message?: unknown;
+  /** Codex WebSocket wrapper status (`status_code` is its alias); read only on bare `error` events. */
+  status?: unknown;
+  status_code?: unknown;
   error?: { type?: unknown; code?: unknown; message?: unknown };
   last_error?: { type?: unknown; code?: unknown; message?: unknown };
   response?: {
@@ -74,9 +80,29 @@ function noteBoundedDiagnostic(
   if (logCtx[field] !== undefined) return;
   if (!isSafeDiagnosticToken(value)) return;
   if (field === "upstreamErrorType" && !KNOWN_UPSTREAM_ERROR_TYPES.has(value)) return;
+  if (!diagnosticValueAllowed(value)) return;
   logCtx[field] = value;
   const status = logCtx.terminalHttpStatus;
-  if (status === undefined || status >= 500) console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${logCtx.upstreamErrorCode ? ` code=${logCtx.upstreamErrorCode}` : ""}${logCtx.upstreamRequestId ? ` request_id=${logCtx.upstreamRequestId}` : ""}`);
+  if (status === undefined || status >= 500) {
+    const { upstreamErrorCode: code, upstreamRequestId: requestId } = upstreamDiagnosticLogFields(logCtx);
+    console.warn(`[opencodex] upstream failure${status ? ` status=${status}` : ""}${code ? ` code=${code}` : ""}${requestId ? ` request_id=${requestId}` : ""}`);
+  }
+}
+
+/**
+ * A diagnostic must not repeat a configured credential or a credential this process sent upstream
+ * (an echo). All three fields fail closed while either source cannot vouch for complete coverage:
+ * a closed type vocabulary does not prove a member is not also a credential. Applied at capture,
+ * again for every retained value interpolated into a warning, and at projection, because a
+ * credential can be configured or sent after the value was captured.
+ */
+export function diagnosticValueAllowed(
+  value: string,
+  registry: OutboundCredentialRegistry = outboundCredentials(),
+  configured: ConfiguredCredentials = configuredCredentials(),
+): boolean {
+  if (!registry.complete() || !configured.complete) return false;
+  return !registry.matches(value) && !configured.matches(value);
 }
 
 export function noteUpstreamRequestId(logCtx: TerminalStatusContext, headers: Headers): void {
@@ -94,11 +120,35 @@ export function captureUpstreamTerminalDiagnostics(logCtx: TerminalStatusContext
 }
 
 export function upstreamDiagnosticLogFields(logCtx: UpstreamErrorDiagnostics): UpstreamErrorDiagnostics {
-  return {
-    ...(logCtx.upstreamErrorCode ? { upstreamErrorCode: logCtx.upstreamErrorCode } : {}),
-    ...(logCtx.upstreamErrorType ? { upstreamErrorType: logCtx.upstreamErrorType } : {}),
-    ...(logCtx.upstreamRequestId ? { upstreamRequestId: logCtx.upstreamRequestId } : {}),
+  // One verification per projection: the three fields are checked at the same instant, so they
+  // share one snapshot of each source, taken only once a field is actually populated (a row with
+  // no upstream diagnostic reads no credential store).
+  let sources: { registry: OutboundCredentialRegistry; configured: ConfiguredCredentials } | undefined;
+  const allowed = (field: keyof UpstreamErrorDiagnostics): string | undefined => {
+    const value = logCtx[field];
+    if (!value) return undefined;
+    sources ??= { registry: outboundCredentials(), configured: configuredCredentials() };
+    return diagnosticValueAllowed(value, sources.registry, sources.configured) ? value : undefined;
   };
+  const code = allowed("upstreamErrorCode");
+  const type = allowed("upstreamErrorType");
+  const requestId = allowed("upstreamRequestId");
+  return {
+    ...(code ? { upstreamErrorCode: code } : {}),
+    ...(type ? { upstreamErrorType: type } : {}),
+    ...(requestId ? { upstreamRequestId: requestId } : {}),
+  };
+}
+
+/**
+ * The server status a Codex WebSocket `error` frame states on its wrapper ({@link codexWsWrapperStatus}),
+ * or undefined. Only 5xx is returned. Every 5xx is the same transient class for account health, so
+ * this changes what a row says, not where the next turn goes; a wrapper 4xx would move quota and
+ * credential routing and is left to its own review (#6740).
+ */
+export function wrappedServerErrorStatus(json: UpstreamErrorPayload): number | undefined {
+  const status = codexWsWrapperStatus(json as Record<string, unknown>);
+  return status !== undefined && status >= 500 ? status : undefined;
 }
 
 function captureTerminalHttpStatus(
@@ -170,8 +220,15 @@ function captureTerminalHttpStatus(
       code: candidates.find(candidate => typeof candidate?.code === "string")?.code,
       type: candidates.slice(0, -1).find(candidate => typeof candidate?.type === "string")?.type,
     });
-    // Unrecognized bare errors leave the status to explicit event fields (combo preflight).
-    if (structured) noteStatus(structured.httpStatus);
+    if (structured) {
+      noteStatus(structured.httpStatus);
+      return;
+    }
+    // An unrecognized class keeps only the status the upstream itself stated on the WebSocket
+    // wrapper. Nothing is invented here: with no wrapper status the row stays the synthetic 502, and
+    // combo preflight still reads its wider set of explicit event fields after this one.
+    const wrapped = wrappedServerErrorStatus(json);
+    if (wrapped !== undefined) noteStatus(wrapped);
     return;
   }
   if (type !== "response.failed" || !responseError || typeof responseError !== "object") return;

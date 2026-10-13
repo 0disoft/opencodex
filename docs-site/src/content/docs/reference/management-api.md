@@ -85,7 +85,7 @@ route-specific results rather than repeating this table.
 | `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
 | `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `operation_id_owned_by_another_account` / `coupon_unavailable` / `operation_token_mismatch` / `operation_state_changed` / `attempt_in_progress` / `attempt_unresolved`; 502 upstream error; 503 ledger capacity / `ledger_unavailable`; 500 `attempt_mark_failed` |
 | `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
-| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
+| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. A settled `reset` lifts the account's local cooldown only when it is a quota refusal recorded before the claim was first journaled and the windows the grant reported cleared cover every window that refusal named (both windows when it named none). A refusal recorded while the claim was in flight, an entitlement refusal, or an uncovered window stays, including on a same-id replay. The cached quota is dropped and usage is reread with a fresh request, so the pool can select the account before the old deadline. Model-family exclusions stay until that reread proves a family is no longer rejected. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
@@ -95,9 +95,11 @@ route-specific results rather than repeating this table.
 
 An attempt is durably claimed before redemption. Only a confirmed upstream redemption response can record `redeemed`; a coupon missing from the remaining list does not prove this operation succeeded. After a timeout or missing settlement, retries inspect availability without redeeming again and return `attempt_unresolved`; a recent attempt returns `attempt_in_progress`. A late inspection refusal settles only an operation still `open`. In the same transaction, an identity-matching definitive terminal winner is replayed with HTTP 200 and its original code; an unresolved or identity-mismatched winner returns `operation_state_changed`, preserving same-ID recovery guidance. An unreadable or locked ledger returns `ledger_unavailable` without dispatching a redemption.
 
+Once a caller supplies an `operationId`, every response that cannot prove the operation is settled carries that `operationId` at the top level and keeps the caller on it: `attempt_unresolved`, `attempt_in_progress`, `attempt_reconcile_failed`, `operation_state_changed`, `operation_token_mismatch`, `attempt_mark_failed`, `ledger_unavailable`, and ledger `capacity` (the full ledger cannot reserve the ID, so an earlier request holding it may still open it later). This includes refusals before the ledger opens: a malformed `tokenId`, an unknown account, or a failed account lookup under a supplied ID return 409 `attempt_in_progress` with the ID, because another request may already hold that operation. A definitive authentication refusal is recorded atomically as a `failed` operation bound to the requested coupon, so a retry replays it; an existing operation for a different coupon is never replayed. A failed remaining-reset list settles an unclaimed operation as `fetch_resets_failed`. A redemption reply counts as confirmed only when its gRPC-Web framing is complete and every `grpc-status` it carries is the same valid value; conflicting statuses or bytes after the trailer return 502 `attempt_unresolved` and leave the operation `attempted`.
+
 An unconfirmed redemption returns HTTP 502 with `error.code: "attempt_unresolved"` and the effective `operationId`. Preserve that ID; a replacement ID would start a different operation. The CLI creates the ID before sending and prints `--operation-id` guidance if delivery or the response is uncertain. Legacy version-one `open` records and unconfirmed `redeem_failed` records are quarantined as uncertain; they never authorize another redemption.
 
-The dashboard at **Providers > xAI Grok > Accounts** lists remaining coupons and their validity windows from each account’s ticket badge. It sends a client-minted `operationId`. After uncertain delivery or an unknown-outcome response, the account controller retains that attempt while it remains mounted, including across dialog close/reopen. Availability refreshes issue GET only and never authorize another consume POST. `ocx account grok-reset-coupons` is the terminal equivalent.
+The dashboard at **Providers > xAI Grok > Accounts** lists remaining coupons and their validity windows from each account’s ticket badge. It sends a client-minted `operationId`. After uncertain delivery or an unknown-outcome response, the dashboard retains that attempt for the browser tab session, including across dialog close/reopen, page navigation, and reload. The hold is written before the request is sent and cleared only by a definitive response for the same `operationId`. Availability refreshes issue GET only and never authorize another consume POST. `ocx account grok-reset-coupons` is the terminal equivalent.
 
 Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
 signed-in account row carries a ticket badge with its remaining resets, and the dialog
@@ -288,7 +290,10 @@ Failed request rows can include bounded `upstreamErrorType`, `upstreamErrorCode`
 EOF retains recognized rate-limit or overload codes in the synthesized failed terminal.
 Request logs record these as 429 for `rate_limit_exceeded` / `rate_limit_error`, or 503 for
 `server_is_overloaded` / `overloaded_error`. A recognized type without a code uses the same
-status; explicit unknown codes remain generic 502 failures. Bare-error status is provisional:
+status. On the streaming path, an explicit unknown code records the 5xx status the Codex
+WebSocket wrapper states as a top-level integer `status` or `status_code` (one of the two, not
+both); otherwise, and for buffered JSON callers, it remains a generic 502 failure. The client
+terminal keeps `upstream_server_error` for unknown codes either way. Bare-error status is provisional:
 a genuine completed, failed, or incomplete terminal replaces it before account-health recording.
 Refusal precedence is unchanged.
 This diagnostic mapping adds no automatic replay or retry.
@@ -570,6 +575,11 @@ Inspect Integrations and resolve the reported issue before retrying `ocx sync`. 
 outcome fields from an older server do not establish successful recovery.
 
 ### OAuth accounts, provider keys, and data-plane keys
+
+OAuth account rows always include `plan`: a validated upstream subscription label or `null`
+when unknown. Anthropic profile tiers report labels such as `max_20x`, `max_5x`, or `pro`;
+Antigravity prefers the paid tier (for example `g1-pro-tier`) over the current tier.
+Labels are read on login/import or refresh, never inferred from quota percentages.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |

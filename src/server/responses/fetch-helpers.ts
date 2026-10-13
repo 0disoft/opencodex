@@ -1,4 +1,5 @@
 import type { NativeResponseControl } from "./native-response-control";
+import type { CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 import type { Server } from "bun";
 import {
   codexWsUpstreamFetch,
@@ -28,6 +29,7 @@ import {
   type ProviderEgressBinding,
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
+import { outboundCredentials } from "../../lib/outbound-credential-registry";
 
 export { withUpstreamHttpVersion };
 
@@ -205,6 +207,9 @@ export function sendWithConnectionPolicy(
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
+  // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
+  outboundCredentials().remember(headers);
   return physicalFetch(input, {
     ...init,
     ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
@@ -240,6 +245,12 @@ export interface ProviderFetchOptions {
   beforeDispatch?: (headers: Headers) => void;
   /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
   onPhysicalDispatch?: () => void;
+  /**
+   * Opt-in (#6969): let a Codex WebSocket send hold empty lifecycle frames so an authoritative
+   * upstream refusal before any output settles as a replayable gateway status. Only a caller that
+   * restores the projection afterwards (restoreCodexWsPreOutputRefusal) may set it.
+   */
+  preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
   /** Revalidate/rebuild a queued request at its physical send boundary, after pacing. */
   dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
 }
@@ -356,7 +367,7 @@ export function providerFetch(
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit)) as typeof globalThis.fetch;
       return codexWsUpstreamFetch(input, init, fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
-        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce);
+        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold);
     }
     return httpFetch(input, init);
   };

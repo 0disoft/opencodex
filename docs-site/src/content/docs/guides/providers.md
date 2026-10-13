@@ -93,6 +93,10 @@ credentials must never be replayed on the same token, and local runtimes have no
 preserve. It is opt-in: when the option is absent the feature is off; object presence enables
 it unless `enabled: false`.
 
+### Anthropic API-key credit exhaustion
+
+Anthropic API-key pools with at least two keys automatically try a sibling key when a complete HTTP `400` or `402` error states that the credit balance is too low to access the Anthropic API. This applies to `invalid_request_error`, `billing_error`, and `permission_error` before any text or tool output. Key rotation and pool strategies skip the failed key for one hour, because an empty balance only clears when credits are added; when every key is out of credit, requests still use the active key and return Anthropic's original error; choosing the key as active in the dashboard, or restarting the proxy, clears that hold after a top-up. Replacement sends share the request's send limit. Ordinary `400` errors stay terminal, and this does not enable same-key retries or change OAuth account routing. A header override that sends a different credential cannot cool or rotate the selected pool key.
+
 ### Which account a request spends
 
 The question people ask before connecting an account is whether opencodex will draw on the
@@ -262,6 +266,11 @@ it never generates one. Kimi documents a stable session/task key as required to 
 cache hit rates, while requests without a key remain keyless. If an opted-in upstream rejects the
 field, opencodex does not strip it and retry or mutate saved configuration. Other providers remain
 deny-by-default.
+
+Kimi Code's native Responses route omits explicit content-empty assistant history messages
+to avoid its `assistant must not be empty` rejection. Nonempty text, whitespace, refusals,
+reasoning and tool calls/results are retained; stored client history is not rewritten.
+An empty message referenced by an `item_reference` in the same input is retained rather than leaving a dangling reference.
 
 Kimi Coding usage prices for `k3`, `k3[1m]`, and `k3-256k` are **API-reference estimates** across
 `kimi`, `kimi-code`, and `kimi-responses`, using the published default 5-minute cache-write rate.
@@ -889,9 +898,13 @@ served over `/v1/responses`. Create a key in
 [the Meta developer console](https://dev.meta.ai/docs/authentication) — Meta calls this
 variable `MODEL_API_KEY`, but opencodex derives the env var from the provider id, so
 export it as **`META_MODEL_API_KEY`** (or paste it during `ocx init`). The account needs a
-payment method before it will serve requests, and every call is metered per token. Two
-models are seeded — `meta-model/muse-spark-1.3` and `meta-model/muse-spark-1.3-contributor`
-— with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh` ladder and a 1M context window.
+payment method before it will serve requests, and every call is metered per token. Three
+models are seeded, each with a 1M context window: `meta-model/muse-spark-1.3` and
+`meta-model/muse-spark-1.3-contributor` with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh`
+ladder, and `meta-model/muse-wonder-1.0` (Muse Wonder, preview) with `minimal` through `max`.
+Muse Wonder is Standard mode only on the Model API: it has no Contributor tier and costs
+$4 per 1M input and $20 per 1M output tokens. Muse Wonder Full is available only inside Muse
+Code subscriptions, so it is not seeded.
 Discovery stays off until an authenticated roster is verified, because Meta serves image and
 voice models on the same host.
 
@@ -920,11 +933,14 @@ The management OAuth provider list therefore omits Meta Muse for raw-admin-token
 open a session-authenticated dashboard to use that login flow. This changes discovery only,
 not the admission checks on login start or manual continuation.
 
-Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
+All three seeded `meta-muse` models (Muse Spark 1.3, its Contributor tier and Muse Wonder)
+expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use
 `User-Agent: muse-build/1.3.0 (opencodex compatibility)` so Meta accepts the Muse Code
 effort contract. An explicit provider User-Agent overrides this default and may cause
-`max` to be rejected. The `meta-model` and OpenCode Go effort ladders remain unchanged.
+`max` to be rejected. On `meta-model` only Muse Wonder accepts `max`; its Spark rows and
+OpenCode Go keep the `xhigh` ceiling. Advertising `max` is the model's contract and does not
+prove your Muse Code plan covers Muse Wonder.
 
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
@@ -1079,7 +1095,8 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
-- **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server; image input fails explicitly.
+- **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
+- **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
@@ -1123,8 +1140,8 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   giving several people their own Claude usage needs one proxy user per sign-in.
 - **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
   on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
-  an image sent straight to this provider is refused (`unsupported_input_modality`, the same
-  refusal the Qoder presets make) instead of being silently dropped and answered blind. With the
+  an image sent straight to this provider is refused (`unsupported_input_modality`) instead of
+  being silently dropped and answered blind. With the
   vision sidecar on the request path, images are captioned into text before they reach the row.
 - **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
   variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
@@ -1246,13 +1263,13 @@ The field is always present. It is `null` when the tier is unknown, which is del
 **absent** key means the proxy predates this field, while `null` means this version looked and the
 provider did not report a tier. Collapsing the two would let a consumer quietly assume a tier.
 
-For Anthropic the value is `null` today. Its usage endpoint returns quota buckets only — the
-five-hour and seven-day windows, the model-scoped weekly windows, and a `limits` array — and no
-subscription or tier field; the OAuth token response carries only the account id and email. There
-is nothing to map, so nothing is mapped. The tier is also not derivable from the quota it does
-return, because percentages are normalized per account: a Max ×5 seat at 50% is indistinguishable
-from a Max ×20 seat at 50%. If you need weighted pool capacity across mixed Anthropic tiers, keep
-that mapping outside OpenCodex until upstream reports the tier itself.
+For Anthropic accounts (both pools) the value comes from the authenticated account profile that
+OpenCodex already reads: the organization's rate-limit tier, reported as labels such as `max_20x`,
+`max_5x` or `pro`. It is recorded at sign-in, local Claude Code import and token refresh. For
+Google Antigravity the value is the paid tier from `loadCodeAssist` (for example `g1-pro-tier`),
+falling back to the current tier. A failed read keeps the last recorded label; a read that answers
+without a tier reports `null`. The tier is never derived from quota percentages, because those are
+normalized per account: a Max ×5 seat at 50% is indistinguishable from a Max ×20 seat at 50%.
 
 ### GPT-5.6 preview paths
 

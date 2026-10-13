@@ -331,23 +331,13 @@ again held its entry for the life of the process.
 
 > Decision record: [ADR-0038](../decisions/ADR-0038-responses-http-sse.md)
 
-A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode,
-and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent
-base64, so they always lower to plain user messages. A native blob is relayed only when there is no
-known serving-identity mismatch and the destination is known to decode native blobs — the canonical
-ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
-`decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more
-than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob
-without being able to decode the previous backend's. The same serving-identity mismatch signal
-therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the
-existing opaque-note path. Claude-native reasoning adds a per-blob tag check at every route binding:
-only the matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers
-receive no caller credentials and may point at any backend. On any other routed destination the blob
-also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the
-turn and the item outlives the failure in the client transcript, repeating on every later turn
-including the compaction turn the proxy itself drives. With `store: false`, request sanitization
-strips ids from every input item, including compact-wire items, matching codex-rs
-(`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
+A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode, and the client replays it on every later turn. The proxy's own `ocx1:` envelopes are transparent base64, so they always lower to plain user messages. A
+native blob is relayed only when there is no known serving-identity mismatch and the destination is known to decode native blobs — the canonical ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
+`decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob without being able to decode the previous backend's.
+The same serving-identity mismatch signal therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the existing opaque-note path. Claude-native reasoning adds a per-blob tag check at every route binding: only the
+matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers receive no caller credentials and may point at any backend. On any
+other routed destination the blob also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the turn and the item outlives the failure in the client transcript, repeating on every later turn including the compaction
+turn the proxy itself drives. With `store: false`, request sanitization strips ids from every input item, including compact-wire items, matching codex-rs (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
 For replayed `encrypted_content` slots whose minting provenance is unavailable after a restart or
 full-history resend, the plaintext-compatibility boundary requires canonical key-independent Fernet
@@ -406,6 +396,16 @@ always become unable to serve.
 > Decision record: [ADR-0039](../decisions/ADR-0039-responses-http-sse.md)
 
 
+## Decoded checkpoint continuation
+
+`src/responses/parser.ts` adds `CHECKPOINT_CONTINUATION_NOTE` from `src/responses/compaction.ts` to the system prompt only when normal generation contains a decoded `ocx1:` checkpoint; `src/adapters/openai-responses/request-strips.ts` applies the same condition to passthrough `instructions` while lowering the checkpoint to a user message. Summarizer turns, opaque native blobs and requests without decoded checkpoints receive no note. `SUMMARY_PREFIX` and checkpoint text remain unchanged, and later user messages retain their order after the checkpoint.
+
+The note is a prompt contract and grants no authority. Completed requests remain history unless a later user message asks to repeat them. Unfinished work continues only under existing authorization and within its scope, without asking for that authorization again while it still applies. Permission and confirmation gates remain authoritative: a pending decision or required permission must resolve before the dependent action. Checkpoints and delegations, including those from another thread, neither grant authority nor expand scope. Later user messages take priority, including pause, cancellation, replacement and scope changes.
+
+The continuation-note and continuation-wire tests establish prompt-contract and wire-construction evidence, including preservation of existing instructions and checkpoint ordering. They do not establish model behavior or whether a model actually resumes the correct task.
+
+> Decision record: [ADR-7003](../decisions/ADR-7003-decoded-checkpoint-continuation.md)
+
 ## Core module ownership
 
 `src/server/responses/core.ts` is the public ingress and compatibility-export surface.
@@ -414,7 +414,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 
 | Owner | Responsibility |
 | --- | --- |
-| `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission, retaining [original policy authorization](policy-fallback.md). xAI OAuth model-scope admission previews the billed Fast lane using the serialization decision shared with Chat, Messages and routed compact admission; final normalization rechecks the actual wire destination. |
+| `request-prepare.ts` | Body parsing, combo handoff, final route, encrypted-task recovery and initial admission, retaining [original policy authorization](policy-fallback.md). Both shadow-intercept sites use `shadowCallPreservesSelectedModel` in `src/lib/shadow-call.ts`: explicit `request_kind: "turn"` plus `thread_source: "user"`, or spawned-child provenance, preserves the selected model. `x-openai-subagent: collab_spawn` is a connection header on both transports (a child session opens its own connection); turn metadata comes from the HTTP `x-codex-turn-metadata` header or, on WebSocket, only from each frame's `client_metadata["x-codex-turn-metadata"]` (including `subagent_kind: "thread_spawn"`), never from stale upgrade metadata. Kind-only `turn` helpers and missing/malformed metadata retain interception; concrete self-targets remain no-ops and helper combos retain failover. `tests/responses/responses-shadow-intercept.test.ts` covers both sites and frame precedence. xAI OAuth model-scope admission previews the billed Fast lane using the serialization decision shared with Chat, Messages and routed compact admission; final normalization rechecks the actual wire destination. |
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
@@ -428,7 +428,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
-| `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
+| `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
 | `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
 Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,

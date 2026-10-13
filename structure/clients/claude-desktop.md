@@ -60,7 +60,9 @@ mutually exclusive on one machine:
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
   writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
-  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
+  into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`), plus a
+  loopback `NO_PROXY` bypass (`127.0.0.1,localhost,::1,0.0.0.0`) merged into any user value so local HTTP MCP servers
+  never reach the CONNECT-only proxy (#6936; removal restores the prior value from `opencodex-no-proxy.json`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
@@ -229,8 +231,21 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
 gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. Draining adds no upload deadline or byte cap and does not wait for request-body
-completion before ending the response side. Body completion removes the input-cleanup listeners,
+the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
+response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
+the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
+(refusal, generated 502, early upstream reply) therefore replaces that socket's `destroySoon` with
+the same resume-and-`end()`. The TCP front
+enables half-open reads once a ClientHello is recognized and, when the backend side ends, unpipes
+and keeps discarding client ciphertext, so a client still writing an abandoned upload reads the
+reply and FIN and can close (Bun 1.4.2 otherwise left it open). That front-side discard is bounded:
+once the reply has flushed to the client socket (`finish`), the connection is dropped after
+`PICKER_ABANDONED_INPUT_LINGER_MS` (30 s), so a peer that keeps trickling an abandoned upload cannot
+hold it until shutdown (#6984). The timer is armed only after the reply has left the process, so
+it cannot cut a reply that is still being written; `finish` is not peer receipt, though, and a client
+that also stops reading for the whole budget can still lose unread reply bytes when the drop fires.
+A connection that closes first cancels the timer. Body completion removes the input-cleanup listeners,
 leaving long-lived responses and SSE subscriptions independent of upload cleanup. Completed HTTP/1.1 uploads retain keep-alive on generated 502s and can reuse the same client socket.
 `tests/claude-integration/claude-picker-upload.test.ts` covers headers-only refusals on both
 protocols, byte-exact early replies under backpressure, completed uploads with SSE, cancellation,
@@ -251,7 +266,7 @@ application-access dialogs are controlled by macOS; restart or upgrade does not 
 bounded exact-shape payload, full constrained CA profile, validity and P-256 private-key match validation.
 `picker-ca-persistence.ts` validates public `authority.json` and `authority-init.json` records under
 the canonical CA lock, rejecting symlinks and mismatched pre-open/path and descriptor identities.
-Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Initialization journals the config identity, new fingerprint and public
+Device and inode comparisons use bigint stats so distinct full-width file IDs cannot alias through numeric rounding. Zero inode identities and changed `ctimeNs` between the path snapshot and opened descriptor are rejected. Initialization journals the config identity, new fingerprint and public
 predecessor before writing the credential, verifies readback, then commits metadata and publication;
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
@@ -555,6 +570,8 @@ Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_
 ## Claude Code routed aliases and the context window
 
 `src/claude/alias.ts` mints Claude Code CLI aliases as `ocx-claude-<provider>--<model>`, or `ocx-claude2-` with `~s`/`~t` escapes when the model id holds `/` or `~`. The id contains `claude`, which the picker requires, and does not start with `claude-`: Claude Code 2.1.278 accounts an unrecognized `claude-` id at 200k and applies `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to it only with `DISABLE_COMPACT=1`. Saved `claude-ocx-`/`claude-ocx2-` ids still decode, and `src/claude/context-windows.ts` and the connected-client map `readConnectedClaudeContextWindows` in `src/cli/claude.ts` register both spellings at the same window, and `decodeFablePickerAlias` in `src/server/claude-messages.ts` keeps a legacy native Fable picker value on the native passthrough, so a saved selector keeps its window lookup until it is re-picked. `effectiveModelEnv` emits a legacy selector configured in an OpenCodex slot in its current spelling (`currentClaudeAliasSpelling`), so Claude Code applies the window to it; a selection saved by Claude Code's own picker is outside OpenCodex's ownership and keeps 200k accounting until it is re-picked. `isProxyOnlyModelId` in `src/cli/claude.ts` treats all four prefixes as proxy-only for native fallback.
+
+Claude Code labels a tier row (Opus, Sonnet, Fable, Haiku) in `/model` as `ANTHROPIC_DEFAULT_<TIER>_MODEL_NAME`, then its own name for a first-party id, then the raw slot value, so an alias slot without a label shows the alias (#6926; read from the 2.1.296 binary). `claudeTierDisplayName` in `src/claude/context-windows.ts` derives the label from the alias in the spelling of the discovery `display_name` (`<slug> (native)`, `<model> (<provider>)`, ` · 1M`, and `(anthropic)` for the native-namespaced Fable picker alias); a trailing `--fast` stays in the model name, because without the catalog a Fast sibling cannot be told from a real `--fast` model, and a non-alias value gets none. The label is paired only with a slot opencodex wrote: `buildClaudeEnv` in `src/cli/claude.ts` labels a slot only when its `setDefault` wrote it, launchd system-env labels only tracked slots and sweeps a tracked label the config no longer produces, and the shell file exports the label inside the branch that exports the slot. A user-set slot or `_NAME` always wins, and `buildNativeClaudeEnv` drops a label equal to the one generated for a slot it strips.
 
 `claudeCode.maxContextTokens` injects only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on the `ocx claude`, launchd system-env and shell-hook paths; compact stays enabled and neither `DISABLE_COMPACT` nor `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is injected beside it, whatever the value. A `DISABLE_COMPACT` an older release injected and tracked is unset by the system-env produced-key sweep while it still holds the injected `1`; a tracked key the user changed to another value is released from tracking without being deleted, and an untracked user value is never touched. `tests/claude-integration/claude-alias.test.ts`, `claude-context-windows.test.ts`, `claude-cli.test.ts` and `tests/server/system-env.test.ts` cover these.
 

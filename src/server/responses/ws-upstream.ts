@@ -23,8 +23,9 @@ import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADER
 import { codexWsExchange } from "./codex-ws-exchange";
 import { CodexWsSession } from "./codex-ws-session";
 import { codexWsPool, codexWsReuseIdentity } from "./codex-ws-pool";
-import { codexWsCreateFrameExceedsLimit } from "./codex-ws-wire";
+import { codexWsCreateFrameExceedsLimit, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 import { isLoopbackUrl, rewriteWebSocketDial } from "../../plugins/upstream-hooks";
+import { outboundCredentials } from "../../lib/outbound-credential-registry";
 export { CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES, MAX_CODEX_WS_QUEUE_BYTES,
   MAX_CODEX_WS_CREATE_FRAME_BYTES, CODEX_WS_CREATE_FRAME_LIMIT_BYTES, codexWsCreateFrameExceedsLimit,
   isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./codex-ws-wire";
@@ -162,6 +163,8 @@ export async function codexWsUpstreamFetch(
   nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
   onPhysicalDispatch?: () => void,
+  /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
+  preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -221,6 +224,10 @@ export async function codexWsUpstreamFetch(
     // reused for a different destination or with stale plugin headers.
     const dial = planCodexWsDial(wsUrl, headers, proxy);
     if (!dial) return sseFallback(url, init);
+    // The final dial headers, after plugin rewrites, are what the WebSocket upstream receives; the
+    // per-turn headers planning drops from the upgrade still reach it inside the frame metadata.
+    outboundCredentials().remember(headers);
+    outboundCredentials().remember(dial.headers);
     const identity = control ? null : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url);
     const reuseAcrossTurns = identity !== null && codexWsReuseAcrossTurnsEnabled();
     const pooled = identity
@@ -243,6 +250,7 @@ export async function codexWsUpstreamFetch(
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
     nativeControl: control,
     beforeContinuation, onPhysicalDispatch,
+    preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
   });
 }

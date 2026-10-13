@@ -26,6 +26,8 @@ export const CAPABILITIES: readonly Capability[] = [
     bannerLines: ["ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)"],
     details: ["Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher."],
   },
+  {"command": ["link","probe"],"summary": "Probe an SSH host fingerprint and OpenCodex version without trusting it.","routes": [{"method": "POST","path": "/api/link/probe"}],"flags": [{"name": "--json","value": "boolean","summary": "Emit alias, fingerprint, key type and version as JSON."}],"mutates": true,"json": "payload","usage": "ocx link probe <alias> [--json]","details": ["Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key."]},
+  {"command": ["link","add"],"summary": "Connect an SSH Child to this Home after confirming its fingerprint.","routes": [{"method": "POST","path": "/api/link/probe"},{"method": "POST","path": "/api/link/confirm-host"},{"method": "POST","path": "/api/link/apply"}],"flags": [{"name": "--expect-fingerprint","value": "string","summary": "Exact SHA256 host fingerprint; required without an interactive TTY."},{"name": "--json","value": "boolean","summary": "Emit the verified link result as JSON."}],"mutates": true,"json": "payload","usage": "ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]","details": ["Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.","Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; run ocx disconnect and ocx restart there before retrying."]},
   {
     command: ["link","port"],
     summary: "Allocate a free loopback port for a remote home link.",
@@ -64,6 +66,16 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: ["Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.","Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.","Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.","If forced cleanup was needed, run ocx disconnect on the remote client. No new enrollment, SSH trust or credential action is implied."],
     usage: "ocx link revoke --link-id <id> [--force --yes] [--json]",
+  },
+  {
+    command: ["link","reconnect"],
+    summary: "Restart a Home-initiated link's SSH tunnel now.",
+    routes: [{"method":"POST","path":"/api/link/{id}/reconnect"}],
+    flags: [{"name":"--link-id","value":"string","required":true,"summary":"Home-initiated link id whose tunnel to restart."},{"name":"--json","value":"boolean","summary":"Emit the restarted link id as JSON."}],
+    mutates: true,
+    json: "envelope",
+    usage: "ocx link reconnect --link-id <id> [--json]",
+    details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
   },
   {
     command: ["remote-workspace","pair"],
@@ -717,7 +729,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the role list, the write result or the proposals as JSON."},{"name":"--effort","value":"string","summary":"set: also write the role's reasoning effort."},{"name":"--model","value":"string","summary":"suggest: size the roles with this model instead of the Codex default model."},{"name":"--apply","value":"boolean","summary":"suggest: write every proposal through the role model write."}],
     mutates: true,
     json: "payload",
-    details: ["A bare invocation reads and never writes.","Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.","set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml, plus model_reasoning_effort with --effort; omo.jsonc gets the same model and, when LazyCodex has that level, the effort as reasoning; it is skipped when absent or when it contains comments.","suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model, and its effort when the role file already sets model_reasoning_effort."],
+    details: ["A bare invocation reads and never writes.","Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.","set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml, plus model_reasoning_effort with --effort; omo.jsonc gets the same model and, when LazyCodex has that level, the effort as reasoning; it is skipped when absent or when it contains comments.","suggest sizes every role with one model call and prints proposals without writing; --apply writes each proposed model and effort."],
     usage: "ocx agent roles [status] [--json]; ocx agent roles set <role> <model> [--effort <level>] [--json]; ocx agent roles suggest [--model <id>] [--apply] [--json]",
   },
   {

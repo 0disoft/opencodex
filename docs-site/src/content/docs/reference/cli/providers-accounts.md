@@ -678,6 +678,7 @@ confirmed suspension refusals can rotate before output. Monthly exhaustion exclu
 that login until reset or evidence expiry; completed service clears an older verdict.
 Reactive rotation remains available when proactive account preference is off. Accounts are added one at a time —
 `ocx account login kiro` hands off to the Kiro CLI and appends the new account to the pool. In the dashboard, Login and Add account also offer Builder ID, Google, and GitHub device login alongside the Kiro CLI choice; native device login adds an account without signing the CLI out.
+Users of one organization (IAM Identity Center) profile share its profile ARN, so a Kiro CLI account is identified by that profile together with the email `kiro-cli whoami` reports for the session. Two users of the same organization therefore stay separate accounts, and signing the same user in again updates that user's account. When `kiro-cli whoami` reports no user, the profile alone identifies the account as before. If that profile already has an account with a known user, such a login only refreshes the account whose stored Kiro CLI session it continues; any other login is refused instead of replacing an account, and an Add account login switches the Kiro CLI back to its previous session. Run `kiro-cli whoami` to confirm the signed-in user, then retry. Reauthenticating an account saved before its user was known records the user that signs in, unless that user already has another account of the same profile.
 To add an account without the Kiro CLI, use `ocx account login kiro --method builder-id`,
 `--method google`, or `--method github`. Open the printed verification URL, enter the user
 code, and wait for approval. `--no-wait` prints the flow ID; cancel it with
@@ -957,6 +958,8 @@ ocx account grok-reset-coupons --consume --yes --token-id <token-id>
 ```
 
 Pass `--operation-id <uuid>` (must be a valid UUIDv4) to guarantee idempotent settlement. If the network drops or the command is retried, identical operation IDs replay the durably recorded outcome instead of consuming a second coupon.
+
+The command exits nonzero unless the settled code is `redeemed` (including a replayed `redeemed`). When the outcome is unconfirmed (a missing or unrecognized settled code, `attempt_unresolved`, `attempt_in_progress`, `attempt_reconcile_failed`, `operation_state_changed`, `operation_token_mismatch`, `attempt_mark_failed`, or `ledger_unavailable`/`capacity` with an operation ID), it prints the `--operation-id` to preserve; rerun with that same ID instead of starting a new operation. A recorded refusal (`auth_failed`, `fetch_resets_failed`, `no_coupons_available`, `coupon_unavailable`, or `token_unresolved`), such as a replayed failure, prints `Coupon was not redeemed (<code>)`; any other settled code counts as unconfirmed.
 
 ### `ocx account main <subcommand>`
 
