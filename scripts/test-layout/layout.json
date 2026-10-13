@@ -1,9 +1,7 @@
 {
   "version": 1,
   "root": "tests",
-  "explicitShards": [
-    "layout-clients.json"
-  ],
+  "explicitShards": ["layout-clients.json"],
   "explicit": { "service-log.test.ts": "service",
     "codex-history-pending-wal.test.ts": "codex-integration", "responses-anthropic-billing-send-budget.test.ts": "responses", "anthropic-billing-ownership.test.ts": "adapters/anthropic", "server-anthropic-billing.test.ts": "server", "server-anthropic-billing-boundaries.test.ts": "server", "router-anthropic-billing-failover.test.ts": "routing", "anthropic-billing-refusal.test.ts": "adapters/anthropic", "messages-request-id-headers.test.ts": "claude-integration", "bounded-file-read.test.ts": "lib", "responses-undeclared-tool-guard-inbound.test.ts": "responses",
     "messages-request-id-endpoint.test.ts": "claude-integration",
@@ -100,7 +98,7 @@
     "cli-kiro-auto-selection.test.ts": "cli", "codebuddy-live-models.test.ts": "providers", "kiro-auto-selection.test.ts": "providers/kiro", "kiro-quota-metrics.test.ts": "providers/kiro", "management-provider-request-pacing.test.ts": "server",
     "cli-restart-handoff.test.ts": "cli",
     "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
-    "client-config-export-output-limit.test.ts": "config", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
+    "client-config-export-output-limit.test.ts": "config", "qoder-client.test.ts": "clients", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
     "claude-desktop-system-proxy.test.ts": "claude-integration", "codex-config-drift-heal.test.ts": "codex-integration",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
     "openai-chat-tool-call-id-remint.test.ts": "adapters/openai",
@@ -403,7 +401,7 @@
     "claude-intercept-proxy.test.ts": "claude-integration",
     "claude-intercept-client-class.test.ts": "claude-integration",
     "claude-intercept-proxy-auth.test.ts": "claude-integration",
-    "claude-intercept-settings.test.ts": "claude-integration", "claude-intercept-no-proxy.test.ts": "claude-integration",
+    "claude-model-default-labels.test.ts": "claude-integration", "claude-intercept-settings.test.ts": "claude-integration", "claude-intercept-no-proxy.test.ts": "claude-integration",
     "claude-management-api.test.ts": "claude-integration",
     "claude-manual-env.test.ts": "gui",
     "claude-messages-endpoint.test.ts": "claude-integration",
@@ -806,7 +804,7 @@
     "cursor-tool-choice.test.ts": "providers/cursor",
     "cursor-tool-continuation.test.ts": "providers/cursor",
     "cursor-tool-definitions.test.ts": "providers/cursor",
-    "cursor-tool-finalize-race.test.ts": "providers/cursor",
+    "cursor-tool-finalize-race.test.ts": "providers/cursor", "cursor-freeform-args.test.ts": "providers/cursor",
     "cursor-tool-result-image.test.ts": "providers/cursor",
     "cursor-tool-result-invocation.test.ts": "providers/cursor",
     "cursor-tool-suspended-checkpoint.test.ts": "providers/cursor", "cursor-tool-wording.test.ts": "providers/cursor",
@@ -832,6 +830,8 @@
     "deepseek-reasoning-replay-gaps.test.ts": "providers",
     "deepseek-reasoning-replay.test.ts": "providers",
     "deepseek-responses-item-id-repair.test.ts": "providers",
+    "management-desktop-compatibility-routes.test.ts": "server", "management-desktop-compatibility-runtime-routes.test.ts": "server", "server-desktop-compatibility-startup.test.ts": "server", "management-desktop-compatibility-settings.test.ts": "server",
+    "optional-desktop-upstream.test.ts": "lib",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter-reset-wait.test.ts": "providers",
     "devin-adapter.test.ts": "providers",
@@ -1116,7 +1116,7 @@
     "loopback-listener-admission.test.ts": "server",
     "loopback-listener-integration.test.ts": "server",
     "macos-serial-lanes.test.ts": "ci-workflows",
-    "main-account-hard-lock-auth.test.ts": "codex-integration",
+    "main-account-hard-lock-auth.test.ts": "codex-integration", "main-account-hard-lock-usage-limit.test.ts": "codex-integration",
     "main-account-hard-lock-default.test.ts": "codex-integration",
     "main-account-hard-lock-policy.test.ts": "codex-integration",
     "main-account-hard-lock-recovery.test.ts": "codex-integration", "main-account-credit-renewal.test.ts": "codex-integration",
@@ -1743,12 +1743,12 @@
     "tray-proxy-deadline.test.ts": "windows",
     "tray-proxy.test.ts": "windows",
     "types-barrel-identity.test.ts": "config",
-    "ultrafast-tier-honesty.test.ts": "codex-integration", "native-ultrafast-picker.test.ts": "codex-integration",
+    "ultrafast-tier-honesty.test.ts": "codex-integration", "configured-ultrafast-picker.test.ts": "codex-integration", "native-ultrafast-picker.test.ts": "codex-integration",
     "umans-provider.test.ts": "providers",
     "uninstall.test.ts": "cli",
     "update-async-routes.test.ts": "server",
     "update-badge.test.ts": "update", "update-bun-ownership-lease.test.ts": "update",
-    "update-desktop-badge.test.ts": "update", "update-desktop-owner.test.ts": "update",
+    "update-desktop-badge.test.ts": "update", "update-desktop-owner.test.ts": "update", "update-supervised-recovery.test.ts": "update",
     "update-job.test.ts": "update", "update-standalone.test.ts": "update", "update-worker-launch.test.ts": "update",
     "update-notify.test.ts": "update", "update-npm-cache-preflight.test.ts": "update",
     "update-npm-invocation.test.ts": "update", "update-mise-launcher-target.test.ts": "update",
@@ -1896,6 +1896,6 @@
     "server-combo-cooldown-recording.test.ts": "server",
     "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
     "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli",
-    "cli-status-codex-routing-drift.test.ts": "cli"
+    "cli-status-codex-routing-drift.test.ts": "cli", "advisor-settings.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor", "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server", "advisor-internal-authority.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor", "advisor-authority-transport.test.ts": "advisor"
   }
 }

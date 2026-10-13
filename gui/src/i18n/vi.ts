@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Vietnamese — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -6,6 +7,14 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("vi"),
+  "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
+  "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",
+  "claude.tierDefaults.title": "Mô hình mặc định CLI",
+  "claude.tierDefaults.preview": "Xem trước cài đặt Claude",
+  "claude.tierDefaults.apply": "Áp dụng vào cài đặt Claude",
+  "claude.tierDefaults.applied": "Cài đặt Claude khớp với mặc định đã lưu.",
+  "claude.tierDefaults.failed": "Không thể áp dụng mặc định. Xem trước lại và kiểm tra cài đặt Claude.",
   "sidecar.pool": "Nhóm tài khoản",
   "sidecar.poolCurrent": "Nhóm của yêu cầu hiện tại",
   "sidecar.poolA": "Anthropic",
@@ -117,6 +126,25 @@ export const vi: Record<TKey, string> = {
   "nav.models": "Models",
   "nav.combos": "Combos",
   "nav.subagents": "Subagents",
+  "nav.advisor": "Cố vấn",
+  "advisor.description": "Một mô hình chuyên gia độc lập xem xét nhiệm vụ của worker và trả về lời khuyên. OpenCodex tự thực hiện việc tư vấn: worker có thể gọi công cụ advisor tổng hợp; chính sách preflight còn tự động thử một lần tư vấn cho mỗi nhiệm vụ — sau khi nhiệm vụ tạo ra bằng chứng định hướng (một lệnh gọi công cụ của trợ lý hoặc một kết quả công cụ sau tin nhắn người dùng mới nhất), không cần worker hợp tác. Lần thử được khử trùng lặp theo nhiệm vụ đối với máy khách có định danh hội thoại ổn định; máy khách không có định danh có thể nhận thêm tư vấn ở nhiều yêu cầu khác nhau.",
+  "advisor.enabled": "Bật cố vấn",
+  "advisor.model": "Mô hình chuyên gia",
+  "advisor.modelPlaceholder": "vd. gpt-6-astra hoặc anthropic/claude-sonnet-4-6",
+  "advisor.effort": "Mức suy luận",
+  "advisor.policy": "Chính sách",
+  "advisor.policy.manual": "Thủ công — chỉ khi worker yêu cầu",
+  "advisor.policy.preflight": "Preflight — tự động thử tư vấn khi có bằng chứng định hướng",
+  "advisor.timeout": "Thời gian chờ (ms)",
+  "advisor.save": "Lưu cài đặt cố vấn",
+  "advisor.saved": "Đã lưu cài đặt cố vấn.",
+  "advisor.loadFailed": "Không thể tải cài đặt cố vấn. Proxy có đang chạy không?",
+  "advisor.warning.noModel": "Đã bật nhưng chưa cấu hình mô hình chuyên gia — Advisor không thể chạy cho đến khi có mô hình.",
+  "advisor.costNote": "Mỗi lần tư vấn là một lời gọi mô hình thực sự bổ sung, được tính vào mức sử dụng theo mô hình cố vấn, không phải mô hình worker.",
+  "advisor.privacyNote": "Lưu ý liên provider: các lần tư vấn gửi hội thoại nhiệm vụ và kết quả công cụ đến provider cố vấn đã cấu hình, có thể khác với provider của worker. OpenCodex không loại bỏ bí mật khỏi nội dung nhiệm vụ — không bật cố vấn cho nhiệm vụ mà bạn không muốn chia sẻ nội dung với provider đó. Bật cố vấn không tự ghi nhận sự đồng ý này.",
+  "advisor.disclosure": "Một lần tư vấn có thể gửi yêu cầu người dùng mới nhất, văn bản người dùng/trợ lý/nhà phát triển đã phân tích, lệnh gọi công cụ và đối số, kết quả công cụ, danh mục công cụ của worker, danh tính worker, model cố vấn đã cấu hình, và câu hỏi trọng tâm tùy chọn. OpenCodex không đưa khóa API của provider, header Authorization, token OAuth, bí mật backend, môi trường tiến trình, hoặc chuỗi suy nghĩ ẩn vào prompt. Nội dung nhiệm vụ không được loại bỏ bí mật: khóa dán vào, bí mật trong tệp, hoặc token do công cụ in ra đều có thể được gửi. Provider cố vấn có thể khác provider của worker.",
+  "advisor.consent.label": "Tôi hiểu rằng các lần tư vấn của cố vấn có thể gửi hội thoại của nhiệm vụ này, lệnh gọi công cụ và kết quả công cụ tới provider cố vấn đã cấu hình, vốn có thể khác với provider của worker. Nội dung nhiệm vụ không được loại bỏ bí mật.",
+  "advisor.consent.required": "Cố vấn chưa chạy được cho đến khi sự đồng ý chia sẻ ngữ cảnh được ghi nhận. Không có sự đồng ý thì không có nội dung nhiệm vụ nào được gửi.",
   "nav.logs": "Logs & Gỡ lỗi",
   "nav.usage": "Mức sử dụng",
   "common.github": "GitHub",
@@ -2055,6 +2083,9 @@ export const vi: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Quản lý nhà cung cấp OpenCodex và mô hình tùy chỉnh trong ~/.qoder/settings.json. Yêu cầu truy cập loopback. Giữ nguyên các cài đặt khác; Hoàn tác khôi phục bản chụp.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

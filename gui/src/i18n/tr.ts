@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // Turkish — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,14 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("tr"),
+  "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
+  "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",
+  "claude.tierDefaults.title": "CLI varsayılan modelleri",
+  "claude.tierDefaults.preview": "Claude ayarlarını önizle",
+  "claude.tierDefaults.apply": "Claude ayarlarına uygula",
+  "claude.tierDefaults.applied": "Claude ayarları kaydedilen varsayılanlarla eşleşiyor.",
+  "claude.tierDefaults.failed": "Varsayılanlar uygulanamadı. Yeniden önizleyin ve Claude ayarlarını kontrol edin.",
   "sidecar.pool": "Hesap havuzu",
   "sidecar.poolCurrent": "Geçerli isteğin havuzu",
   "sidecar.poolA": "Anthropic",
@@ -118,6 +127,25 @@ export const tr: Record<TKey, string> = {
   "nav.models": "Modeller",
   "nav.combos": "Kombolar",
   "nav.subagents": "Alt Ajanlar",
+  "nav.advisor": "Danışman",
+  "advisor.description": "Worker'ın görevini inceleyen ve öneri döndüren bağımsız bir uzman model. Danışmayı OpenCodex yürütür: worker sentetik advisor aracını çağırabilir; preflight politikası ayrıca görev yönelim kanıtı ürettiğinde (son kullanıcı mesajından sonra bir asistan araç çağrısı veya araç sonucu) görev başına bir otomatik danışma dener (worker iş birliği gerekmez). Deneme, kararlı bir konuşma kimliği taşıyan istemciler için görev başına tekilleştirilir; kimliği olmayan bir istemci için bu tekilleştirme uygulanmaz ve uygun olan her istekte danışma yeniden gerçekleşebilir.",
+  "advisor.enabled": "Danışman etkin",
+  "advisor.model": "Uzman model",
+  "advisor.modelPlaceholder": "örn. gpt-6-astra veya anthropic/claude-sonnet-4-6",
+  "advisor.effort": "Muhakeme düzeyi",
+  "advisor.policy": "Politika",
+  "advisor.policy.manual": "Manuel — yalnızca worker istediğinde",
+  "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
+  "advisor.timeout": "Zaman aşımı (ms)",
+  "advisor.save": "Danışman ayarlarını kaydet",
+  "advisor.saved": "Danışman ayarları kaydedildi.",
+  "advisor.loadFailed": "Danışman ayarları yüklenemedi. Proxy çalışıyor mu?",
+  "advisor.warning.noModel": "Etkin ancak uzman model yapılandırılmamış — model yapılandırılana kadar Advisor çalışmaz.",
+  "advisor.costNote": "Danışmalar gerçek ek model çağrılarıdır; kullanım, worker modeli değil danışman modeli altında görünür.",
+  "advisor.privacyNote": "Sağlayıcılar arası uyarı: Danışmalar, görev konuşmasını ve araç sonuçlarını yapılandırılmış danışman sağlayıcısına (worker'ın sağlayıcısından farklı olabilir) gönderir. Görev içeriği sırlardan arındırılmaz — içeriğini bu sağlayıcıyla paylaşmak istemediğiniz görevlerde danışmanı etkinleştirmeyin. Açmak tek başına bu onayı kaydetmez.",
+  "advisor.disclosure": "Bir danışma; son kullanıcı isteğini, ayrıştırılmış kullanıcı/asistan/geliştirici metnini, araç çağrılarını ve argümanlarını, araç sonuçlarını, worker araç kataloğunu, worker kimliğini, yapılandırılmış danışman modelini ve isteğe bağlı bir odak sorusunu gönderebilir. OpenCodex; sağlayıcı API anahtarlarını, Authorization başlıklarını, OAuth belirteçlerini, arka uç sırlarını, süreç ortamını veya gizli düşünce zincirini isteme koymaz. Görev içeriği sırlardan arındırılmaz: yapıştırılan bir anahtar, dosyadaki bir sır veya aracın yazdırdığı bir belirteç gönderilebilir. Danışman sağlayıcısı worker sağlayıcısından farklı olabilir.",
+  "advisor.consent.label": "Danışman görüşmelerinin bu görevin konuşmasını, araç çağrılarını ve araç sonuçlarını, worker sağlayıcısından farklı olabilecek yapılandırılmış danışman sağlayıcısına gönderebileceğini anlıyorum. Görev içeriği sırlardan arındırılmaz.",
+  "advisor.consent.required": "Bağlam paylaşımı onayı kaydedilmeden danışman çalışmaz. Onay olmadan görev içeriği gönderilmez.",
   "nav.logs": "Günlükler & Hata Ayıklama",
   "nav.usage": "Kullanım",
   "common.github": "GitHub",
@@ -2092,6 +2120,9 @@ export const tr: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "~/.qoder/settings.json içindeki OpenCodex sağlayıcılarını ve özel modelleri yönetir. Loopback erişimi gerektirir. Diğer ayarlar korunur; Geri al, anlık görüntüyü geri yükler.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

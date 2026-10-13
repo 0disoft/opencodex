@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
@@ -6,6 +7,14 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  ...desktopCompatibilityCopy("en"),
+  "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
+  "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",
+  "claude.tierDefaults.title": "CLI tier defaults",
+  "claude.tierDefaults.preview": "Preview Claude settings",
+  "claude.tierDefaults.apply": "Apply to Claude settings",
+  "claude.tierDefaults.applied": "Claude settings match the saved defaults.",
+  "claude.tierDefaults.failed": "Could not apply defaults. Preview again and check Claude settings.",
   "sidecar.pool": "Pool",
   "sidecar.poolCurrent": "Current request's pool",
   "sidecar.poolA": "Anthropic",
@@ -119,6 +128,25 @@ export const en = {
   "nav.models": "Models",
   "nav.combos": "Combos",
   "nav.subagents": "Subagents",
+  "nav.advisor": "Advisor",
+  "advisor.description": "An independent expert model that reviews the worker's task and returns advice. OpenCodex owns the consultation: the worker can call the synthetic advisor tool, and policy preflight additionally attempts one automatic consultation per task without any worker cooperation — firing once the task has produced orientation evidence (an assistant tool call or a tool result after the latest user message). The attempt is deduplicated per task for clients that carry a stable conversation identity; a client without one skips that dedup and may receive the attempt again on every newly eligible request.",
+  "advisor.enabled": "Advisor enabled",
+  "advisor.model": "Expert model",
+  "advisor.modelPlaceholder": "e.g. gpt-6-astra or anthropic/claude-sonnet-4-6",
+  "advisor.effort": "Reasoning",
+  "advisor.policy": "Policy",
+  "advisor.policy.manual": "Manual — only when the worker asks",
+  "advisor.policy.preflight": "Preflight — automatic consultation attempt once orientation evidence exists",
+  "advisor.timeout": "Timeout (ms)",
+  "advisor.save": "Save advisor settings",
+  "advisor.saved": "Advisor settings saved.",
+  "advisor.loadFailed": "Could not load advisor settings. Is the proxy running?",
+  "advisor.warning.noModel": "Enabled but no expert model is configured yet — the Advisor cannot run until a model is configured.",
+  "advisor.costNote": "Consultations are real extra model calls. Each one appears in usage under the advisor model, not the worker model.",
+  "advisor.privacyNote": "Cross-provider notice: consultations send the task conversation and tool results to the configured advisor provider, which may differ from the worker's provider. Task content is not secret-redacted — do not enable the advisor on tasks whose content you would not share with that provider. Turning Advisor on does not itself record this consent.",
+  "advisor.disclosure": "A consultation may send the latest user task, parsed user/assistant/developer text, tool calls and arguments, tool results, the worker tool catalog, worker identity, the configured Advisor model, and an optional focus question. OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend secrets, process environment, or hidden chain-of-thought. Task content is not secret-redacted: a pasted key, a secret in a file, or a token printed by a tool can be sent. The Advisor provider may differ from the worker provider.",
+  "advisor.consent.label": "I understand that Advisor consultations may send this task's conversation, tool calls, and tool results to the configured Advisor provider, which may differ from the worker provider. Task content is not secret-redacted.",
+  "advisor.consent.required": "Advisor is not runnable until context-sharing consent is recorded. No task content is sent without it.",
   "nav.logs": "Logs & Debug",
   "nav.usage": "Usage",
   "common.github": "GitHub",
@@ -2107,6 +2135,9 @@ export const en = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Manages OpenCodex providers and custom models in ~/.qoder/settings.json. Requires loopback access. Other settings are preserved; Undo restores the snapshot.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",
