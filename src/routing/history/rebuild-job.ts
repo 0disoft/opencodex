@@ -108,8 +108,8 @@ export class IndexWorkerJob {
   }
 
   /** Checkpoint a published generation's WAL off the serving thread; false when a reader left frames behind. */
-  async checkpoint(path: string): Promise<boolean> {
-    const reply = await this.request({ type: "checkpoint", path }, "checkpointed");
+  async checkpoint(path: string, busyTimeoutMs: number): Promise<boolean> {
+    const reply = await this.request({ type: "checkpoint", path, busyTimeoutMs }, "checkpointed");
     return reply.type === "checkpointed" && reply.complete;
   }
 

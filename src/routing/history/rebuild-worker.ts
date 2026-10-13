@@ -108,7 +108,7 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
     case "checkpoint": {
       const db = new Database(request.path, { readwrite: true });
       try {
-        db.exec("PRAGMA busy_timeout = 1000");
+        db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(request.busyTimeoutMs))}`);
         // TRUNCATE copies every frame back and empties the WAL; it waits up to
         // the busy timeout for readers, and reports busy when one held on.
         const result = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as

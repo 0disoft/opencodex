@@ -522,4 +522,38 @@ describe("request-history serving-thread I/O", () => {
     await drainRequestHistoryIoForTests();
     expect(statSync(first.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
   });
+
+  test("a new generation's checkpoint requested during an old generation's job runs after it", async () => {
+    // The old job waits on a reader for up to 4 s, so the overlap below is certain.
+    setRequestHistoryBudgetsForTests({ checkpointRetryMs: 60_000, checkpointBusyTimeoutMs: 4_000 });
+    setRequestHistoryRebuildWorkerForTests("inline");
+    writeLedger(`${rows(10).join("\n")}\n`);
+    const a = await openRequestHistoryIndex();
+    const reader = new Database(a.dbPath, { readonly: true });
+    reader.exec("BEGIN");
+    reader.query("SELECT count(*) FROM requests").get();
+    const big = (start: number) => Array.from({ length: 6 }, (_, index) => row(start + index, { pad: "v".repeat(900 * 1024) }));
+    appendFileSync(usageLogPath(), `${big(12_000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(16);
+    expect(requestHistoryCheckpointStateForTests().running).toBe(a.dbPath);
+
+    // A replaced ledger publishes generation B, whose tail then passes the bound.
+    const replacement = join(getConfigDir(), "usage.replacement.jsonl");
+    writeFileSync(replacement, `${rows(5, 20_000).join("\n")}\n`);
+    renameSync(replacement, usageLogPath());
+    const b = await openRequestHistoryIndex();
+    expect(b.dbPath).not.toBe(a.dbPath);
+    appendFileSync(usageLogPath(), `${big(13_000).join("\n")}\n`);
+    expect((await openRequestHistoryIndex()).indexedRows).toBe(11);
+    expect(requestHistoryCheckpointStateForTests().running).toBe(a.dbPath);
+    const sizeBefore = statSync(b.dbPath).size;
+
+    reader.exec("COMMIT");
+    reader.close();
+    for (let attempt = 0; attempt < 400 && statSync(b.dbPath).size - sizeBefore <= REQUEST_HISTORY_CHECKPOINT_WAL_BYTES; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      await drainRequestHistoryIoForTests();
+    }
+    expect(statSync(b.dbPath).size - sizeBefore).toBeGreaterThan(REQUEST_HISTORY_CHECKPOINT_WAL_BYTES);
+  }, 30_000);
 });

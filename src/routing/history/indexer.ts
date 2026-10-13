@@ -225,6 +225,11 @@ let checkpointJobPath: string | null = null;
 // The generation whose checkpoint a reader held back and a timer will retry;
 // its tails wait for that retry. Other generations are unaffected.
 let checkpointRetry: { path: string; lifetime: number } | null = null;
+// A checkpoint requested for another generation while a job was running; it
+// starts once that job is done (between flights).
+let checkpointPending: { path: string; lifetime: number } | null = null;
+const CHECKPOINT_BUSY_TIMEOUT_MS = 1_000;
+let checkpointBusyTimeoutMs = CHECKPOINT_BUSY_TIMEOUT_MS;
 // Serving handles whose close waits for a worker to hold the file first.
 const deferredCloses = new Set<Promise<void>>();
 // A worker rebuild hands reclamation over once its worker has exited (it held
@@ -413,15 +418,25 @@ function noteTail(path: string): void {
  * waits for it before its tail (refreshOnce).
  */
 function scheduleCheckpoint(path: string, attempt = 1): void {
-  if (checkpointJob) return;
+  if (checkpointJob) {
+    // Tails into the job's own generation wait for it, so only another
+    // generation can ask here; keep its request instead of dropping it.
+    if (checkpointJobPath !== path) checkpointPending = { path, lifetime };
+    return;
+  }
   const token = lifetime;
   const job = new IndexWorkerJob();
   let complete = false;
-  const run = job.checkpoint(path).then(done => { complete = done; }, () => undefined).then(() => job.dispose());
+  const run = job.checkpoint(path, checkpointBusyTimeoutMs).then(done => { complete = done; }, () => undefined).then(() => job.dispose());
   checkpointJobPath = path;
   checkpointJob = trackIo(run).then(() => {
     checkpointJob = null;
     checkpointJobPath = null;
+    const pending = checkpointPending;
+    checkpointPending = null;
+    if (pending && pending.lifetime === lifetime && open?.path === pending.path) {
+      whenNoFlight(pending.lifetime, () => { if (open?.path === pending.path) noteTail(pending.path); });
+    }
     // A close since the job started owns no retry state of this one.
     if (lifetime !== token) return;
     if (complete || attempt >= CHECKPOINT_ATTEMPTS) return;
@@ -449,6 +464,19 @@ function scheduleCheckpoint(path: string, attempt = 1): void {
     };
     arm();
   });
+}
+
+/** Run `action` on a later turn with no refresh flight running, unless the index was closed meanwhile. */
+function whenNoFlight(token: number, action: () => void): void {
+  const timer = setTimeout(() => {
+    if (lifetime !== token) return;
+    if (flight) {
+      whenNoFlight(token, action);
+      return;
+    }
+    action();
+  }, 0);
+  (timer as { unref?: () => void }).unref?.();
 }
 
 function openGeneration(path: string): Database {
@@ -1021,6 +1049,7 @@ export function closeRequestHistoryIndex(options: { checkpointOnWorker?: "large"
   closeOpenGeneration(options.checkpointOnWorker === "always");
   cancelReclaim();
   checkpointRetry = null;
+  checkpointPending = null;
   integrityReason = null;
   epoch += 1;
 }
@@ -1148,11 +1177,12 @@ export function setRequestHistoryStepObserverForTests(observer: ((sample: Reques
 }
 
 export function setRequestHistoryBudgetsForTests(
-  budgets: { sliceMs?: number; syncBudgetMs?: number; checkpointRetryMs?: number } | null,
+  budgets: { sliceMs?: number; syncBudgetMs?: number; checkpointRetryMs?: number; checkpointBusyTimeoutMs?: number } | null,
 ): void {
   sliceMs = budgets?.sliceMs ?? REQUEST_HISTORY_SLICE_MS;
   syncBudgetMs = budgets?.syncBudgetMs ?? REQUEST_HISTORY_SYNC_BUDGET_MS;
   checkpointRetryMs = budgets?.checkpointRetryMs ?? CHECKPOINT_RETRY_MS;
+  checkpointBusyTimeoutMs = budgets?.checkpointBusyTimeoutMs ?? CHECKPOINT_BUSY_TIMEOUT_MS;
 }
 
 /** Where a full rebuild runs: by ledger size (auto), always inline, or always on the worker. */

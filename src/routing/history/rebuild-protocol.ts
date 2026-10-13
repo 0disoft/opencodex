@@ -7,7 +7,7 @@ export type RebuildWorkerRequest =
   | { type: "publish"; buildPath: string; generationPath: string }
   | { type: "hold"; path: string }
   | { type: "release" }
-  | { type: "checkpoint"; path: string }
+  | { type: "checkpoint"; path: string; busyTimeoutMs: number }
   | { type: "reclaim"; paths: string[]; maxWalBytes: number };
 
 export type RebuildWorkerReply =
