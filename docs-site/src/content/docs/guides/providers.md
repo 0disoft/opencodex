@@ -146,6 +146,25 @@ login-only too: `ocx login google-antigravity` signs in with your Google account
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
 
+Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
+default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
+tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the
+`gemini-4-argon-low`, `-medium`, and `-high` wire models. Google limits it there to AI Ultra and
+eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigravity CLI client, so
+OpenCodex sends Argon requests and model discovery with the CLI User-Agent
+(`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
+
+The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
+(`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
+(`claude-sonnet-5-5`), each with low, medium, and high efforts. What you actually see is your
+account's own model discovery, because Google enables models per account: some accounts list
+Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
+billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
+generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
+`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
+prefers an account whose discovery lists the requested model. Saved selections of models that left
+the list keep routing as before.
+
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
 `No key needed`. It is a provider-level setting, so the account rows below it do not repeat it.
