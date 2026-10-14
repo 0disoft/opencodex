@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code ve Factory Droid'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Bağlantı** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On sekiz istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -25,6 +25,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On yedi istemci bu şekild
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
 | Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
+| Command Code | `~/.commandcode/providers.json` (Windows’ta varsayılan ana dizin kullanılırken: `HOME ?? USERPROFILE` değerini yalnızca boş veya sırf boşluklardan oluşmayan mutlak bir Windows yoluysa kullanır, aksi halde `homedir()` kullanılır; ayrıca verilen ana dizin korunur; sonuna `.commandcode\providers.json` eklenir) | JSON | Command Code'un sonraki başlatılmasında | yok — anahtarsız geri döngü (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows'ta) | JSON | dosya değişince hemen | anahtarsız geri döngü |
 
 Desteklenen akıl yürütme düzeylerine sahip GJC modelleri, GJC'nin düzey seçimi sunabilmesi için `reasoning: true`, `thinking.levels` ve `compat.supportsReasoningEffort` alanlarını dışa aktarır. Yerel Codex modelleri, katalogda belirtilmese bile standart düzeylerini alır. Bilinen düzeyi olmayan modellerde bu alanlar bulunmaz. `none` düzey göndermez ve `ultra` gönderimde `max` düzeyine dönüşür; bu yüzden seçeneklerde yer almazlar. Model seçeneklerini güncellemek için entegrasyonu yenileyin.
@@ -300,6 +301,8 @@ araştırma notlarına bakın.
 
 ## ZCode 3.14 ve sonrası
 
+Bu yollar varsayılandır. Varsayılan ev dizininde kalan `~/.zcode/v2/setting.json` içindeki mutlak `dataBaseDir`, depoyu `<dataBaseDir>/.zcode/v2/provider_config.json` konumuna taşır. `ZCODE_DATA_DIR` doğrudan `.zcode` kökünü belirtir ve ayardan önceliklidir; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` sağlayıcı dosyası için önceliklidir. Okunamayan, bozuk veya göreli ayarlar yeni uygulamaları ve yenilemeleri engeller. Mevcut sahiplik ve geri alma kayıtları korunur. [İngilizce yol ve geri alma kurallarına](https://opencodex.me/guides/integrations/#zcode-314-and-later) bakın.
+
 ZCode 3.14 özel sağlayıcılarını `~/.zcode/v2/provider_config.json` dosyasına taşıdı; bu
 entegrasyonun yazdığı `~/.zcode/v2/config.json` dosyasına artık yalnızca, yeni dosya yokken bir kez
 çalışan bir içe aktarma üzerinden ulaşıyor. ZCode yeni dosyayı ilk çalıştırmada oluşturduğu için,
@@ -337,6 +340,18 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## omo (Codex / LazyCodex) rol akıl yürütme çabası
+
+LazyCodex algılandığında omo sekmesindeki **omo (Codex / LazyCodex)** bölümünde `$CODEX_HOME/agents/*.toml` içindeki her rol için model ve akıl yürütme çabası seçip **Kaydet** düğmesine basabilirsiniz. Model sabitlemesi olmayan bir rolün satırı yalnızca çabayı kaydedebilir; rol modelini devralmaya devam eder. opencodex, rol dosyasında yalnızca kökteki `model` ve `model_reasoning_effort` anahtarlarını günceller ve eksik sabitlemeleri dosyanın başına yakın bir yere ekler. Rolün talimatları, diğer yorumlar ve diğer anahtarlar olduğu gibi kalır. Yalnızca modeli değiştiren kayıt `effort` göndermez; bu yüzden iki dosyadaki çaba değerleri korunur. Bir düzey seçmek rol dosyasındaki `model_reasoning_effort` değerini ekler veya değiştirir; LazyCodex bu düzeyi destekliyorsa değer `~/.omo/omo.jsonc` içindeki `[codex].agents.<role>.reasoning` alanına da yazılır (`ultra` yalnızca rol dosyasında kalır ve eski `reasoning` kaldırılır). Komut satırında aynı işi `ocx agent roles set <role> <model> --effort <level>` yapar.
+
+Çabası zaten sabitlenmiş roller dahil her satırda **Çabayı devral** seçeneği vardır. Sabitlenmiş bir çabayı bununla değiştirip kaydetmek `"effort": null` gönderir: rol dosyasındaki kök `model_reasoning_effort` satırı ve satır sonu yorumu ile omo.jsonc içindeki `[codex].agents.<role>.reasoning` kaldırılır. Model sabitlemesi yerinde kalır. Ardından Codex çabayı, kendi değeri olmayan herhangi bir rolde olduğu gibi belirler (açıkça verilen bir başlatma değeri, `[agents]` varsayılanı veya üst oturum); modelin sabit bir varsayılanını kullanmaz. Yalnızca var olan tek satırlık bir dize değeri kaldırılabilir; çok satırlı veya dize olmayan bir değer 409 `unsupported_model_value` ile reddedilir ve iki dosya da değişmez.
+
+`PUT /api/codex-agent-roles/{role}` isteğinde `model` atlanırsa rol dosyasındaki `model` sabitlemesi ve omo.jsonc içindeki `model` olduğu gibi kalır; böylece sabitlemesi olmayan bir rol, çabası değişirken veya temizlenirken modelini devralmaya devam eder. Kontrol paneli böyle bir satır için yalnızca çaba içeren bu isteği gönderir ve omo.jsonc içinde girdisi olmayan bir rol için, LazyCodex'in desteklediği bir çaba düzeyi kaydedildiğinde yalnızca `reasoning` içeren bir girdi oluşturulur. Kayıt hiçbir zaman model sabitlemesini kaldırmadığı için `null` model 400 `invalid_model` ile reddedilir; ne `model` ne de `effort` içeren bir istek, rol dosyası veya omo.jsonc okunmadan önce 400 `empty_update` ile reddedilir. `ocx agent roles set` her zaman bir model alır.
+
+`~/.omo/omo.jsonc` yoksa oluşturulmaz. Yorum içeriyorsa, kaydetmek yorumları sileceği için dosyaya dokunulmaz; bu durumda değeri elle ayarlayın. Atlanan bir yansıtma, rol dosyasının kaydını geri almaz. Rol dosyası kaydedilir ama omo.jsonc yazımı başarısız olursa satırdaki düğme **omo.jsonc'yi yeniden dene** olur ve **Çabayı devral** ile yapılan temizleme (`null`) dahil aynı çaba seçimini yeniden gönderir. Bu yeniden deneme başarılı olana kadar, o rol için çabaya dokunmayan sonraki bir **Kaydet** veya **Otomatik ata** **Uygula** işlemi bekleyen seçimi de birlikte gönderir; açıkça seçilen bir çaba onun yerine geçer.
+
+**Otomatik ata**, seçilen modelin çaba listesi boş olmayan gereksinimleri değerlendirilmiş her rol için bir çaba önerir; **Uygula**, **Tümünü uygula** veya `ocx agent roles suggest --apply` o rolün `model_reasoning_effort` değerini ekler ya da değiştirir. Çaba, seçilen modelin kendi düzeylerine yerleştirilir: en düşük, varsayılan, varsayılanın bir üstü veya en yüksek. Liste boşsa çaba önerilmez (`proposedEffort: null`); **Uygula** bu durumda `effort` göndermez ve mevcut sabitlenmiş çabayı olduğu gibi bırakır. `null` bir öneri hiçbir zaman sabitlenmiş çabayı temizlemez.
 
 ## Kilo
 

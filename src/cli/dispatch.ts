@@ -31,12 +31,14 @@ import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex
 import { stripGrokConfig } from "../grok/inject";
 import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } from "./restart-scope";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { isJsonOption, takeFlag, terminalSafeError } from "./runtime-api";
+import { isJsonOption, takeFlag, terminalSafeError, terminalSafeText } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
 import { parseStopApproval, type StopApproval } from "./stop-approval";
 import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
+import { inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
+import { desktopStopNotice } from "./desktop-runtime-guidance";
 
 export interface CliDispatchDeps {
   args: string[];
@@ -51,6 +53,7 @@ export interface CliDispatchDeps {
   spawnDetached: (argv: readonly string[]) => void;
   handleStart: () => Promise<void>;
   handleStop: (approval?: StopApproval) => Promise<StopOutcome>;
+  inspectDesktopSupervision?: typeof inspectDesktopSupervision;
   handleEnsure: (options?: { existingIsSuccess?: boolean }) => Promise<boolean>;
   handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
@@ -112,6 +115,8 @@ const commandRunners: Record<string, CommandRunner> = {
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
     if (!parsed.json) {
+      const notice = desktopStopNotice((deps.inspectDesktopSupervision ?? inspectDesktopSupervision)());
+      if (notice) console.error(notice);
       // handleStop returns the structured outcome now; an object is always truthy, so
       // the warning must key on .ok — otherwise a failed stop would still claim downtime.
       if ((await deps.handleStop()).ok) console.log(warning);
@@ -145,6 +150,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (!deps.head.resolveArgs) return 64;
     return await deps.handleResolve(deps.head.resolveArgs);
   },
+  message: async deps => (await import("./message-command")).runMessageCommand(deps.args.slice(1)),
   restore: async deps => {
     const restoreArgs = deps.args.slice(1);
     const restoreJson = takeFlag(restoreArgs, "--json");
@@ -401,9 +407,22 @@ const commandRunners: Record<string, CommandRunner> = {
       try {
         const { syncConnectedClient } = await import("../client/connect");
         const result = await syncConnectedClient({ restartCodex });
+        const link = clientState.value.transport === "link";
         console.log(result.stale
-          ? "Hub unavailable; retained and applied the last-known-good remote catalog (stale)."
-          : "Remote hub catalog synchronized.");
+          ? `${link ? "Home" : "Hub"} unavailable; retained and applied the last-known-good remote catalog (stale).`
+          : link ? "Remote Link Home catalog synchronized." : "Remote hub catalog synchronized.");
+        if (result.homeSettings) {
+          const { describeHomeCodexSettings } = await import("../link/codex-settings");
+          const settings = result.homeSettings;
+          if (settings.source === "local") {
+            console.log(`Codex settings: kept this machine's local values (${terminalSafeText(settings.reason)}).`);
+          } else {
+            console.log(settings.source === "home"
+              ? `Codex settings applied from Home ${terminalSafeText(settings.document.home.name)}:`
+              : `Codex settings applied from the last recorded Home read (${terminalSafeText(settings.reason)}):`);
+            for (const line of describeHomeCodexSettings(settings.document.settings)) console.log(`  ${terminalSafeText(line)}`);
+          }
+        }
         await handleConnectedSyncCatalogWrite(result, restartScope);
         // `process.exitCode` rather than a literal 0, for the same reason every other
         // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper
@@ -465,7 +484,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "droid", "opencode", "kilo"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -815,6 +834,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));
   },
+  advisor: async deps => {
+    const { handleAdvisorCommand } = await import("./advisor");
+    return await handleAdvisorCommand(deps.args.slice(1));
+  },
   companion: async deps => {
     const { handleCompanionCommand } = await import("./companion");
     return await handleCompanionCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
@@ -960,6 +983,14 @@ const commandRunners: Record<string, CommandRunner> = {
   zcode: async deps => {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
+  },
+  commandcode: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
+  },
+  cmd: async deps => {
+    const { handleCommandcodeCommand } = await import("./integrations");
+    return await handleCommandcodeCommand(deps.args.slice(1));
   },
   help: async () => {
     printUsage();

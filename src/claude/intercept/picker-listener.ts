@@ -11,7 +11,7 @@
  * HTTP/1.1 server, unchanged. Upstream is one HTTP/1.1 request per client request on both paths.
  * Only the bounded bootstrap response is held; other bodies and upgraded sockets relay as streams.
  */
-import { createSecureServer } from "node:http2";
+import { constants as h2Constants, createSecureServer } from "node:http2";
 import type { Http2ServerRequest, Http2ServerResponse, ServerHttp2Session } from "node:http2";
 import { createServer, request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -34,6 +34,11 @@ export interface PickerListenerOptions {
   maxEncodedBytes?: number;
   /** Test seam: concurrent upstream requests; production uses PICKER_MAX_ACTIVE_UPSTREAMS. */
   maxActiveUpstreams?: number;
+  /**
+   * Test seam: arms the drop of a connection whose backend ended, after PICKER_ABANDONED_INPUT_LINGER_MS;
+   * returns a cancel function. Production uses a timer.
+   */
+  scheduleAbandonedInputDrop?: (drop: () => void, ms: number) => () => void;
   log?: (line: string) => void;
 }
 export interface PickerListenerHandle { port: number; close(): Promise<void> }
@@ -51,6 +56,12 @@ export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
+/**
+ * Once the backend has ended a connection and its reply has been flushed, input the client still
+ * sends is discarded for at most this long before the connection is dropped. A cooperative client
+ * closes as soon as it reads a Connection: close reply; this only bounds one that keeps uploading.
+ */
+export const PICKER_ABANDONED_INPUT_LINGER_MS = 30_000;
 
 const HOP_HEADERS = new Set([
   "connection", "keep-alive", "proxy-connection", "proxy-authenticate", "proxy-authorization",
@@ -152,6 +163,10 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
   const upstream = options.upstream ?? { host: "claude.ai", port: 443, servername: "claude.ai" };
   const cap = options.maxEncodedBytes ?? BOOTSTRAP_MAX_ENCODED_BYTES;
   const maxActiveUpstreams = options.maxActiveUpstreams ?? PICKER_MAX_ACTIVE_UPSTREAMS;
+  const scheduleAbandonedInputDrop = options.scheduleAbandonedInputDrop ?? ((drop: () => void, ms: number) => {
+    const timer = setTimeout(drop, ms);
+    return () => clearTimeout(timer);
+  });
   let activeUpstreams = 0;
   const upgrades = new Set<Duplex>();
   const spliced = new Set<Socket>();
@@ -184,9 +199,45 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // reason phrase differs, and sendHead branches on it.
     const res = relayRes as ServerResponse;
     const h2 = req.httpVersionMajor === 2;
+    // Bun's h2 compat response emits finish only after both stream halves close.
+    const responseWritable = h2 ? (req as Http2ServerRequest).stream : res;
+    // Framing, not method, determines whether a peer can keep sending a body. A bodyless h2
+    // request carries END_STREAM on its headers; HTTP/1.1 needs length or chunked framing.
+    const uploading = h2 ? !(req as Http2ServerRequest).stream.endAfterHeaders
+      : req.headers["transfer-encoding"] !== undefined || Number(req.headers["content-length"] ?? 0) > 0;
+    const closeInput = (completeReply = false) => {
+      if (h2) {
+        const stream = (req as Http2ServerRequest).stream;
+        if (!stream.closed && !stream.destroyed) {
+          stream.close(completeReply ? h2Constants.NGHTTP2_NO_ERROR : h2Constants.NGHTTP2_CANCEL);
+        }
+      } else if (!req.destroyed) {
+        if (completeReply) {
+          // finish is not peer receipt: destroy can truncate bytes still queued in TLS/TCP.
+          // Discard further input and flush a graceful FIN without waiting for body completion.
+          req.resume();
+          req.socket.end();
+        } else req.destroy();
+      }
+    };
+    // An HTTP/1.1 reply sent while the upload is unfinished advertises Connection: close. Bun 1.4.3
+    // ends such a response with socket.destroySoon() before our finish listeners run, which resets
+    // the splice before the reply reaches the client; keep it a graceful FIN that discards input.
+    // Only that closing socket is changed, and destroy() stays available for errors and shutdown.
+    const closesUnfinishedUpload = () => !h2 && uploading && !req.complete;
+    const keepClosingReplyIntact = () => {
+      const socket = req.socket;
+      socket.destroySoon = () => { req.resume(); socket.end(); return socket; };
+    };
     // Refusals answer with an empty response and a fixed log line that carries no request data.
     const refuse = (status: 400 | 503) => {
-      res.writeHead(status, { "Content-Length": "0" });
+      if (closesUnfinishedUpload()) keepClosingReplyIntact();
+      // Do not leave a refused, still-uploading stream behind after delivering its empty reply.
+      if (uploading && !req.complete) {
+        req.once("error", () => res.destroy());
+        responseWritable.once("finish", () => closeInput(true));
+      }
+      res.writeHead(status, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
       res.end();
       options.log?.(`picker request refused ${status}`);
     };
@@ -209,12 +260,17 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     const fail = () => {
       if (clientGone) return;
       if (res.headersSent) res.destroy();
-      else { res.writeHead(502, { "Content-Length": "0" }); res.end(); log(502); }
+      else {
+        if (closesUnfinishedUpload()) keepClosingReplyIntact();
+        res.writeHead(502, { "Content-Length": "0", ...(!h2 && uploading && !req.complete ? { Connection: "close" } : {}) });
+        res.end(); log(502);
+      }
     };
     const omit = bootstrap ? new Set(["accept-encoding"]) : new Set<string>();
     const headers = upstreamRequestHeaders(req, omit);
     if (bootstrap) headers.push("Accept-Encoding", narrowBootstrapAcceptEncoding());
     let upReq: ReturnType<typeof httpsRequest>;
+    let upstreamResponded = false;
     try {
       // The HTTP/1.1 client validates the method, path and header values synchronously.
       upReq = httpsRequest({
@@ -222,13 +278,20 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
         ca: upstream.ca, rejectUnauthorized: true, agent: false,
         method, path: req.url, headers, maxHeaderSize: PICKER_MAX_HEADER_BYTES,
         }, upRes => {
+        upstreamResponded = true;
         const status = upRes.statusCode ?? 502;
         const originalHeaders = filteredHeaders(upRes.rawHeaders);
         const sendHead = (raw: string[]) => {
           if (res.headersSent) return;
           // HTTP/2 has no reason phrase; its compat writeHead takes the same flat raw header array.
           if (h2) (relayRes as Http2ServerResponse).writeHead(status, raw as unknown as Record<string, string>);
-          else res.writeHead(status, upRes.statusMessage, raw);
+          else {
+            if (uploading && !req.complete) {
+              keepClosingReplyIntact();
+              raw.push("Connection", "close");
+            }
+            res.writeHead(status, upRes.statusMessage, raw);
+          }
           log(status);
         };
         upRes.on("error", fail);
@@ -293,6 +356,39 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
     // Bun's compat response skips its close event for a HEAD reset before end(); the stream's own
     // close always fires. Destroying an upstream request that already completed is a no-op.
     if (h2) (req as Http2ServerRequest).stream.once("close", onClientClose);
+    if (uploading) {
+      let uploadFinished = false;
+      const finishUpload = () => {
+        if (uploadFinished) return;
+        uploadFinished = true;
+        req.off("end", finishUpload);
+        req.off("close", finishUpload);
+        upReq.off("close", onUpstreamClose);
+        responseWritable.off("finish", onResponseFinish);
+        res.off("close", stopUnfinishedUpload);
+        if (h2) (req as Http2ServerRequest).stream.off("close", finishUpload);
+      };
+      // Upstream close can precede draining a successful reply to a slow downstream.
+      // Stop relaying input only once that reply's writable finishes or closes.
+      const stopUnfinishedUpload = (completeReply = false) => {
+        if (!uploadFinished) {
+          req.unpipe(upReq);
+          closeInput(completeReply);
+          finishUpload();
+          upReq.destroy();
+        }
+      };
+      const onResponseFinish = () => stopUnfinishedUpload(true);
+      const onUpstreamClose = () => {
+        if (!upstreamResponded && !res.writableEnded) stopUnfinishedUpload();
+      };
+      req.once("end", finishUpload);
+      req.once("close", finishUpload);
+      upReq.once("close", onUpstreamClose);
+      responseWritable.once("finish", onResponseFinish);
+      res.once("close", stopUnfinishedUpload);
+      if (h2) (req as Http2ServerRequest).stream.once("close", finishUpload);
+    }
     req.pipe(upReq);
   };
   server.on("request", relay);
@@ -371,6 +467,8 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       const offersH2 = clientHelloOffersH2(head);
       if (offersH2 === null) return;
       client.off("data", onData);
+      // Keep reading an aborted upload after the backend reply FIN.
+      client.allowHalfOpen = true;
       // Paused, a FIN or later bytes wait in the readable buffer and follow `head` once piped.
       client.pause();
       clearTimeout(deadline);
@@ -383,6 +481,23 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
       // its peer (reset, dial failure) tears the peer down instead of leaving it open.
       inner.once("close", () => { spliced.delete(inner); if (!client.writableEnded) client.destroy(); });
       client.once("close", () => { if (!inner.writableEnded) inner.destroy(); });
+      // The backend reply ended; discard ciphertext still coming from the aborted upload.
+      // Unpipe before resuming, so backpressure cannot hide the peer FIN. The discard is bounded
+      // from the moment the reply has been flushed to the socket (finish), never before, so the
+      // drop cannot cut a reply still being written; finish is not peer receipt, so a peer that
+      // also stops reading for the whole budget can lose unread bytes. A peer that keeps sending
+      // past the budget is dropped instead of holding the connection until shutdown (#6984).
+      inner.once("end", () => {
+        client.unpipe(inner);
+        client.resume();
+        const linger = () => {
+          if (client.destroyed) return;
+          const cancel = scheduleAbandonedInputDrop(() => client.destroy(), PICKER_ABANDONED_INPUT_LINGER_MS);
+          client.once("close", cancel);
+        };
+        if (client.writableFinished) linger();
+        else client.once("finish", linger);
+      });
       inner.once("connect", () => {
         inner.setNoDelay(true);
         client.setNoDelay(true);

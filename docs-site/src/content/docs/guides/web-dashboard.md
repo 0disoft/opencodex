@@ -143,10 +143,19 @@ timer. Requests already sent upstream retain their original credentials.
 
 ### Filtering request logs
 
+A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
+its request and attempt failure cause is `transport-ambiguous`, with resend permission
+`refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
+429 remains `rate-limit` with resend permission `permitted`.
+
 Logs filters combine surface, intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
 but does not match partial names. Choices that disappear from the ring reset to All.
+The conversation field also accepts a pasted `codex://threads/<id>` deep link, the form a
+Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
+as `?hostId=…` are ignored and the bare thread id is matched, the same value an
+`ocx logs filter --conversation` search unwraps.
 
 Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
 Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
@@ -156,11 +165,18 @@ fallback until a valid sample is available. Speed uses output tokens per second 
 full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
 excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
 
-The request detail also shows **Decode rate (est.)**. When the proxy observed both ends, it is
+Logs labels each decode estimate **Generation window** or **After visible output** in the list
+and attempt table, and uses **Output rate during generation (est.)** or
+**Output rate after first visible output (est.)** in request details. Older cached responses
+without a timing method show **Timing unknown** and **Output rate (est.; timing method unknown)**
+in details. A visible caption below the detail rate explains the timing method; an unavailable
+rate has no caption. When the proxy observed both ends, it is
 output tokens over the generation window: from the first output item or block, reasoning included,
 to the last output delta. Older rows without that window use the time after the first visible
-token instead. Both are proxy-side observations, not the provider's internal token timing, so the
-value is always an estimate, and a window under one second shows as unavailable. The end-to-end
+token until the end of the request instead. Both are proxy-side observations, not the provider's internal token timing, so the
+value is always an estimate, and a window under one second shows as unavailable. Both numerators
+include reported reasoning output tokens, so the two timing bases are not directly comparable.
+Historical logs are not rewritten and missing generation timestamps are not invented. The end-to-end
 tok/s column and speed filter above are not affected.
 
 Active filters show the matching count out of the loaded total. Reset filters restores all
@@ -261,6 +277,34 @@ they have been synchronized. See
 
 ## Remote Hub sessions, keys, and usage
 
+In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
+
+### Reading an existing API key
+
+Showing a stored key's full value requires a dashboard session established by explicit pairing or
+trusted Tailscale identity. An automatic local dashboard session can still show the masked key list,
+but cannot reveal existing values; a raw admin token cannot call this session-only action either.
+Use the existing [dashboard pairing flow](/guides/remote-hub/#pairing-this-browser-with-a-hub) to establish an
+operator-authorized session before requesting a stored value; a refused reveal states the requirement
+on the page. The local pairing form is offered only by a same-origin standalone dashboard opened
+over HTTP at the literal `127.0.0.1` or `[::1]` address. The origin must match the server's
+configured literal loopback bind. On `http://localhost:<port>` (or another localhost alias),
+check the server's bind: reopen `http://127.0.0.1:<port>` for a `127.0.0.1` bind or
+`http://[::1]:<port>` for a `::1` bind, then pair there. A server configured with hostname
+`localhost` has no eligible local pairing origin. The dashboard cannot infer the configured
+bind from an alias URL, so it shows the generic denial without suggesting a replacement URL.
+Use the existing remote-hub pairing flow or trusted Tailscale sign-in where available.
+Pair again if the authorized session expires or is revoked. Ordinary dashboard sign-in,
+key creation, rotation, and deletion are unchanged.
+
+After pairing, click the key again to request its value. Pairing itself never reveals a key.
+Displayed key values and copy feedback are cleared when the shared session is cleared or replaced,
+pairing starts, you leave this panel, hide the browser tab or desktop window, or switch servers.
+This also clears newly created and replacement values, so copy a one-time value before leaving
+the panel. If creation or rotation succeeds after the session or view changes, its one-time
+value stays hidden. After switching servers, returning to the
+original server revalidates its key list. Pending rotations remain available for explicit commit or abort.
+
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 
 The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
@@ -296,6 +340,10 @@ maintainers do not provide policy advice and cannot resolve provider enforcement
   request, and only requests already in flight keep the account they captured. A manual choice is also
   pinned: the card shows a **PINNED** badge, and a higher selection order cannot preempt that account
   until it is drained, you select another account, or you change any account's selection order.
+  Selecting the badge again asks to release the pin: confirming clears the selection, bound threads
+  keep their captured account, and new or unbound requests return to the selection order and
+  thresholds.
+  If the pin changes while confirmation is open, that confirmation cannot release the newer pin. After a refused or uncertain release, the account view is refreshed; review the current selection before confirming again.
 - Each account card carries a **Selection order** control (First, Earlier, Normal, Later, Last).
   Higher order is used first, and the pool drops to a lower order only once every account above it is
   drained or unavailable. A changed order applies from the next unbound request and never moves a

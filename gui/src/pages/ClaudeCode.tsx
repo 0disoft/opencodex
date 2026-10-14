@@ -16,8 +16,9 @@ import {
   ClaudeCodeQuickstartSection,
   ClaudeCodeSettingsCard,
 } from "./claude-code-sections";
-import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, type ClaudeCodeState, type MapRow } from "./claude-code-types";
+import { AUTO_COMPACT_WINDOW_DEFAULT, formatCompactWindow, newClientId, normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "./claude-code-types";
 import { SmallFastModelSetting } from "./claude-code-settings";
+import { ClaudeCodeTierDefaults } from "./claude-code-tier-defaults";
 import { interceptReasonKey, normalizeSharedProxy, selectFirstPartyNotice, type FirstPartyNotice } from "./claude-code-first-party";
 import {
   acknowledgeSave,
@@ -43,6 +44,11 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     interceptRunning: state.interceptRunning === true,
     interceptEligible: state.interceptEligible === undefined ? true : state.interceptEligible === true,
     sharedProxy: normalizeSharedProxy(state.sharedProxy),
+    // Shared by the session cache and the GET read, so a state cached by an older proxy (no
+    // field) and an older server both read as the default.
+    contextAccounting: normalizeContextAccounting(state.contextAccounting),
+    // The GET has no separate field: the env on this read was built under the accounting it reports.
+    servedContextAccounting: normalizeContextAccounting(state.servedContextAccounting ?? state.contextAccounting),
   };
 }
 
@@ -457,6 +463,11 @@ export default function ClaudeCode({ apiBase, active = true }: { apiBase: string
           availableModels={state.available ?? []}
           onStateChange={setState}
         />
+      </CcwSection>
+
+      <CcwSection title={t("claude.tierDefaults.title")}>
+        <ClaudeCodeTierDefaults state={state} options={modelOptions} onChange={setState} apiBase={apiBase}
+          dirty={!!edit && isClaudeCodeDraftDirty(edit.draft, edit.baseline)} />
       </CcwSection>
 
       <CcwSection title={t("claude.smallFastModel")}>
