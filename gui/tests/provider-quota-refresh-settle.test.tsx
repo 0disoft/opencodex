@@ -109,7 +109,7 @@ async function mount(epoch: number, force: boolean, settled: Array<boolean>) {
 test("an ordinary revalidation does not report an outcome", async () => {
   const settled: boolean[] = [];
   await mount(0, false, settled);
-  // Nobody is waiting on a background read; reporting one would resolve a stale promise.
+  // Epoch zero is background loading; operator tickets start at one.
   expect(settled).toEqual([]);
 });
 
@@ -146,4 +146,10 @@ test("the shell preserves boolean first argument and reports its captured epoch 
   });
   await act(async () => { await settled; });
   expect(calls).toEqual([[true, 17]]);
+});
+
+ test("a cached operator read reports its real outcome", async () => {
+  const settled: boolean[] = [];
+  await mount(1, false, settled);
+  expect(settled).toEqual([true]);
 });

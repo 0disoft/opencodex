@@ -307,7 +307,7 @@ test("signed-in accounts keep logout and one tab refresh, with unknown quota exc
     authHandlers={authHandlers({ onRefreshQuota: async () => true, onLogout: provider => { loggedOut.push(provider); } })} />);
   expect(Array.from(host.querySelectorAll("button")).filter(button => button.textContent?.includes("Refresh quotas"))).toHaveLength(1);
   expect(host.querySelector('[title="Refresh account quota"]')).toBeNull();
-  expect(host.textContent).toContain("Quota unknown");
+  expect(host.querySelector(".pwi-account-card")?.textContent).toContain("Quota unknown");
   expect(host.textContent).toContain("0 avail");
   expect(host.textContent).not.toContain("Estimated remaining tokens");
   await act(async () => { findButton(en["prov.logout"])!.click(); });

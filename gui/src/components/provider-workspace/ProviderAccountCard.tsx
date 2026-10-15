@@ -281,7 +281,8 @@ export default function ProviderAccountCard({
           </div>
         </div>
 
-        {quotaControls}
+        {analyzed.readinessStatus === "unknown" && <span className="badge badge-muted">{t("pws.quotaUnknown")}</span>}
+      {quotaControls}
         {/* Compact Bar Columns: Clean Gemini/Claude headers & round % */}
         <div className="pwi-dense-bars-grid">
           {showReauth && (
@@ -454,6 +455,7 @@ export default function ProviderAccountCard({
           <span>{t("pws.accountPausedHint")}</span>
         </div>
       )}
+      {analyzed.readinessStatus === "unknown" && <span className="badge badge-muted">{t("pws.quotaUnknown")}</span>}
       {quotaControls}
       {/* 2-Column Quotas for Gemini and Claude */}
       <div className="pwi-card-quotas-grid">
