@@ -193,7 +193,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
       const id = activities.start({ trigger: reason, workerModel: deps.workerModelId, advisorModel: current.model, requestedEffort: current.effort }, now());
       const blocked = requestCapped ? "limit" : "budget";
       activities.finish(id, { status: "blocked", durationMs: 0, blockReason: blocked });
-      return { ok: false, isError: true, blocked, content: formatAdvisorUnavailable("limit", requestCapped
+      return { ok: false, isError: true, blocked, content: formatAdvisorUnavailable(blocked, requestCapped
         ? "per-request consultation limit reached; no consultation sent"
         : "task budget exhausted or unavailable; no consultation sent") };
     }

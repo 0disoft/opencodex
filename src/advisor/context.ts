@@ -218,10 +218,12 @@ export function neutralizeAdvisorMarkers(text: string): string {
  * detector (`historyHasAdvisorResult`) must not treat it as one. Upstream error text is untrusted
  * and is neutralized so it cannot forge a genuine marker either.
  */
-export function formatAdvisorUnavailable(kind: "preflight" | "manual" | "limit" | "consent", error: string): string {
+export function formatAdvisorUnavailable(kind: "preflight" | "manual" | "limit" | "budget" | "consent", error: string): string {
   const lead = kind === "limit"
     ? "Advisor consultation limit reached for this request; no further advice is available."
-    : kind === "consent"
+    : kind === "budget"
+      ? "Advisor task consultation budget is exhausted or unavailable, so this consultation was not sent."
+      : kind === "consent"
       ? "Advisor context-sharing consent is not current, so this consultation did not run and no task content was sent to an Advisor provider."
       : "The advisor was consulted but is currently unavailable, so this consultation produced no advice.";
   return [

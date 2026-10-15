@@ -88,7 +88,12 @@ test("adaptive task allowance includes manual calls and survives new ledger, pro
   expect(await restarted.preflightInject(request(true))).toBe(false);
   expect(calls).toHaveLength(2);
   expect(f.activities.snapshot()[0]!.status).toBe("blocked");
-  expect((await restarted.consult(request(true), "manual", "Another question")).blocked).toBe("budget");
+  const refused = await restarted.consult(request(true), "manual", "Another question");
+  expect(refused.blocked).toBe("budget");
+  // A task-budget refusal must not tell the worker the per-request limit was reached.
+  expect(refused.content).toContain("consultation kind: budget");
+  expect(refused.content).toContain("task consultation budget is exhausted or unavailable");
+  expect(refused.content).not.toContain("limit reached for this request");
   expect(calls).toHaveLength(2);
 });
 
