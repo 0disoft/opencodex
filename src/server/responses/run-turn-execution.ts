@@ -30,7 +30,7 @@ import {
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
-import { OAuthAccountPausedError, publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
+import { OAuthAccountPausedError, OAuthTokenRefreshBusyError, publicOAuthAuthenticationErrorMessage, type OAuthAccessSnapshot } from "../../oauth/index";
 import { tryAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
@@ -79,7 +79,7 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
-  requestContext: Pick<ResponsesRequestContext, "options" | "logCtx" | "config">,
+  requestContext: Pick<ResponsesRequestContext, "req" | "options" | "logCtx" | "config">,
   admissionState: ResponsesAdmissionState,
   requestState: Pick<
     PreparedResponsesRequest,
@@ -130,7 +130,7 @@ export async function executeResponsesRunTurn(
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
-  const { options, logCtx, config } = requestContext;
+  const { req, options, logCtx, config } = requestContext;
   const {
     selectionIsCurrent,
     adapterBindings,
@@ -216,7 +216,9 @@ export async function executeResponsesRunTurn(
   }
 
     const runTurnAbort = new AbortController();
-    const cleanupRunTurnAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
+    const cleanupRequestAbort = linkAbortSignal(runTurnAbort, req.signal);
+    const cleanupOptionAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
+    const cleanupRunTurnAbort = (): void => { cleanupRequestAbort(); cleanupOptionAbort(); };
     const devinProducers = new Set<AbortController>();
     const orderMessagesOutput = (source: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
       inboundWire === "anthropic" && transportState.runTurnAdapter.name === "devin" && !routedCompaction
@@ -466,7 +468,19 @@ export async function executeResponsesRunTurn(
     // selected; the turn then moves to a surviving stored account, or, with none, the client
     // gets the login instruction instead of an opaque upstream 401.
     let oauth401ReplayAttempted = false;
-    let pausedAuthRecovery = false;
+    let authRecoveryRefusal: Response | undefined;
+    const refuseLocalAuthRecovery = (error: Extract<AdapterEvent, { type: "error" }>, cause: unknown): boolean => {
+      const cancelled = runTurnAbort.signal.aborted;
+      if (!cancelled && !(cause instanceof OAuthTokenRefreshBusyError) && !(cause instanceof OAuthAccountPausedError)) return false;
+      const status = cancelled ? 499 : cause instanceof OAuthTokenRefreshBusyError ? 503 : 403;
+      const errorType = cancelled ? "client_cancelled" : status === 503 ? "server_error" : "permission_error";
+      const message = cancelled ? "Client cancelled request" : publicOAuthAuthenticationErrorMessage(cause);
+      // If a readiness heartbeat already committed SSE, the mapped event remains retryable
+      // capacity rather than retaining the rejected credential's authentication error/code.
+      Object.assign(error, { status, errorType, message, code: undefined, retryable: status === 503 });
+      authRecoveryRefusal = formatErrorResponse(status, errorType, message, status === 503 ? { retryAfter: "1" } : undefined);
+      return true;
+    };
     const recoverRunTurnAdapterOnPreflight401 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
@@ -480,9 +494,7 @@ export async function executeResponsesRunTurn(
         try {
           admitted = await applyFailoverSnapshot(await refreshResolvedOAuthSelection(sent));
         } catch (err) {
-          if (err instanceof OAuthAccountPausedError) {
-            pausedAuthRecovery = true;
-            Object.assign(error, { status: 403, errorType: "permission_error", message: publicOAuthAuthenticationErrorMessage(err) });
+          if (refuseLocalAuthRecovery(error, err)) {
             hop.permit?.release();
             return false;
           }
@@ -505,7 +517,9 @@ export async function executeResponsesRunTurn(
       } catch (err) {
         // Applying the alternate can still fail, e.g. when a newer manual selection points back
         // at the flagged account; the client then needs the login instruction, not the raw 401.
-        Object.assign(error, { errorType: "authentication_error", message: publicOAuthAuthenticationErrorMessage(err) });
+        if (!refuseLocalAuthRecovery(error, err)) {
+          Object.assign(error, { errorType: "authentication_error", message: publicOAuthAuthenticationErrorMessage(err) });
+        }
         hop.permit?.release();
         return false;
       }
@@ -787,13 +801,13 @@ export async function executeResponsesRunTurn(
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
-        if (pausedAuthRecovery) {
+        if (authRecoveryRefusal) {
           cancelResponseCompletion();
           runTurnAbort.abort();
           queue.close();
           cleanupRunTurnAbort();
           releaseSearchProbeLease();
-          return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(new OAuthAccountPausedError()));
+          return authRecoveryRefusal;
         }
       }
       if (grokDevinPreflight) {
@@ -936,13 +950,13 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
-      if (pausedAuthRecovery) {
+      if (authRecoveryRefusal) {
         cancelResponseCompletion();
         runTurnAbort.abort();
         queue.close();
         cleanupRunTurnAbort();
         releaseSearchProbeLease();
-        return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(new OAuthAccountPausedError()));
+        return authRecoveryRefusal;
       }
     }
     if (grokDevinPreflight) {

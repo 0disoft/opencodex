@@ -59,6 +59,8 @@ import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../provider
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
+import { MAX_OAUTH_TOKEN_REFRESH_WAITERS, retireSettledOAuthRefreshFlight, tokenRefreshWaiters, type OAuthRefreshFlightEvidence } from "./refresh-flight-retirement";
+export { MAX_OAUTH_TOKEN_REFRESH_WAITERS };
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginFlowProvider, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
 export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, isCodeLoginFlow, loginFlowAccountId, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
@@ -135,8 +137,7 @@ export type OAuthActiveTokenObservation =
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
-interface OAuthRefreshFlightEvidence { flightId: string; dispatched: boolean }
-interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController }
+interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean }
 const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
 export class OAuthTokenRefreshBusyError extends Error {
   readonly code = "OAUTH_TOKEN_REFRESH_BUSY";
@@ -160,7 +161,8 @@ export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; 
     const promise = new Promise<OAuthAccessSnapshot>((_resolve, reject) => {
       abort.signal.addEventListener("abort", () => reject(abort.signal.reason), { once: true });
     });
-    const flight = { promise, startedAt: startedAt ?? Date.now(), abort, flightId: flightId ?? randomUUID(), dispatched: dispatched ?? false };
+    const flight: OAuthTokenRefreshFlight = { promise, startedAt: startedAt ?? Date.now(), abort, flightId: flightId ?? randomUUID(), dispatched: dispatched ?? false };
+    abort.signal.addEventListener("abort", () => { flight.settled = true; }, { once: true });
     tokenRefreshes.set(key, flight);
     inserted.push(flight);
     return promise;
@@ -634,45 +636,71 @@ async function resolveAccessSnapshotForAccount(
   const key = `${provider}\u0000${accountId}`;
   let existing = tokenRefreshes.get(key);
   let replacedStaleFlight: OAuthRefreshFlightEvidence | undefined;
-  if (existing && Date.now() - existing.startedAt <= OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS) {
-    logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
-    return existing.promise;
-  }
-  if (existing) {
+  if (existing && (existing.abort.signal.reason instanceof OAuthTokenRefreshStaleError
+    || Date.now() - existing.startedAt > OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS)) {
     replacedStaleFlight = { flightId: existing.flightId, dispatched: existing.dispatched };
     existing.abort.abort(new OAuthTokenRefreshStaleError());
-    if (tokenRefreshes.get(key) === existing) tokenRefreshes.delete(key);
-    existing = undefined;
   }
-  if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
-
-  const abort = new AbortController();
-  const flight: OAuthTokenRefreshFlight = {
-    promise: undefined as unknown as Promise<OAuthAccessSnapshot>,
-    startedAt: Date.now(),
-    abort,
-    flightId: randomUUID(),
-    dispatched: false,
-  };
-  const refresh = (async (): Promise<OAuthAccessSnapshot> => {
-    const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
-    const persistedRow = getAccountCredentialWithStatus(provider, accountId);
-    if (!persistedRow) throw new OAuthLoginRequiredError(provider);
-    if (persistedRow.paused === true) throw new OAuthAccountPausedError();
-    const persisted = persistedRow.credential;
-    if (persisted.access !== accessToken) {
-      throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
+  // Count every consumer, including same-flight joins, until its promise settles. Cancelling
+  // a client cannot recycle this permit. Stale-flight abort above still runs under pressure;
+  // no replacement starts until the old consumers have actually released enough capacity.
+  const waiter = tokenRefreshWaiters.tryAcquire();
+  if (!waiter) throw new OAuthTokenRefreshBusyError();
+  try {
+    if (existing && replacedStaleFlight) {
+      // A replacement would wait for this owner's lock anyway. Keep its registry slot
+      // through definitive-result cleanup and durable retirement, even with spare capacity.
+      // In particular, an ignored abort must not mark a late explicit rejection as uncertain.
+      await existing.promise.catch(() => {});
+      if (tokenRefreshes.get(key) === existing && !retireSettledOAuthRefreshFlight(tokenRefreshes, key, existing)) {
+        throw new OAuthTokenRefreshStaleError();
+      }
+      // Other admitted replacements may have resumed first and installed the next flight.
+      existing = tokenRefreshes.get(key);
     }
-    return accessSnapshot(provider, accountId, persisted, oauthProvider);
-  })().catch(error => {
-    if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
-    throw error;
-  }).finally(() => {
-    if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
-  });
-  flight.promise = refresh;
-  tokenRefreshes.set(key, flight);
-  return refresh;
+    if (existing) {
+      logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
+      return await existing.promise;
+    }
+    if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) {
+      for (const [staleKey, stale] of tokenRefreshes) {
+        if (stale.abort.signal.reason instanceof OAuthTokenRefreshStaleError) retireSettledOAuthRefreshFlight(tokenRefreshes, staleKey, stale);
+      }
+      if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
+    }
+
+    const abort = new AbortController();
+    const flight: OAuthTokenRefreshFlight = {
+      promise: undefined as unknown as Promise<OAuthAccessSnapshot>,
+      startedAt: Date.now(),
+      abort,
+      flightId: randomUUID(),
+      dispatched: false,
+    };
+    const refresh = (async (): Promise<OAuthAccessSnapshot> => {
+      const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
+      const persistedRow = getAccountCredentialWithStatus(provider, accountId);
+      if (!persistedRow) throw new OAuthLoginRequiredError(provider);
+      if (persistedRow.paused === true) throw new OAuthAccountPausedError();
+      const persisted = persistedRow.credential;
+      if (persisted.access !== accessToken) {
+        throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
+      }
+      return accessSnapshot(provider, accountId, persisted, oauthProvider);
+    })().catch(error => {
+      if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
+      throw error;
+    }).finally(() => {
+      flight.settled = true;
+      if (tokenRefreshes.get(key) !== flight) return;
+      if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) {
+        retireSettledOAuthRefreshFlight(tokenRefreshes, key, flight);
+      } else tokenRefreshes.delete(key);
+    });
+    flight.promise = refresh;
+    tokenRefreshes.set(key, flight);
+    return await refresh;
+  } finally { waiter.release(); }
 }
 
 export async function getValidAccessTokenSnapshot(
