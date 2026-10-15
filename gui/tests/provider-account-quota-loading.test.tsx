@@ -107,9 +107,10 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function Harness({ apiBase = "/quota-hook" }: { apiBase?: string }) {
+type HarnessConfig = Parameters<typeof useProviderAccountPools>[0]["config"];
+function Harness({ apiBase = "/quota-hook", config = null }: { apiBase?: string; config?: HarnessConfig }) {
   const aliveRef = useRef(true);
-  const currentPools = useProviderAccountPools({ apiBase, config: null, aliveRef, t: key => key,
+  const currentPools = useProviderAccountPools({ apiBase, config, aliveRef, t: key => key,
     oauthStatus: {}, notify: () => {}, fetchConfig: noop, fetchOauth: noop,
     fetchProviderQuotas: noop, codexActiveNeedsReauth: false });
   useLayoutEffect(() => { pools = currentPools; }, [currentPools]);
@@ -358,6 +359,117 @@ test("one unavailable enriched account fails forced refresh and preserves its ow
   expect(pools.accountSets.oauth.accounts[0]).toMatchObject({ quota: reading, quotaPending: false, quotaUnavailable: true });
 });
 
+// A superseded manual refresh joins the newer request's quota OUTCOME, not merely its
+// generation: only a newer successful enrichment reads as success to the caller it overtook.
+for (const newer of ["http-failure", "structured-unavailable", "success"] as const) {
+  test(`superseded OAuth refresh joins the newer quota outcome (${newer})`, async () => {
+    const lastGood = { ...reading, fiveHourPercent: 55 };
+    const stale = { ...reading, fiveHourPercent: 99 };
+    await act(async () => { pools.setAccountSets({ oauth: { activeAccountId: "a",
+      accounts: ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "probe" as const, quota: lastGood })) } }); });
+    const olderQuota = deferred<Response>();
+    const olderStarted = deferred<void>();
+    let rosterReads = 0;
+    let probes = 0;
+    // The newer request sees a switched selection and an account added after the older one was sent.
+    const olderRows = ["a", "b"].map(id => ({ id, active: id === "a", quotaMode: "probe" as const }));
+    const newerRows = ["a", "b", "c"].map(id => ({ id, active: id === "b", quotaMode: "probe" as const }));
+    respond = async url => {
+      if (!url.includes("quota=1")) return ++rosterReads === 1
+        ? Response.json({ activeAccountId: "a", accounts: olderRows })
+        : Response.json({ activeAccountId: "b", accounts: newerRows });
+      if (++probes === 1) { olderStarted.resolve(); return olderQuota.promise; }
+      if (newer === "http-failure") return new Response(null, { status: 503 });
+      return Response.json({ activeAccountId: "b", accounts: newerRows.map(row =>
+        newer === "structured-unavailable" && row.id === "a" ? { ...row, quotaUnavailable: true } : { ...row, quota: reading }) });
+    };
+    let older!: Promise<boolean>;
+    await act(async () => { older = pools.fetchAccountSets(["oauth"], true); await olderStarted.promise; });
+    await act(async () => { expect(await pools.fetchAccountSets(["oauth"], true)).toBe(newer === "success"); });
+    // The older response is a complete success for the roster it was sent for. It must
+    // neither decide the result nor overwrite what the newer request published.
+    await act(async () => {
+      olderQuota.resolve(Response.json({ activeAccountId: "a", accounts: olderRows.map(row => ({ ...row, quota: stale })) }));
+      expect(await older).toBe(newer === "success");
+    });
+    const { activeAccountId, accounts } = pools.accountSets.oauth;
+    expect(activeAccountId).toBe("b");
+    expect(accounts.map(row => row.id)).toEqual(["a", "b", "c"]);
+    expect(accounts.filter(row => row.active).map(row => row.id)).toEqual(["b"]);
+    expect(accounts.every(row => row.quotaPending === false)).toBe(true);
+    if (newer === "success") {
+      expect(accounts.map(row => [row.quota, row.quotaUnavailable])).toEqual([[reading, false], [reading, false], [reading, false]]);
+    } else if (newer === "structured-unavailable") {
+      expect(accounts.map(row => [row.quota, row.quotaUnavailable])).toEqual([[lastGood, true], [reading, false], [reading, false]]);
+    } else {
+      expect(accounts.map(row => [row.quota, row.quotaUnavailable])).toEqual([[lastGood, true], [lastGood, true], [undefined, true]]);
+    }
+  });
+}
+
+test("superseded OAuth refresh follows the latest quota outcome, not an earlier success", async () => {
+  const olderQuota = deferred<Response>();
+  const olderStarted = deferred<void>();
+  let probes = 0;
+  const rows = [{ id: "a", active: true, quotaMode: "probe" as const }];
+  respond = async url => {
+    if (!url.includes("quota=1")) return Response.json({ activeAccountId: "a", accounts: rows });
+    if (++probes === 1) { olderStarted.resolve(); return olderQuota.promise; }
+    if (probes === 2) return Response.json({ activeAccountId: "a", accounts: rows.map(row => ({ ...row, quota: reading })) });
+    return new Response(null, { status: 503 });
+  };
+  let older!: Promise<boolean>;
+  await act(async () => { older = pools.fetchAccountSets(["oauth"], true); await olderStarted.promise; });
+  await act(async () => { expect(await pools.fetchAccountSets(["oauth"], true)).toBe(true); });
+  await act(async () => { expect(await pools.fetchAccountSets(["oauth"], true)).toBe(false); });
+  await act(async () => {
+    olderQuota.resolve(Response.json({ activeAccountId: "a", accounts: rows.map(row => ({ ...row, quota: reading })) }));
+    expect(await older).toBe(false);
+  });
+  expect(pools.accountSets.oauth.accounts[0]).toMatchObject({ quota: reading, quotaPending: false, quotaUnavailable: true });
+});
+
+test("visibility poll skips a provider whose forced quota read is still in flight, and never forces one itself", async () => {
+  const ticks: Array<() => void> = [];
+  const setIntervalOriginal = win.setInterval;
+  win.setInterval = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms !== 30_000) return (setIntervalOriginal as (...args: unknown[]) => unknown).call(win, fn, ms, ...rest);
+    ticks.push(fn);
+    return 0;
+  }) as typeof win.setInterval;
+  const held = deferred<Response>();
+  const heldStarted = deferred<void>();
+  let hold = false;
+  const rows = [{ id: "a", active: true, quotaMode: "probe" as const }];
+  respond = async url => {
+    if (!url.includes("quota=1")) return Response.json({ activeAccountId: "a", accounts: rows });
+    if (hold) { hold = false; heldStarted.resolve(); return held.promise; }
+    return Response.json({ activeAccountId: "a", accounts: rows.map(row => ({ ...row, quota: reading })) });
+  };
+  const config = { providers: { oauth: { adapter: "fixture", baseUrl: "http://fixture.invalid", authMode: "oauth" } } } as unknown as HarnessConfig;
+  await act(async () => { root!.render(<Harness config={config} />); });
+  await act(async () => { await Promise.resolve(); });
+  expect(ticks).toHaveLength(1);
+  expect(pools.accountSets.oauth.activeAccountId).toBe("a");
+
+  hold = true;
+  let manual!: Promise<boolean>;
+  await act(async () => { manual = pools.fetchAccountSets(["oauth"], true); await heldStarted.promise; });
+  const sent = requests.length;
+  await act(async () => { ticks[0](); await Promise.resolve(); });
+  // The tick neither sends a request nor retires the read the operator is waiting on.
+  expect(requests).toHaveLength(sent);
+  await act(async () => {
+    held.resolve(Response.json({ activeAccountId: "a", accounts: rows.map(row => ({ ...row, quota: reading })) }));
+    expect(await manual).toBe(true);
+  });
+
+  await act(async () => { ticks[0](); await new Promise<void>(resolve => setIntervalOriginal.call(win, resolve, 0)); });
+  expect(requests.slice(sent).map(request => request.url.split("?")[1])).toEqual([
+    "provider=oauth", "provider=oauth&quota=1",
+  ]);
+});
+
 test("explicit null in a failed enriched reading invalidates last-good for OAuth and keys", async () => {
   await act(async () => {
     pools.setAccountSets({ oauth: { activeAccountId: "account", accounts: [
@@ -409,7 +521,7 @@ test("a hanging fetch reaches its deadline, preserves last-good and clears probe
     let result!: Promise<boolean>;
     await act(async () => { result = pools.fetchKeyPools(["keys"], true); await started.promise; });
     expect(pools.keyPools.keys[0].quotaPending).toBe(true);
-    await act(async () => { jest.advanceTimersByTime(20_000); expect(await result).toBe(false); });
+    await act(async () => { jest.advanceTimersByTime(60_000); expect(await result).toBe(false); });
     expect(pools.keyPools.keys[0]).toMatchObject({ quota: reading, quotaPending: false, quotaUnavailable: true });
   } finally {
     jest.useRealTimers();

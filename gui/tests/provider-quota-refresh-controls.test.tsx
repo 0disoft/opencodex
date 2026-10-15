@@ -264,3 +264,39 @@ test("changing active account discards the previous refresh feedback", async () 
   expect(host.textContent).not.toContain("Quota check completed");
   expect(findButton("Refresh quotas")?.disabled).toBe(false);
 });
+
+test.each([
+  ["provider", { name: "provider-b", apiBase: "http://proxy-a" }],
+  ["server", { name: "provider-a", apiBase: "http://proxy-b" }],
+])("a removal confirmation does not follow the panel to another %s", async (_what, next) => {
+  const removed: string[] = [];
+  const handlers = authHandlers({
+    onRemoveAccount: (provider, row) => { removed.push(`${provider}:${row.id}`); return true; },
+  });
+  // Both scopes list the same account id, which is what made a row-only binding unsafe.
+  const accounts = [
+    { id: "shared", email: "shared@example.test", active: true },
+    { id: "other", email: "other@example.test", active: false },
+  ];
+  const panel = (name: string, apiBase: string) => (
+    <ProviderAuthPanel item={{ ...oauthItem, name }} apiBase={apiBase} accounts={accounts} authHandlers={handlers} />
+  );
+  const dialog = () => host.querySelector('[role="alertdialog"]');
+
+  await render(panel("provider-a", "http://proxy-a"));
+  const remove = host.querySelector(".pwi-remove-btn") as unknown as HTMLButtonElement | null;
+  expect(remove).not.toBeNull();
+  await act(async () => { remove!.click(); });
+  expect(dialog()).not.toBeNull();
+
+  await render(panel(next.name, next.apiBase));
+  expect(dialog()).toBeNull();
+  expect(removed).toEqual([]);
+
+  // The pending confirmation still belongs to the scope it was opened for, and only there.
+  await render(panel("provider-a", "http://proxy-a"));
+  const confirm = host.querySelector('[role="alertdialog"] .btn-danger') as unknown as HTMLButtonElement | null;
+  expect(confirm).not.toBeNull();
+  await act(async () => { confirm!.click(); await Promise.resolve(); });
+  expect(removed).toEqual(["provider-a:shared"]);
+});

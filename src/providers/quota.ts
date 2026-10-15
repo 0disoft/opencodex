@@ -524,12 +524,17 @@ export async function fetchProviderAccountQuotas(
   forceRefresh = false,
   providerConfig?: OcxProviderConfig,
   liveConfig?: OcxConfig,
+  /** A known account id force-probes only that account; the rest serve from cache. An
+   *  unknown id falls back to force-all, so a stale caller never leaves every account unforced. */
+  onlyAccountId?: string,
 ): Promise<ProviderAccountQuota[]> {
   if (!supportsPerAccountQuota(provider)) return [];
   const set = getAccountSet(provider);
   if (!set) return [];
+  const scoped = set.accounts.some(account => account.id === onlyAccountId) ? onlyAccountId : undefined;
   return mapQuotaRoster(set.accounts, async account => {
-    const entry = await fetchAccountQuota(provider, account.id, forceRefresh, providerConfig, liveConfig);
+    const forced = forceRefresh && (!scoped || account.id === scoped);
+    const entry = await fetchAccountQuota(provider, account.id, forced, providerConfig, liveConfig);
     const result: ProviderAccountQuota = {
       accountId: account.id,
       quota: isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry.quota, Date.now()) : entry.quota,

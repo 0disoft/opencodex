@@ -62,6 +62,16 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.responsesEndpoint",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)
   "provider.name.volcengine",
+  "pws.cockpitCardTitle",
+  // Antigravity product and plan-tier names are used verbatim in Taiwan PR copy.
+  "pws.providerLabelAntigravity",
+  "pws.plan.ultra",
+  "pws.plan.pro",
+  "pws.plan.enterprise",
+  "pws.tokensColClaude",
+  "pws.tokensColGemini",
+  "pws.tokensLabel5h",
+  "pws.tokensLabel7d",
   // JEV decision method named after the TypeSafe product.
   "cws.jev.backend.typesafe",
   // A literal filename, not prose: AGENTS.md is the file Codex reads from the
@@ -211,6 +221,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.cursor.title",
   "integrations.cursor.privateInference",
   "integrations.cursor.baseUrl",
+  "pws.modelGemini",
+  "pws.modelClaude",
   // Cost cells are a fixed `$0.1401` / `≥$0.1401` in every locale (the column header is the
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",

@@ -463,9 +463,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
+    // A targeted refresh (the per-account refresh button) forces upstream probing for that
+    // account only; the rest read from cache. An absent or unknown accountId keeps the
+    // all-account forced behavior.
+    const onlyAccountId = url.searchParams.get("accountId")?.trim() || undefined;
     const rows = passiveQuota
       ? readPassiveProviderAccountQuotas(provider)
-      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config);
+      : await fetchProviderAccountQuotas(provider, forceRefresh, quotaProvider, config, onlyAccountId);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     return jsonResponse({

@@ -472,8 +472,10 @@ export default function App() {
                     navigateToPage(group.pages[0]);
                     setNavOpen(false);
                   }}
+                  title={t(tkey)}
+                  aria-label={t(tkey)}
                   aria-current={active ? "page" : undefined}>
-                  <Icon /> {t(tkey)}
+                  <Icon /> <span className="nav-item-text">{t(tkey)}</span>
                 </button>
               </div>
             );

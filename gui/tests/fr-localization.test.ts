@@ -245,6 +245,24 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Inventing a synonym would also break the pair with the extract row, whose French label is
   // "Extraction".
   "memoryModels.consolidation",
+  // Provider-workspace redesign: model names ("Gemini", "Claude"), the "Cockpit Tools
+  // Antigravity" card title, and ordinary French words whose correct spelling is
+  // identical to English ("Alias", "Compact").
+  "pws.cockpitCardTitle",
+  "pws.modelGemini",
+  "pws.modelClaude",
+  "pws.aliasShort",
+  "pws.viewCompact",
+  // Pool follow-up: product and provider names ("Google Antigravity", "AI Ultra",
+  // "AI Pro", "Enterprise"), model-name column headers, and bare units ("5h").
+  // The suffixed token headers pair those with a unit in parentheses.
+  "pws.providerLabelAntigravity",
+  "pws.plan.ultra",
+  "pws.plan.pro",
+  "pws.plan.enterprise",
+  "pws.tokensColClaude",
+  "pws.tokensColGemini",
+  "pws.tokensLabel5h",
 ]);
 
 function placeholders(value: string): string[] {

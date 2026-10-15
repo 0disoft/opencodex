@@ -103,6 +103,45 @@ describe("fetchProviderAccountQuotas", () => {
     expect(calls).toBe(4);
   });
 
+  test("a scoped forced refresh probes only the target account", async () => {
+    await seedTwoAccounts();
+    let fiveHour = 50;
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      return new Response(usageBody(fiveHour, 10), { status: 200 });
+    }) as typeof fetch;
+
+    const primed = await fetchProviderAccountQuotas("anthropic");
+    expect(calls).toBe(2);
+    const target = primed[0]?.accountId;
+    expect(typeof target).toBe("string");
+    // New upstream numbers: only the force-probed target may observe them.
+    fiveHour = 70;
+    const rows = await fetchProviderAccountQuotas("anthropic", true, undefined, undefined, target);
+    expect(calls).toBe(3);
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row.quota?.fiveHourPercent]));
+    expect(byId[target]).toBe(70);
+    for (const [id, value] of Object.entries(byId)) {
+      if (id !== target) expect(value).toBe(50);
+    }
+  });
+
+  test("a stale scoped id falls back to force-all", async () => {
+    await seedTwoAccounts();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(usageBody(50, 10), { status: 200 });
+    }) as typeof fetch;
+
+    await fetchProviderAccountQuotas("anthropic");
+    expect(calls).toBe(2);
+    // Unknown id must not leave every account unforced.
+    await fetchProviderAccountQuotas("anthropic", true, undefined, undefined, "acct-stale");
+    expect(calls).toBe(4);
+  });
+
   test("a failing probe is flagged unavailable without dropping the other account", async () => {
     await seedTwoAccounts();
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

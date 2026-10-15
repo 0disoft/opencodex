@@ -241,9 +241,11 @@ test("UX-05: every Pool 2 account, pool-settings and reset-grant mutation names 
   expect(poolToggle()?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelectorAll('button[aria-label^="' + en["codexAuth.pause"] + ' — "]')[1]);
   await click(host.querySelectorAll("button.codex-account-auto-switch-toggle")[1]);
-  await click(host.querySelectorAll(".pwi-auth-row-main")[1]);
-  await click(buttonsByText(en["prov.editAlias"])[1]);
-  await click(host.querySelectorAll(".pwi-auth-row-remove")[1]);
+  await click(host.querySelectorAll(".pwi-card-select-trigger")[1]);
+  await click(host.querySelectorAll('button[aria-label="' + en["prov.editAlias"] + '"]')[1]);
+  // Removal is confirmed in a dialog bound to this pool before the handler runs.
+  await click(host.querySelectorAll(".pwi-remove-btn")[1]);
+  await click(host.querySelector('[role="alertdialog"] .btn-danger'));
   await click(host.querySelector("[data-anthropic-grant-badge]"));
   await click(host.querySelector("[data-anthropic-grant-use]"));
   await click(host.querySelector("[data-anthropic-grant-confirm]"));
@@ -253,15 +255,17 @@ test("UX-05: every Pool 2 account, pool-settings and reset-grant mutation names 
     ["threshold", "anthropic2", "other", 70],
     ["switch", "anthropic2", "other"],
     ["alias", "anthropic2", "oauth", "other", undefined],
-    ["remove", "anthropic2", "other"],
+    ["remove", "anthropic2", "other", true],
   ]);
   expect(calls.every(call => call[1] === "anthropic2")).toBe(true);
   const sent = requests.map(request => request.method + " " + request.path);
   expect(sent).toContain("PUT /api/pool/settings");
   expect(sent).toContain("POST /api/anthropic/reset-grants/consume");
   expect(requests.find(request => request.path.endsWith("/consume"))?.body).toMatchObject({ provider: "anthropic2", accountId: "shared" });
-  // No request reached an endpoint without naming Pool 2.
-  expect(requests.every(request => request.provider === "anthropic2")).toBe(true);
+  // No pool-scoped request reached an endpoint without naming Pool 2. The request-log read
+  // behind the toolbar's token estimate is pool-agnostic: its rows are attributed to accounts
+  // by a provider-scoped label, so it carries no pool parameter to get wrong.
+  expect(requests.filter(request => request.path !== "/api/logs").every(request => request.provider === "anthropic2")).toBe(true);
 });
 
 test("UX-05: late Pool 2 settings and reset reads never render in the primary pool after a switch", async () => {
@@ -303,7 +307,9 @@ test("UX-05: an unmarked custom anthropic2 row receives neither pool's settings 
   await tick();
   expect(poolToggle()).toBeNull();
   expect(grantBadges()).toEqual([]);
-  expect(requests).toEqual([]);
+  // The accounts toolbar calibrates its token estimate from the request log for every
+  // OAuth roster; that read names no pool. Nothing else may leave this panel.
+  expect(requests.map(request => request.path)).toEqual(["/api/logs"]);
 });
 
 function PoolsHarness({ onPools }: { onPools: (pools: ReturnType<typeof useProviderAccountPools>) => void }) {
