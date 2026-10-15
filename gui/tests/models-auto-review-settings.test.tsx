@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 import { en } from "../src/i18n/en";
@@ -24,7 +24,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 function Harness({ apiBase }: { apiBase: string }) {
-  controller = useAutoReviewSettings(apiBase, t, (ok, message) => feedback.push([ok, message]));
+  const current = useAutoReviewSettings(apiBase, t, (ok, message) => feedback.push([ok, message]));
+  // Publish after commit (as the other hook harnesses do) instead of writing module state during render.
+  useLayoutEffect(() => { controller = current; }, [current]);
   return null;
 }
 async function paint(apiBase: string) {
