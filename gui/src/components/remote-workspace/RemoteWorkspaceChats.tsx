@@ -3,7 +3,7 @@ import { IconArrowDown, IconChevron, IconGrip, IconX } from "../../icons";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
 import { EVENT_TKEY, PROFILE_LABEL, STATUS_TKEY, type RemoteDevice, type RemoteSession } from "./types";
-import { MAX_PANES, openPane, paneIds, parseLayout, reconcileLayout, removePane, resizeSplit, splitPane, type PaneLayout, type SplitEdge } from "./split-layout";
+import { MAX_PANES, minLayoutWidth, openPane, paneIds, parseLayout, reconcileLayout, removePane, resizeSplit, splitPane, type PaneLayout, type SplitEdge } from "./split-layout";
 import { useSessionActions } from "./use-session-actions";
 
 const DRAG_TYPE = "application/x-opencodex-session";
@@ -16,7 +16,11 @@ function SplitBranch({ node, renderPane, resize }: {
   const container = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   if (node.type === "pane") return renderPane(node.sessionId);
-  return <div ref={container} className={`remote-split-branch remote-split-branch--${node.axis}`} style={{ "--split-ratio": node.ratio } as CSSProperties}>
+  // Only a nested split reserves its width; a leaf pane stays free to follow the ratio.
+  const trackMin = (child: PaneLayout) => child.type === "split" ? minLayoutWidth(child) : 0;
+  const style = { "--split-ratio": node.ratio, "--split-min-width": minLayoutWidth(node),
+    "--split-first-min": trackMin(node.first), "--split-second-min": trackMin(node.second) } as CSSProperties;
+  return <div ref={container} className={`remote-split-branch remote-split-branch--${node.axis}`} style={style}>
     <div className="remote-split-child"><SplitBranch node={node.first} renderPane={renderPane} resize={resize} /></div>
     <div role="separator" tabIndex={0} className="remote-split-divider" aria-label={t("remote.split.resize")}
       aria-orientation={node.axis === "row" ? "vertical" : "horizontal"} aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(node.ratio * 100)}

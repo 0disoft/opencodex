@@ -53,6 +53,8 @@ while `types.ts` shares the dashboard contracts with the page. Only layout ident
 and ratios are stored locally; draft text and session output remain in memory. Separators support
 axis-specific arrow keys and Home/End bounds. At viewport widths up to 760px, panes stack
 without separators or horizontal scrolling while the saved desktop split tree remains intact.
+A track that holds a nested split reserves that subtree's minimum width (`minLayoutWidth`), so
+side-by-side splits never scroll inside a pane column; an oversized tree scrolls the pane surface once.
 
 Hub runtime admission counts pending create/resume starts as well as live handles against global and per-device limits; every outcome releases its reservation. Stop and shutdown reclaim late resumed handles before clearing ownership. Coordinator result size limits normalize both response text and success, so bridge and MCP callers receive consistent errors.
 

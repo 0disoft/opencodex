@@ -3,9 +3,19 @@ export type PaneLayout = { type: "pane"; sessionId: string } | {
   type: "split"; id: string; axis: "row" | "column"; ratio: number; first: PaneLayout; second: PaneLayout;
 };
 export const MAX_PANES = 4;
+/** Narrowest usable pane and the divider track between two panes, in CSS pixels. */
+export const PANE_MIN_WIDTH = 260;
+const DIVIDER_WIDTH = 8;
 export const paneIds = (tree: PaneLayout | null): string[] => !tree ? [] : tree.type === "pane"
   ? [tree.sessionId] : [...paneIds(tree.first), ...paneIds(tree.second)];
 export const pane = (sessionId: string): PaneLayout => ({ type: "pane", sessionId });
+
+/** Width a subtree needs so that no nested split has to scroll sideways inside its own track. */
+export function minLayoutWidth(node: PaneLayout): number {
+  if (node.type === "pane") return PANE_MIN_WIDTH;
+  const first = minLayoutWidth(node.first), second = minLayoutWidth(node.second);
+  return node.axis === "row" ? first + DIVIDER_WIDTH + second : Math.max(first, second);
+}
 
 export function removePane(tree: PaneLayout | null, sessionId: string): PaneLayout | null {
   if (!tree) return null;

@@ -1,5 +1,17 @@
 import { expect, test } from "bun:test";
-import { MAX_PANES, openPane, pane, paneIds, parseLayout, reconcileLayout, removePane, resizeSplit, splitPane, type PaneLayout } from "../src/components/remote-workspace/split-layout";
+import { MAX_PANES, PANE_MIN_WIDTH, minLayoutWidth, openPane, pane, paneIds, parseLayout, reconcileLayout, removePane, resizeSplit, splitPane, type PaneLayout } from "../src/components/remote-workspace/split-layout";
+
+test("nested side-by-side splits reserve the width of every pane they lay out in a row", () => {
+  let row = splitPane(pane("a"), "b", "a", "right")!;
+  row = splitPane(row, "c", "b", "right")!;
+  row = splitPane(row, "d", "c", "right")!;
+  expect(minLayoutWidth(row)).toBe(4 * PANE_MIN_WIDTH + 3 * 8);
+  if (row.type !== "split") throw new Error("expected split");
+  // Each track's minimum covers its subtree, so the inner splits fit without their own scrollbar.
+  expect(minLayoutWidth(row.first) + 8 + minLayoutWidth(row.second)).toBe(minLayoutWidth(row));
+  const grid = splitPane(splitPane(pane("a"), "b", "a", "right")!, "c", "a", "down")!;
+  expect(minLayoutWidth(grid)).toBe(2 * PANE_MIN_WIDTH + 8);
+});
 
 test("drop edges choose correct order and axis", () => {
   for (const edge of ["left", "right", "up", "down"] as const) {

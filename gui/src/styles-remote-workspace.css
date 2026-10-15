@@ -94,8 +94,10 @@
 .remote-session-split-actions .btn { min-height: 28px; padding: var(--space-1) var(--space-2); }
 .remote-session-split-actions svg, .remote-pane-close svg { width: var(--icon-sm); height: var(--icon-sm); }
 .remote-pane-surface { min-width: 0; height: clamp(560px, 75vh, 900px); overflow: auto; border-radius: var(--radius); }
-.remote-split-branch { display: grid; min-width: 0; height: 100%; }
-.remote-split-branch--row { grid-template-columns: minmax(0, calc(var(--split-ratio) * 100% - 4px)) 8px minmax(0, 1fr); min-width: 528px; }
+/* A track holding a nested split reserves that subtree's minimum, so nested side-by-side splits
+   never scroll inside a pane column; when the tree is wider than the surface, the surface scrolls once. */
+.remote-split-branch { display: grid; min-width: calc(var(--split-min-width, 0) * 1px); height: 100%; }
+.remote-split-branch--row { grid-template-columns: minmax(calc(var(--split-first-min, 0) * 1px), calc(var(--split-ratio) * 100% - 4px)) 8px minmax(calc(var(--split-second-min, 0) * 1px), 1fr); }
 .remote-split-branch--column { grid-template-rows: minmax(0, calc(var(--split-ratio) * 100% - 4px)) 8px minmax(0, 1fr); }
 .remote-split-child { min-width: 0; min-height: 0; overflow: auto; }
 .remote-split-divider { position: relative; background: transparent; touch-action: none; cursor: col-resize; }
