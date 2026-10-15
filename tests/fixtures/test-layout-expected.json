@@ -1,4 +1,5 @@
 {
+  "prefer-model-alias-ids.test.ts": "server",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",

@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { routeModel } from "../../src/router";
+import { gatherRoutedModels } from "../../src/codex/catalog/provider-fetch";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -123,4 +125,44 @@ describe("preferModelAliasIds on /v1/models", () => {
       server.stop(true);
     }
   });
+});
+
+
+test("shared aliases remain qualified, unique and routable", async () => {
+  const config = aliasConfig(true);
+  config.providers.other = { ...config.providers.seek!, alias: "OTH" };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string }[] };
+    const ids = body.data.map(row => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain("SEK-glm-4.7-flash");
+    expect(ids).toContain("seek/glm-4.7-flash");
+    expect(ids).toContain("other/glm-4.7-flash");
+    for (const id of ids) expect(() => routeModel(config, id)).not.toThrow();
+  } finally { server.stop(true); }
+});
+
+test("a shadowed alias never advertises a different provider's route", async () => {
+  const config = aliasConfig(true);
+  config.providers.seek!.modelAliases = { "glm-4.7-flash": "plain-native" };
+  config.providers.plain = { adapter: "openai-chat", baseUrl: "https://plain.example/v1", liveModels: false, models: ["plain-native"] };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string; owned_by: string }[] };
+    const row = body.data.find(row => row.owned_by === "seek")!;
+    expect(routeModel(config, row.id)).toMatchObject({ providerName: "seek", modelId: "glm-4.7-flash" });
+  } finally { server.stop(true); }
+});
+
+test("preferred and native IDs share a route; Codex gather is unchanged", async () => {
+  const config = aliasConfig(true);
+  expect(routeModel(config, "SEK-glm-4.7-flash")).toMatchObject({ providerName: "seek", modelId: "glm-4.7-flash" });
+  expect(routeModel(config, "seek/glm-4.7-flash")).toMatchObject({ providerName: "seek", modelId: "glm-4.7-flash" });
+  const before = await gatherRoutedModels({ ...config, preferModelAliasIds: false });
+  const after = await gatherRoutedModels(config);
+  expect(after.map(m => [m.id, m.alias])).toEqual(before.map(m => [m.id, m.alias]));
+  expect(after.filter(m => m.provider === "seek")).toHaveLength(1);
 });
