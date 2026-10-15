@@ -109,8 +109,11 @@ test("adaptive policy exposes and saves the server-enforced task allowance", asy
     return Response.json({ settings: submitted, runnable: true });
   }) as typeof fetch;
   const { root, container } = await mountEditor({ ...initialSettings, policy: "adaptive", maxConsultationsPerTask: 3 });
-  const limit = container.querySelector<HTMLSelectElement>("#advisor-task-limit")!;
+  const label = [...container.querySelectorAll("label")]
+    .find(item => item.textContent === "Consultations per task");
+  const limit = label?.control as HTMLSelectElement;
   expect(limit).toBeTruthy();
+  expect(limit.tagName).toBe("SELECT");
   await act(async () => { limit.value = "2"; limit.dispatchEvent(new testWindow.Event("change", { bubbles: true })); });
   await clickSave(container);
   expect(submitted).toMatchObject({ policy: "adaptive", maxConsultationsPerTask: 2, contextSharingConsent: "v1" });

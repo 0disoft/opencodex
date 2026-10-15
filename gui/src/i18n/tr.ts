@@ -142,7 +142,7 @@ export const tr: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
   "advisor.policy.adaptive": "Uyarlanabilir — başlangıç ve başarısız onarım danışmaları",
   "advisor.taskLimit": "Görev başına danışma",
-  "advisor.adaptiveNote": "Otomatik danışmalar sabit bir konuşma kimliği gerektirir: aynı doğrulama başarısız olur, dosya düzenlemesi tamamlanır ve doğrulama tekrar başarısız olur. Manuel çağrılar da görev bütçesini tüketir. Rezervasyonlar 24 saat tutulur ve proxy yeniden başlatıldığında korunur.",
+  "advisor.adaptiveNote": "Otomatik danışmalar sabit bir konuşma kimliği gerektirir. İlk danışma, başlangıç incelemesi kanıtından (araç çağrısı veya sonucu) sonra yapılır. Başarısız onarım danışması için doğrulamanın başarısız olması, dosya düzenlemesinin tamamlanması ve ardından aynı komutun aynı dizinde yeniden çalıştırılıp başarısız olması gerekir; yalnızca tekrarlanan hatalar yeterli değildir. Manuel çağrılar da görev bütçesini tüketir. Rezervasyonlar 24 saat sonra sona erer ve proxy yeniden başlatıldığında korunur.",
   "advisor.activity.title": "Son danışman etkinliği",
   "advisor.activity.note": "Bu işlemin son 24 saatinden en fazla 100 kayıt. Görev metni veya tavsiye saklanmaz. Akıl yürütme: istenen → adaptörün eşlediği; bildirilmemesi desteği doğrulamaz. Tokenlar: bildirilen girdi / çıktı. Tavsiyenin benimsenmesi veya kesin maliyet çıkarılmaz.",
   "advisor.activity.empty": "Henüz danışma kaydı yok.",

@@ -143,7 +143,7 @@ export const en = {
   "advisor.policy.preflight": "Preflight — automatic consultation attempt once orientation evidence exists",
   "advisor.policy.adaptive": "Adaptive — orientation and failed-repair consultations",
   "advisor.taskLimit": "Consultations per task",
-  "advisor.adaptiveNote": "Automatic consultations require a stable conversation identity. The same validation must fail, a file edit must complete, and validation must fail again. Manual calls also consume the task budget; reservations expire after 24 hours and survive proxy restarts.",
+  "advisor.adaptiveNote": "Automatic consultations require a stable conversation identity. Initial advice follows orientation evidence (a tool call or result). Failed-repair advice requires a failed validation, a completed file edit, then a new failure of the same command in the same directory; repeated failures alone do not qualify. Manual calls also consume the task budget; reservations expire after 24 hours and survive proxy restarts.",
   "advisor.activity.title": "Recent advisor activity",
   "advisor.activity.note": "Up to 100 records from this process, retained for 24 hours. No task text or advice is stored. Reasoning shows requested → adapter-mapped effort; unreported does not confirm support. Tokens show reported input / output. Advice adoption and exact cost are not inferred.",
   "advisor.activity.empty": "No consultations recorded yet.",

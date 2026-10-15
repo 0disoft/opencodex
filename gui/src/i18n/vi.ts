@@ -141,7 +141,7 @@ export const vi: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — tự động thử tư vấn khi có bằng chứng định hướng",
   "advisor.policy.adaptive": "Thích ứng — khảo sát ban đầu và sửa lỗi thất bại",
   "advisor.taskLimit": "Số lần tư vấn mỗi tác vụ",
-  "advisor.adaptiveNote": "Tư vấn tự động cần mã hội thoại ổn định: cùng một phép kiểm tra thất bại, việc sửa tệp hoàn tất rồi phép kiểm tra lại thất bại. Lệnh gọi thủ công cũng dùng ngân sách tác vụ. Lượt đã giữ có hiệu lực 24 giờ và vẫn còn sau khi khởi động lại proxy.",
+  "advisor.adaptiveNote": "Tư vấn tự động cần mã hội thoại ổn định. Tư vấn ban đầu diễn ra sau khi có bằng chứng khảo sát (lệnh gọi công cụ hoặc kết quả). Tư vấn sau sửa lỗi thất bại cần một lần kiểm tra thất bại, chỉnh sửa tệp hoàn tất, rồi chạy lại cùng lệnh trong cùng thư mục và vẫn thất bại; chỉ lặp lại thất bại thì chưa đủ. Lệnh gọi thủ công cũng dùng ngân sách tác vụ. Lượt đã giữ hết hạn sau 24 giờ và vẫn còn sau khi khởi động lại proxy.",
   "advisor.activity.title": "Hoạt động Advisor gần đây",
   "advisor.activity.note": "Tối đa 100 bản ghi của tiến trình này trong 24 giờ. Không lưu nội dung tác vụ hay lời khuyên. Suy luận: yêu cầu → mức do bộ chuyển đổi ánh xạ; chưa báo cáo không xác nhận hỗ trợ. Token: đầu vào / đầu ra được báo cáo. Không suy đoán việc áp dụng lời khuyên hay chi phí chính xác.",
   "advisor.activity.empty": "Chưa có bản ghi tư vấn.",

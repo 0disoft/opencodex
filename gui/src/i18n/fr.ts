@@ -140,7 +140,7 @@ export const fr: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — tentative automatique dès qu'une preuve d'orientation existe",
   "advisor.policy.adaptive": "Adaptatif — orientation et réparation en échec",
   "advisor.taskLimit": "Consultations par tâche",
-  "advisor.adaptiveNote": "Les consultations automatiques exigent un identifiant de conversation stable : une même vérification échoue, une modification de fichier se termine, puis la vérification échoue encore. Les appels manuels comptent aussi dans le budget. Les réservations durent 24 heures et survivent aux redémarrages du proxy.",
+  "advisor.adaptiveNote": "Les consultations automatiques exigent un identifiant de conversation stable. Le conseil initial suit un indice d’orientation (un appel d’outil ou un résultat). Le conseil après réparation échouée exige une vérification en échec, une modification de fichier terminée, puis un nouvel échec de la même commande dans le même répertoire ; des échecs répétés seuls ne suffisent pas. Les appels manuels comptent aussi dans le budget. Les réservations expirent après 24 heures et survivent aux redémarrages du proxy.",
   "advisor.activity.title": "Activité récente du conseiller",
   "advisor.activity.note": "Jusqu’à 100 entrées de ce processus, conservées 24 heures. Aucun texte de tâche ni conseil enregistré. Raisonnement : demandé → traduit par l’adaptateur ; une valeur non signalée ne confirme pas la prise en charge. Tokens : entrée / sortie signalées. Adoption et coût exact ne sont pas déduits.",
   "advisor.activity.empty": "Aucune consultation enregistrée.",

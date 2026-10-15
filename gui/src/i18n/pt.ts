@@ -36,7 +36,7 @@ export const pt: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — tentativa automática após evidência de orientação",
   "advisor.policy.adaptive": "Adaptativo — orientação e falha após correção",
   "advisor.taskLimit": "Consultas por tarefa",
-  "advisor.adaptiveNote": "Consultas automáticas exigem uma identidade de conversa estável: a mesma verificação falha, uma edição de arquivo é concluída e a verificação falha novamente. Chamadas manuais também consomem o orçamento. As reservas duram 24 horas e sobrevivem a reinicializações do proxy.",
+  "advisor.adaptiveNote": "Consultas automáticas exigem uma identidade de conversa estável. A orientação inicial ocorre após evidências de exploração (uma chamada de ferramenta ou um resultado). A consulta após falha na correção exige uma verificação com falha, uma edição de arquivo concluída e uma nova execução da mesma instrução no mesmo diretório que falhe novamente; falhas repetidas por si só não bastam. Chamadas manuais também consomem o orçamento da tarefa. As reservas expiram após 24 horas e sobrevivem a reinicializações do proxy.",
   "advisor.activity.title": "Atividade recente do Advisor",
   "advisor.activity.note": "Até 100 registros deste processo, mantidos por 24 horas. Nenhum texto da tarefa ou conselho é armazenado. Raciocínio: solicitado → mapeado pelo adaptador; não informado não confirma suporte. Tokens: entrada / saída informadas. Adoção e custo exato não são inferidos.",
   "advisor.activity.empty": "Nenhuma consulta registrada ainda.",

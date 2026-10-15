@@ -142,7 +142,7 @@ export const zh: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — 出现方向性证据后自动尝试咨询",
   "advisor.policy.adaptive": "自适应 — 初始探查与修复失败时咨询",
   "advisor.taskLimit": "每任务咨询上限",
-  "advisor.adaptiveNote": "自动咨询需要稳定的会话标识。只有同一验证失败、完成文件修改后再次失败，才会触发失败咨询。手动调用也计入任务预算；预算保留 24 小时，重启代理不会清零。",
+  "advisor.adaptiveNote": "自动咨询需要稳定的会话标识。初始咨询在出现探查证据（工具调用或结果）后进行。修复失败咨询需要验证失败、文件修改完成，随后在同一目录重新执行同一命令并再次失败；仅重复失败不符合条件。手动调用也计入任务预算；预约在 24 小时后过期，重启代理不会清零。",
   "advisor.activity.title": "最近的顾问活动",
   "advisor.activity.note": "显示当前进程最近 24 小时内最多 100 条记录，不保存任务正文或专家建议。推理强度显示请求档位 → 适配器映射档位；未报告不代表支持。Token 显示已报告的输入 / 输出量，不推测建议采纳情况或精确费用。",
   "advisor.activity.empty": "尚无咨询记录。",

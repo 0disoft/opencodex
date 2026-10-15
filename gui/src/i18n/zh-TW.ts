@@ -134,7 +134,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — 出現方向性證據後自動嘗試諮詢",
   "advisor.policy.adaptive": "自適應 — 初始探查與修復失敗時諮詢",
   "advisor.taskLimit": "每項任務諮詢上限",
-  "advisor.adaptiveNote": "自動諮詢需要穩定的對話識別碼。只有同一驗證失敗、完成檔案修改後再次失敗，才會觸發失敗諮詢。手動呼叫也計入任務預算；預算保留 24 小時，重啟代理不會歸零。",
+  "advisor.adaptiveNote": "自動諮詢需要穩定的對話識別碼。初始諮詢在出現探查證據（工具呼叫或結果）後進行。修復失敗諮詢需要驗證失敗、檔案修改完成，隨後在同一目錄重新執行同一命令並再次失敗；僅重複失敗不符合條件。手動呼叫也計入任務預算；預約在 24 小時後到期，重啟代理不會歸零。",
   "advisor.activity.title": "最近的顧問活動",
   "advisor.activity.note": "顯示目前程序最近 24 小時內最多 100 筆記錄，不儲存任務內文或專家建議。推理強度顯示要求等級 → 介接器映射等級；未回報不代表支援。Token 顯示已回報的輸入 / 輸出量，不推測建議採納情況或精確費用。",
   "advisor.activity.empty": "尚無諮詢記錄。",

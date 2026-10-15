@@ -142,7 +142,7 @@ export const de: Record<TKey, string> = {
   "advisor.policy.preflight": "Preflight — automatischer Konsultationsversuch, sobald Orientierungsbelege vorliegen",
   "advisor.policy.adaptive": "Adaptiv — Orientierung und fehlgeschlagene Reparaturen",
   "advisor.taskLimit": "Beratungen pro Aufgabe",
-  "advisor.adaptiveNote": "Automatische Beratungen erfordern eine stabile Gesprächskennung: dieselbe Prüfung schlägt fehl, eine Dateiänderung wird abgeschlossen und die Prüfung schlägt erneut fehl. Manuelle Aufrufe zählen zum Aufgabenbudget. Reservierungen gelten 24 Stunden und überstehen Proxy-Neustarts.",
+  "advisor.adaptiveNote": "Automatische Beratungen erfordern eine stabile Gesprächskennung. Die erste Beratung folgt auf Orientierungshinweise (einen Werkzeugaufruf oder ein Ergebnis). Eine Beratung nach fehlgeschlagener Reparatur erfordert eine fehlgeschlagene Prüfung, eine abgeschlossene Dateiänderung und danach einen erneuten Fehlschlag desselben Befehls im selben Verzeichnis; wiederholte Fehlschläge allein reichen nicht aus. Manuelle Aufrufe zählen zum Aufgabenbudget. Reservierungen gelten 24 Stunden und überstehen Proxy-Neustarts.",
   "advisor.activity.title": "Letzte Berateraktivitäten",
   "advisor.activity.note": "Bis zu 100 Einträge dieses Prozesses für 24 Stunden. Keine Aufgabentexte oder Ratschläge werden gespeichert. Denkaufwand: angefordert → vom Adapter zugeordnet; fehlende Angaben bestätigen keine Unterstützung. Tokens: gemeldete Eingabe / Ausgabe. Übernahme und genaue Kosten werden nicht abgeleitet.",
   "advisor.activity.empty": "Noch keine Beratungen erfasst.",

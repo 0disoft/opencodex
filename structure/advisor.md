@@ -220,7 +220,7 @@ Activity and worker results distinguish a request consultation `limit` from a du
   A failed attempt is recorded under its own ledger key (no retry storm within the TTL)
   and injected with the `<opencodex_advisor_unavailable>` wrapper, which
   historyHasManualAdvisorResult deliberately does not match: a failure is not advice and does not permanently suppress the
-  policy. No semantic stagnation detection exists in PR1. Both policies require current
+  policy. No semantic stagnation detection exists. Both policies require current
   `contextSharingConsent` before any task context is sent. Without it, preflight does not run
   and a manual call returns a consent-required result. Consent is re-read from the live config
   immediately before dispatch; a revocation after plan creation (or after a preflight claim)
