@@ -168,7 +168,9 @@ public diagnostic codes; originals continue to relay and no app/config repair is
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never
-replaces the last completed assessment. `observedVersion` is reported only when the discovered
+replaces the last completed assessment, including across stop/start probe replacement and early
+routing failures. A newly completed failed probe supersedes that prior observation; retained
+metadata is diagnostic only and never authorizes a new start or Apply. `observedVersion` is reported only when the discovered
 package matches the assessed family, App entry and canonical basename, so a foreign or unidentifiable
 install reports `null` rather than raw discovery data, an identified newer build reports its own
 version with `verified` false, and a failed or missing read is unverified rather
