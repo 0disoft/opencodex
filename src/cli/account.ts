@@ -21,7 +21,7 @@ import {
   cmdRoutes,
   cmdStrategy,
 } from "./account-extended";
-import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
+import { accountClassificationConfig, apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
 
 export { classifyAccount } from "./account-api";
@@ -52,7 +52,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account clear <provider> [--json]
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
-  ocx account auto-switch anthropic <on|off|status|inherit|threshold <0-100>> --account <id> [--json]
+  ocx account auto-switch <anthropic|anthropic2> <on|off|status|inherit|threshold <0-100>> --account <id> [--json]
   ocx account alias <provider> <account-or-key-id|alias> <display-name|-> [--json]
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
@@ -60,7 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
-  ocx account routes anthropic [--file <json-file>|--clear] [--json]
+  ocx account routes <anthropic|anthropic2> [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <account-or-key-id|alias|main> --yes [--json]
   ocx account clear-cooldown <provider> <account-id|alias|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
@@ -70,7 +70,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pool <provider> [--enabled on|off] [--threshold N] [--strategy NAME] [--sticky N] [--quota-window W] [--json]
   ocx account credits openai <ID on|off|--all on|off> [--json]
   ocx account quota-activation openai ID --window fiveHour|weekly <on|off> [--json]
-  ocx account anthropic-reset-grants [ID] [--json]
+  ocx account anthropic-reset-grants [ID] [--provider anthropic|anthropic2] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
@@ -199,7 +199,12 @@ async function cmdList(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
 
@@ -289,7 +294,12 @@ async function cmdCurrent(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);
@@ -332,7 +342,20 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  // #6957: an account change on a link Child is refused before any Home read.
+  if (!deps.baseUrl) {
+    const refusal = (await import("./link-child")).linkChildProviderChangeRefusal("ocx account use");
+    if (refusal) {
+      console.error(`Error: ${refusal}`);
+      return 1;
+    }
+  }
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);
@@ -392,7 +415,20 @@ async function cmdClear(rest: string[], deps: AccountDeps): Promise<number> {
     console.error(ACCOUNT_USAGE);
     return 1;
   }
-  const config = deps.loadConfigImpl?.() ?? loadConfig();
+  // #6957: an account change on a link Child is refused before any Home read.
+  if (!deps.baseUrl) {
+    const refusal = (await import("./link-child")).linkChildProviderChangeRefusal("ocx account clear");
+    if (refusal) {
+      console.error(`Error: ${refusal}`);
+      return 1;
+    }
+  }
+  const classification = await accountClassificationConfig(deps, deps.loadConfigImpl?.() ?? loadConfig());
+  if ("error" in classification) {
+    console.error(`Error: ${classification.error}`);
+    return 1;
+  }
+  const config = classification.config;
   const c = classifyAccount(config, name);
   if ("error" in c) {
     console.error(`Error: ${c.error}. Known candidates: ${candidateNames(config)}`);

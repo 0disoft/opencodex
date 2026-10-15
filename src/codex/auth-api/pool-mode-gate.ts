@@ -25,6 +25,7 @@ import type { PoolQuotaResult } from "./pool-quota-probe";
 import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, MAIN_CACHE_TTL } from "./main-account-probe";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_CACHE_TTL, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
+import { trackBackgroundWork } from "../../lib/background-work";
 
 let primeInFlight: Promise<void> | null = null;
 let lastPriorityFailbackPrimeAt: number | undefined;
@@ -88,14 +89,13 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     const now = Date.now();
     const quota = getMainPolicyQuota();
     const observedAt = quota?.credits?.observedAt;
-    // getMainPolicyQuota binds evidence to the observed physical identity. Only renew
-    // valid formerly spendable funds; admission retains the actual five-minute clock.
+    // Positive evidence renews before expiry; unavailable evidence keeps discovery
+    // eligible under the same pacing. Admission still requires fresh spendable funds.
     return codexAccountUsesCreditsAfterLimit(config, MAIN_CODEX_ACCOUNT_ID)
       && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
       && codexUsageLimitResetAt(quota, undefined, now) !== undefined
-      && observedAt !== undefined && observedAt > 0
-      && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS
-      && hasSpendableCodexCredits(quota, observedAt);
+      && (!hasSpendableCodexCredits(quota, now)
+        || (observedAt !== undefined && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS));
   };
   const status = getMainAccountHardLockStatus(config);
   if (status.state !== "blocked" && !creditRecoveryNeeded()) { mainHardLockRecoveryAttempt = undefined; return; }
@@ -260,7 +260,9 @@ export async function primeCodexPoolQuotas(
       && now - lastPriorityFailbackPrimeAt < CODEX_PRIORITY_FAILBACK_REFRESH_MS) return;
     lastPriorityFailbackPrimeAt = now;
   }
-  primeInFlight = (async () => {
+  // Tracked because most callers do not await it, yet it holds the native-main claim
+  // database open; whoever removes that directory settles it first (see background-work).
+  primeInFlight = trackBackgroundWork(`codex-pool-quota-prime:${reason}`, (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
       const q = getAccountQuota(a.id);
@@ -345,7 +347,7 @@ export async function primeCodexPoolQuotas(
     if (process.env.OPENCODEX_DEBUG_QUOTA === "1") {
       console.warn(`[codex-quota] prime done (reason=${reason}, pool=${pool.length}, refreshed=${stale.length})`);
     }
-  })().finally(() => { primeInFlight = null; });
+  })().finally(() => { primeInFlight = null; }));
   return primeInFlight;
 }
 

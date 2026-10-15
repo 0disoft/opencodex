@@ -5,7 +5,7 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 The client-integration subsystem writes one generated OpenCodex provider contribution into a
 third-party client's existing config without taking ownership of the rest of that file. Its core
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
-and refuses refresh, disable, or restore when the current file cannot be classified safely.
+and refuses refresh, disable, or restore when the current file cannot be classified safely. Qoder specifics live in [`clients/qoder.md`](qoder.md).
 Managed client targets are inspected without following a final symbolic link, and their atomic
 replacement addresses the named directory entry rather than resolving that link again at commit.
 Uninstall runs the same coordinated disable path for every strict ownership record before removing
@@ -31,7 +31,7 @@ parsing and ownership rules below.
 | `src/clients/config-export.ts` | Pure per-client config builders and the exact managed fragments each client receives. It never writes files. |
 | `src/integrations/registry.ts` | Canonical config/detection paths, current-provider-store declarations, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
 | `src/integrations/target.ts` | Which file one operation reads, writes and records, and whether a write there reaches the client. |
-| `src/integrations/config-io.ts` | Bounded file loading and parsing. Values that cannot round-trip through the target serializer are rejected before mutation. |
+| `src/integrations/config-io.ts` | Bounded regular-file loading and parsing; production reads reject symlinks and stop after 4 MiB, and writes past the same bound are refused so a mutation cannot strand a file it cannot read back. `src/lib/bounded-file-read.ts` starts its buffer from the opened size and grows only as needed, retaining the limit-plus-one overflow probe when a file grows concurrently and returning only bytes actually read. Values that cannot round-trip through the target serializer are rejected before mutation. |
 | `src/integrations/kilo-candidates.ts` | Inspects all Kilo global config candidates for unsafe files and a competing `provider.opencodex` block before status or any operation that adds or replaces a block. |
 | `src/integrations/state.ts` | The single `absent` / `current` / `stale` / `conflict` / `unsafe` classifier used by status and every writer operation. |
 | `src/integrations/ownership.ts` | Durable ownership records: file, generated contribution, protected contribution, exact fragment paths, and operation identity. |
@@ -131,7 +131,7 @@ client registry + export context
   -> build managed contribution
   -> load and parse current config
   -> classify exact recorded fragments
-  -> snapshot prior bytes
+  -> snapshot prior bytes (on a size refusal before mutation, the store discards its unused snapshot by validated client/operation IDs; committed, owned, or uncertain evidence survives; report cleanup failures with its recovery path)
   -> merge or remove only recorded paths
   -> compare current bytes again
   -> atomic write
@@ -217,7 +217,7 @@ their existing visibility rules.
 Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode, Kilo and
 Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo and Command Code blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
-refusal independently. Existing coordinated writers retain all no-clobber and ownership checks.
+refusal independently. Existing coordinated writers retain all no-clobber and ownership checks. A background catalog auto-refresh that changes the served set calls `syncEnabledClientIntegrations` unattended from `src/server/background-lifecycle.ts`: it refreshes only an existing Grok fence, a Desktop gateway profile that is still selected and byte-identical to the last applied write (keeping its static, hybrid or discovery mode), and owned file and Aside blocks without a first apply; it skips Cline, honours the hub and sibling gate, and the coordinated writer's synchronous `guard` refuses any write once the scheduler generation has stopped or the owner captured for that delivery has revoked fan-out admission or released its lease; a later delivery may select a surviving owner. Each write also requires the projection's configuration snapshot to remain current, ignoring only Desktop's applied fingerprint and timestamp; Grok rechecks its complete fence and refuses symlinked config or backup paths inside the synchronous injector, then revalidates admission and unchanged regular-file bytes in the no-follow writer's pre-rename hook without copying a backup.
 Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
 rather than joining a write of a different catalog and reporting false success.
 On a sibling instance ([Codex home](../codex-home.md#codex-home)), including one identified from another home's managed client destination, `src/integrations/catalog-refresh.ts`
@@ -373,14 +373,17 @@ location: it carries the text format of that file, the contribution shape its re
 and the predicate that decides whether a document on disk is a version whose shape has been
 observed. Naming the store without the last three would be naming a file we cannot write.
 
-`src/integrations/target.ts` turns that declaration into the one answer every surface uses: which
-file this operation reads, writes, journals and records, and whether a write there reaches the
-client. It decides from three facts, in order:
+`src/integrations/target.ts` turns that declaration into the one answer every surface uses: which file this operation reads, writes, journals and records, and whether a write there reaches the client. It decides from three facts, in order:
 
 1. No declared store, or no store on disk — the config file, unchanged, unless the declaration's `missingStore` says the client still reads the absent store; that is an ineffective write carrying its remedy; status rows and refused previews also publish `supersededReason` and the store's `missingStoreDocument`, so the dashboard names what to create in its own language. A client that has never run still imports what we write there, which is why the rule keys on the store's presence rather than on a client version.
-2. This project's own block already in one of the two files — that file. Disable removes what we
-   wrote from where we wrote it, and no apply leaves a block in one file while writing another.
+2. This project's own block already in one of the two files — that file. Disable removes what we wrote from where we wrote it, and no apply leaves a block in one file while writing another.
 3. Otherwise the store, and only when its schema establishes.
+
+ZCode resolves absolute `dataBaseDir` from the default-home `~/.zcode/v2/setting.json` through the caller's `IntegrationIO`, moving data to `<base>/.zcode/v2`. `ZCODE_DATA_DIR` overrides the `.zcode` root directly; `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` overrides the store. Native `ZCODE_DATA_BASE_DIR` is not an alias.
+The registry resolves config, detection and store from one bootstrap read. Synchronous observations re-read after coordinator awaits; store-lock and restore probes share the injected IO. Malformed, unreadable or relative settings refuse apply/overwrite/refresh as an unknown active root. Only a present explicit provider file can establish the store independently.
+Default ZCode bootstrap path resolution uses the same bounded regular-file reader as integration operations. A final symlink, FIFO or file above 4 MiB leaves the active root unknown. A missing bootstrap file or valid settings without `dataBaseDir` uses the default root; failed reads never fall back. An explicit `ZCODE_DATA_DIR` still bypasses bootstrap discovery.
+
+Owned legacy config and default-root store paths retain their fingerprints and recovery evidence after relocation: refresh refuses, disable and undo use the original file, and an older undo refuses while a different path owns the record. Unknown settings retain recognized historical recovery targets; an unrecognized prior selector must be restored before mutation. Contract: `tests/clients/integrations-current-store.test.ts`.
 
 Four properties are load-bearing:
 
@@ -408,8 +411,7 @@ the shared formatter. A segment beginning with that reserved marker but failing 
 grammar is unreadable rather than a plain key or a v1 selector, so malformed persisted bytes cannot
 silently select a different element.
 
-A store whose schema cannot be established is reported, never merged into. That file holds the
-user's other providers and the client rewrites it on its own, so asserting a nesting we have not
+A store whose schema cannot be established is reported, never merged into. That file holds the user's other providers and the client rewrites it on its own, so asserting a nesting we have not
 observed would trade a silent no-op for a silent loss. Status reports the store beside the file
 state rather than folding it into the state: `current` remains the truth about the file, and the
 notice appears only when the client reads some other file than the one the state is about.
@@ -477,7 +479,7 @@ connection defaults all profiles on; explicit per-profile changes materialize th
 pin one legacy root owner before changing it. Sibling stores remain independent. Policy saves
 precede coordinated writes under one scoped flight, and actual file state/refusals remain
 separate. Restore reconciles target intent from validated snapshot ownership without changing
-sibling policy. Profile journal views retain source-store provenance for older legacy entries.
+sibling policy. Profile journal views retain source-store provenance for older legacy entries. A profile that is off beside a stale block is never re-enabled automatically; the CLI names its preview-then-enable recovery (`src/cli/aside-profile-recovery.ts`), and a malformed policy that falls back to all-off produces a load-time warning.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 
@@ -488,7 +490,7 @@ The shared atomic replacement publisher also identifies explicit Remote Workspac
 | Variant | Its own evidence | opencodex surface |
 | --- | --- | --- |
 | Pi-based omo (senpi engine) | `~/.omo/agent`, or `OMO_CODING_AGENT_DIR` / `SENPI_CODING_AGENT_DIR` / `PI_CODING_AGENT_DIR` (`omoAgentDir()`) | the `omo` file integration and tab, `providers.opencodex` in `models.json` |
-| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, on the Codex tab |
+| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, in their own section of the omo tab |
 | OpenCode-based omo (oh-my-opencode) | its config under OpenCode | none; nothing here reads or writes it |
 
 `~/.omo` alone identifies none of them: Pi-based omo and LazyCodex both use it.
@@ -497,14 +499,14 @@ The shared atomic replacement publisher also identifies explicit Remote Workspac
 
 Separate from the `models.json` provider integration above, and only when `detectLazyCodex()`
 reports LazyCodex installed, `src/clients/omo-role-models.ts`
-mirrors a dashboard or `ocx agent roles set` pick into `codex.agents.<role>.model` of
+mirrors a dashboard or `ocx agent roles set` pick into `[codex].agents.<role>.model` of
 `~/.omo/omo.jsonc`, which LazyCodex 5.1.1 and later reads. The home is resolved the way omo
 resolves it: `HOME`, then `USERPROFILE`, then the OS home. This write has no ownership record,
-snapshot, or journal. It changes one value the user just chose and leaves every other key as it
+snapshot, or journal. It changes the role's `model` when the request carries one (an effort-only save keeps it, and creates an absent entry only to hold `reasoning`) and, when the request carries an effort, its `reasoning` (Codex `none` becomes `off`; a level LazyCodex lacks, such as `ultra`, removes a stale `reasoning`; an effort of JSON `null` removes `reasoning` along with the role file's `model_reasoning_effort`; a model-only save keeps it), and leaves every other key as it
 was, re-serialized with the file's indentation, line endings, and BOM.
 
 It never creates the file and never writes one it would damage: a missing file reports
-`absent`, a document that is not an object or whose `codex`, `codex.agents`, or role entry is
+`absent`, a document that is not an object or whose `[codex]`, `[codex].agents`, or role entry is
 not an object reports `invalid`, and a file containing any `//` or block comment reports
 `skipped_comments`, because re-serializing JSONC would drop those comments. The management
 response carries that status and the dashboard shows it; the role TOML write described in

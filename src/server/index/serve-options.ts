@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from "bun";
 import type { StartServerDeps } from "./startup-warnings";
+import { isLinkManagementPath } from "../../link/management-routes";
 import {
   GUI_PAIRING_EXCHANGE_BODY_LIMIT,
   REMOTE_WORKSPACE_PAIRING_BODY_LIMIT,
@@ -21,6 +22,7 @@ import {
 } from "./live-sideband";
 import {
   withRequestLogId,
+  withMessagesRequestLogId,
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
@@ -95,6 +97,7 @@ import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
   isLoopbackHostname,
+  markTrustedHubManagementRequest,
   jsonResponse,
   admissionFields,
   resolveApiAuth,
@@ -118,6 +121,7 @@ import { handleChatCompletions } from "../chat-completions";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import {
   buildDesktop3pRegistry,
+  desktop3pModelOptions,
   generateDesktop3pModels,
 } from "../../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
@@ -311,6 +315,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
       const ingress = ingressForServer(requestServer);
+      // Bind management-origin trust to the actual Bun listener object resolved above.
+      // Neither Host nor any X-Forwarded-* header can manufacture this process-local mark.
+      if (ingress === "hub-management" && config.runtimeRole === "hub") {
+        markTrustedHubManagementRequest(req);
+      }
       const requestUrl = codexCompatibleUrl(req.url);
       const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
@@ -365,6 +374,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
           && (req.method === "GET" || req.method === "HEAD")
           && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+        // #6957: the Child's read-only view of this Home. Admitted by the link key above and by
+        // the shared table in src/link/management-routes.ts; never reachable on another ingress.
+        if (isLinkManagementPath(requestUrl.pathname)) {
+          const { handleLinkManagementRequest } = await import("./link-management");
+          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+        }
       }
       const url = requestUrl;
       const admissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
@@ -1024,6 +1039,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             const models = config.claudeCode?.enabled === false ? [] : generateDesktop3pModels(
               desktopInputs.nativeSlugs, desktopInputs.routedModels,
               config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
+              desktop3pModelOptions(config.claudeCode),
             );
             const response = jsonResponse({ version: 1, models }, 200, req, policy);
             response.headers.set("Cache-Control", "no-store");
@@ -1039,7 +1055,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           );
           const { buildAnthropicModelInfos } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { activeDesktop3pAlias } = await import("../../claude/desktop-3p");
+          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
           // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
           // readable claude-ocx ids and every other client (Desktop 3P) keeps the
@@ -1055,7 +1071,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             goOrdered,
             resolveAutoContext(config.claudeCode),
             idStyle,
-            activeDesktop3pAlias,
+            resolvableDesktop3pAlias,
             desktopInputs.nativeContextCap,
             config.fastMode,
             // Explicit opt-out omits the Fast predicate.
@@ -1556,11 +1572,16 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         const sessionReq = withCallerSessionIdentity(req, admission);
-        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
+        // Entering the handler, or a logged refusal, means the final request log owns requestId.
+        let ownsRequestLog = false;
+        const claimRequestLog = (work: (lease: ActiveTurnLease) => Promise<Response>) =>
+          (lease: ActiveTurnLease) => { ownsRequestLog = true; return work(lease); };
+        const response = await runAdmittedHttpTurn(sessionReq, policy, claimRequestLog(async turnAdmissionLease => withCors(
           await handleClaudeMessages(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
-        ), { requestId, start, logCtx });
+        )), { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        return ownsRequestLog ? withMessagesRequestLogId(response, requestId) : response;
       }
 
       // OpenAI Chat Completions inbound (GitHub Copilot App / OpenAI-compatible clients).
@@ -1586,8 +1607,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // `policy`, not `config`: this route is now served on the unauthenticated loopback
         // listener too (#4236), and only the receiving listener's view produces CORS headers
         // that match the admission decision made above.
-        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+        // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
+        // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
+        const sessionReq = withCallerSessionIdentity(req, admission);
+        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
+          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
           req,
           policy,
         ), { requestId, start, logCtx });
@@ -1708,7 +1732,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
         const releaseAcquisition = () => {
+          detachClientAbort();
           acquisition?.clear();
           if (audioController) unregisterTurn(audioController);
           else turnAdmissionLease.release();
@@ -1827,6 +1853,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
+          detachClientAbort();
           acquisition?.clear();
           finalizeLiveRequest(101);
           return undefined as unknown as Response;

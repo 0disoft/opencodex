@@ -1,18 +1,35 @@
 # Providers And Adapters
 
+Configured spend ceilings bind adapter inference executors to the [seed and physical-start contract](transports/responses-spend.md#historical-pool-continuity-and-rollback). Zed completion and auth-recovery replays claim separately; token acquisition stays outside inference accounting. Claude CLI, CodeBuddy and Qoder each count one invocation toward the frozen request limit, seed before spawn and retain a producer through completion. Child-internal retries/tool turns are not separately counted; reported actual usage settles in full, including amounts above the seed estimate.
 Devin combines only [consecutive same-ID tool results](adapters/registry.md#devin-consecutive-tool-results), using linear accumulation while preserving intervening message slots, image parts and error markers without mutating the parsed request.
+Anthropic account pause, model routes, quota labels, and the separate `anthropic2` pool (its helpers, quota, reset grants and management surfaces) follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
 
-Anthropic account pause, model routes, and quota labels follow the [Anthropic account-pool contract](providers/anthropic-account-pool.md). Devin Messages follows the [per-turn output ordering contract](clients/claude-desktop.md#devin-messages-output-ordering), preserving late signatures before text/tools without changing Responses or Chat ordering.
-
-Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
+API-key credit-balance refusals follow the [Anthropic billing recovery contract](providers/anthropic-key-billing.md). Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
 
 Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
-A shared-quota Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present.
+A shared-quota Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present. Exact revoked-token 401s persist generation-fenced reauthentication under [the Anthropic recovery contract](providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery).
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
 
-GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses adapters set `contextTier` only when the canonical routed provider is `github-copilot`
-and a tier is configured. Otherwise passthrough retains caller-supplied values. The server carries provider identity
+## GitHub Copilot Auto selection
+
+`src/providers/github-copilot-transport.ts` retains the credential-specific destination and headers. Automatic selection requires a nonempty catalog whose every valid row explicitly has `model_picker_enabled: false`; missing or malformed permissions retain named routes. Named picker projection removes only explicitly false rows.
+Auto-only discovery supplies `github-copilot/auto` without deleting saved manual preferences; ordinary catalog allowlists, pending/disabled state and new-model policy still govern visibility. There is no provider mode setting or literal-model override of permission evidence.
+Before adapter construction, Auto creates a session and resolves intent against the captured credential and API origin.
+The selected model determines Chat versus Responses wire; session tokens remain request-local, unsaved, and isolated across accounts and origins.
+Negotiation uses local defensive budgets, not GitHub service limits: 512 catalog/pool/candidate entries, 256 UTF-16 units per identifier, 1 MiB per success body and eight seconds per call including pacing, fetch and body read.
+Only the latest user text is sent to intent routing, capped at 32,768 UTF-16 units; inference retains its full input. Header tokens accept at most 32,768 printable ASCII characters. Catalog caching is credential/origin-bound, at most 32 entries and 60 seconds; request-local sessions expire at the earlier server expiry or 60 seconds, with at least one second remaining at negotiation.
+Credential-changing retries repeat selection; Chat inference-401 refresh renegotiates with the refreshed credential before rebuilding the selected adapter and session.
+Same-account inference-401 refresh or pre-output OAuth-429 account rotation can move native Copilot Responses to the known `openai-chat` adapter; only that Copilot adapter receives the handoff.
+The old refusal body is cancelled and its controller unlinked/aborted; native execution releases its host lease before handing off.
+Core continues the existing adapter/sidecar/delivery pipeline with the same admission, translator, request state and send budget, invalidating the old request without recursive route or admission setup.
+A reserved 429 hop transfers with the request: Chat releases its provisional permit and rebooks an externally counted dispatch at the actual URL/model; the send reporter settles used permits and finally paths refund unused permits, including early sidecar/build exits.
+The inference-401 guard survives handoff, preventing another refresh from either the Chat replay or its negotiation; initial negotiation retains its independently bounded 401 recovery.
+Key-pool replacement, native OAuth-refresh and 429-replacement negotiation share safe refusal projection: cancellation takes precedence as 499; typed 401/403/429 retain their status and validated Retry-After.
+Contained failures unlink/abort upstream work, release host/probe leases and refund untransferred hops; other negotiation failures use fixed 502 text without exposing session credentials or refusal bodies.
+The sidecar rotation hook contains failed replacement negotiation and retains its original upstream refusal, matching the existing OAuth sidecar recovery boundary.
+
+GitHub Copilot `modelContextTiers` is selected per upstream model. The Chat and Responses adapters set `contextTier` only when the canonical routed provider is `github-copilot` and a tier is configured. Otherwise passthrough retains caller-supplied values. The server carries provider identity
 through initial builds, retries, continuations, and sidecar builds.
 
 The coding-agent stream parser buffers each tool-use block by its content-block index
@@ -25,7 +42,7 @@ replacement, and turn cleanup release reservations; Qoder shares one budgeted em
 index closes the previous block only when its arguments form a complete JSON object;
 an unindexed delta or stop cannot be attributed to an indexed block, and a nonempty
 argument delta that cannot be attributed fails immediately. Tool-bridge completion requires every opened block to close, preserving the downstream single-open-call contract.
-The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution.
+The authoritative completion signal is adapter-selected: existing shared coding-agent bridges default to `message_stop`, while Qoder selects only the final complete assistant frame's `message.stop_reason === "tool_use"` (its last sibling only). Qoder does not treat `message_stop` as its completion signal. Silence never ends the tool leg. An incomplete call fails closed with `protocol_error`; otherwise the bridge emits one `done(tool_use)` with usage and terminates the parked CLI; the external client owns execution. Anthropic-shaped coding-agent usage (`usageFromAnthropicShape` in `src/adapters/coding-agent/protocol.ts`) is inclusive: `inputTokens` is `input_tokens` plus cache read plus cache write, and the partial fold maximizes fresh input before adding the folded cache counters once.
 An indexless argument delta belongs to the sole open block; with multiple blocks open,
 the parser fails the turn before releasing their buffered calls.
 The capture-only bridge checks raw starts, complete tool-use frames and synthesized completion against the init handshake before
@@ -91,10 +108,10 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 Anthropic usage flights replace older joinable transports when recovery requires a fresh read. `src/providers/quota/anthropic-cooldown-recovery.ts` fences successful, empty, and rejected results by credential and cooldown generation before cache publication. Live account quota entries retain that currentness predicate; routing and account-list readers reject a superseded entry before its TTL expires. Header-only family observations carry a private credential-generation fence and their own thirty-minute clock. Active non-enumerating probes retain absent families; authoritative limits enumeration retires them. Persisted observations carry no live probe predicate of their own.
 Per-account quota flights also retain their starting cooldown generation through token resolution. A stale token failure returns unavailable to its caller without replacing the cache row or its timestamp; a joined flight rechecks ownership before returning.
 
-MiniMax and MiniMax CN Coding Plan quota in `src/providers/quota/vendor-probes-key.ts` uses the
-region-matched `/v1/api/openplatform/coding_plan/remains` endpoint. It publishes the `general`
-model's consumed 5-hour percentage and, when active, weekly percentage with their reset times;
-video quota rows are unrelated and omitted.
+MiniMax and MiniMax CN Coding Plan quota in `src/providers/quota/vendor-probes-key.ts` uses the region-matched `/v1/api/openplatform/coding_plan/remains` endpoint.
+It publishes the `general` model's consumed 5-hour percentage and, when active, weekly percentage with their reset times; video quota rows are unrelated and omitted.
+
+Ollama Cloud quota in `src/providers/quota/vendor-probes-key.ts` reads `/api/balance` first, with `/api/usage` fallback for older deployments through the same provider egress. Hard 4xx failures (except 404/408/429) clear the last-good row even after transport or body read failure, unless the other endpoint returns a parsed report. A failed bounded body read stops further attempts; transient failures alone keep the last-good row. `creditsUsd` is the included allowance only; purchased credits are ignored, so the routing projection drops it unless `purchased.balance_usd` is known to be zero or negative.
 
 Devin account quota in `src/providers/quota/devin.ts` reads Cognition's unary
 `SeatManagementService/GetUserStatus` with the default cloud-direct Metadata, against the
@@ -118,23 +135,15 @@ wire type for a known field or a varint longer than ten bytes, keep last-good; a
 with nothing measurable is authoritative-empty. Only Devin's credential host extends its quota
 cache identity; generic OAuth pause still suppresses per-account probes.
 
-Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as
-refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
-are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the
-failed credential generation under its mutation lock, respecting replacement, config reconciliation,
-and operator pause. Once that generation's access token expires, account summaries project
-`needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
-the same generation/expiry predicate with its supplied observation time, so account-list health
-and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
-login action. The internal terminal flag
-stays clear so a later refresh remains eligible; successful refresh or credential replacement
-clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence.
-No upstream description or credential metadata enters the status response.
+Kiro AWS SSO token refresh in `src/oauth/kiro.ts` retains HTTP 400 `invalid_request` as refresh-attention evidence separate from terminal grant errors. Matching rotated CLI credentials
+are tried before the failure reaches `src/oauth/index.ts`. `src/oauth/store.ts` persists the failed credential generation under its mutation lock, respecting replacement, config reconciliation,
+and operator pause. Once that generation's access token expires, account summaries project `needsReauth: true` and the active login projects `loggedIn: false`. `src/oauth/health.ts` uses
+the same generation/expiry predicate with its supplied observation time, so account-list health and CLI diagnostics project `reauth_required` with `refresh_failed`; `ocx doctor` warns with a
+login action. The internal terminal flag stays clear so a later refresh remains eligible; successful refresh or credential replacement
+clears the evidence. Desktop input errors, network failures, and 5xx responses create no evidence. No upstream description or credential metadata enters the status response. The desktop refresh endpoint answers a dead refresh token with HTTP 401 and a bare `{"message":"Bad credentials"}` body; only that exact pair on the desktop endpoint is a terminal grant refusal, surfaced as the fixed `bad_credentials` code and quarantined like an allowlisted OAuth error.
 
-Kiro's account quota cache persists quota and an optional exhaustion verdict under one
-opaque account key and a non-secret login identity. Hydration admits only matching live
-accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed
-probe keeps the same-login last-good display bar. The protected OAuth store rotates
+Kiro's account quota cache persists quota and an optional exhaustion verdict under one opaque account key and a non-secret login identity. Hydration admits only matching live
+accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed probe keeps the same-login last-good display bar. The protected OAuth store rotates
 `ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
 and uses `addedAt` for legacy rows without one.
 
@@ -194,7 +203,7 @@ rewrite rules and the routed-id settlement.
 | `src/providers/model-rename-fields.ts`, `src/providers/model-rename-migration.ts` | Classifies every provider config field for a declared model rename. Exact-model records, lists and nested request-pacing keys follow the replacement; an already saved replacement entry wins. Provider-wide settings, including response-tier authority and project-context consent, and credential fields are not model identities. |
 | `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, provider-scoped hard wire pins (including Command Code's `claude-` prefix), aliases, and explicit false/empty values with field-level provenance. Provider derivation, routing, catalog hints, gather admission, and adapter selection consume its detached frozen result. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
 
-| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. Meta Muse device authorization, polling, and key-mint JSON responses share the 64 KiB bounded-body ceiling and the request's deadline; oversized declared or streamed bodies are rejected before JSON parsing. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Command Code manual callback JSON remains opaque to the shared `code#state` parser and is state-validated by its provider parser. A raw Command Code paste with an explicit `#state` suffix must match the flow state on the direct prompt as well. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
+| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. Meta Muse device authorization, polling, and key-mint JSON responses share the 64 KiB bounded-body ceiling and the request's deadline; oversized declared or streamed bodies are rejected before JSON parsing. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Command Code manual callback JSON remains opaque to the shared `code#state` parser and is state-validated by its provider parser. A raw Command Code paste with an explicit `#state` suffix must match the flow state on the direct prompt as well. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. Because an organization profile ARN is shared by its users, `src/oauth/kiro-account-identity.ts` keys Kiro rows by ARN plus the same-session `whoami` email (#6641): a login without a user keeps the legacy ARN identity but never replaces an identified user of the same profile unless the refresh token proves the same CLI session; reauth of a row with a user and rotated-CLI recovery require that same user (a row without a user recovers only while no other row shares its profile, and explicit reauth may record its user unless that user owns another row of the profile), an unmatched login claims an identity-less active slot only as the same session while the profile has other rows, and Add account records the current CLI user on ARN-only rows through a fenced same-session bind. ChatGPT token exchange and refresh in `src/oauth/chatgpt.ts` compose caller cancellation with a fresh 30-second per-fetch deadline covering headers and body. Error bodies are capped at 16 KiB bytes and success JSON at 64 KiB; each settled call detaches its caller listener and clears its timer. The registration in `src/oauth/index.ts` preserves that signal and uses the shared Codex classifier through `ChatGptTokenError`: terminal grant refusals require an explicit allowlisted terminal OAuth code and mark only the matching generation `needsReauth`; free-text descriptions never establish terminality; transient failures remain retryable. HTTP-derived errors expose only status and allowlisted code. Cancellation and deadline errors use fixed AbortError/TimeoutError messages; transport and parsing failures also use fixed messages, without raw reasons or causes, and never mark reauthentication. The registry preserves its own stale-flight error. `tests/oauth/chatgpt-token-expiry.test.ts`, `tests/oauth/chatgpt-token-boundaries.test.ts` and `tests/oauth/oauth-refresh-generic-lock.test.ts` cover these boundaries with synthetic responses. |
 | `src/combos/failover.ts` | Recognizes the exact bounded ChatGPT plan/model HTTP400 refusal in a bare message or a single `detail`/`error.message` envelope. Competing envelopes stop before code-based hops; finite evidence survives display truncation and SSE error reconstruction without retaining raw bodies. This permits another declared target before output commitment, never credential revocation or provider-wide quota evidence. |
 | `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
 | `src/adapters/openai-responses.ts`, `src/adapters/openai-responses/` | Native OpenAI/ChatGPT Responses passthrough. The canonical ChatGPT adapter forces its upstream-only `stream: true` requirement without changing caller `store`; downstream JSON negotiation remains owned by the [Responses HTTP/SSE contract](transports/responses.md#responses-httpsse). |
@@ -205,7 +214,7 @@ rewrite rules and the routed-id settlement.
 | `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped tool-schema loss policy](providers/google.md#google-tool-schema-loss-reporting): compatible mode changes no request bytes, strict initial loss creates no physical send, and strict non-direct repair creates no changed repair send. A caller-declared strict tool selects `functionCallingConfig.mode: "VALIDATED"` in place of the absent-choice default; `NONE`, `ANY` and a forced-name choice are stronger constraints the caller asked for and are never overwritten. |
 | `src/adapters/unique-tool-call-ids.ts` | Request-scoped tool-call-id uniqueness for every `openai-chat` provider. An upstream that mints an id from the call's position in its response repeats `call-0-0` on every turn; a Messages client has already paired that id, drops the duplicate, and is left with a call that has no result, so the turn reads as empty and the model re-issues it indefinitely. Only a **repeat** is rewritten — the first occurrence stays byte-identical, leaving prompt-cache keys, reasoning-replay lookups and already-unique upstreams untouched. The ids to avoid come from the caller's history, captured in `buildRequest` (the only point that sees it) and applied at emission, never at ingestion: ingestion matches streamed deltas against the id upstream sent, so rewriting there would strip a pending call of its identity mid-stream. A repeat takes a `-<n>` suffix, never `_<n>`, because `<earlier>_<digits>` reads as a batch sub-call of `<earlier>`; occupied-set search resumes by suffix width and retained base prefix, including when siblings converge as `-9` becomes `-10`. Covered by `tests/adapters/openai/openai-chat-tool-call-id-remint.test.ts`. |
 | `src/adapters/declaration-carrier.ts`, `src/adapters/input-media-guard.ts` | Default-deny allowlists for constraints the normalized request carries but a wire may not be able to express: `tools[*].allowed_callers`, which fences a tool off from callers, and inline document bytes. Both are refused with a 400 at the single guard every registered adapter passes through, rather than left to each adapter, because an adapter that never learned about the carrier rebuilds without it and answers normally. `allowed_callers` reaches the `anthropic` wire; document bytes reach `anthropic`, `openai-chat` and `google`; the `openai-responses` wire is exempt from the whole guard because it forwards the original body. Adding an `AdapterWire` member makes the omission visible in these lists instead of at a customer's upstream. The unrestricted `["direct"]` caller default is not a restriction. |
-| `src/adapters/azure.ts` | Azure OpenAI bridge. |
+| `src/adapters/azure.ts` | Azure OpenAI bridge; optional `minMaxOutputTokens` raises only smaller explicit positive integer output budgets. Unset preserves caller caps. Serialization and pre-admission spend estimates share `effectiveAzureOutputBudget`; see the [spend contract](transports/responses-spend.md#durable-spend-reservations). |
 | `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
 | `src/adapters/zed.ts`, `src/providers/zed.ts`, `src/oauth/zed.ts` | Zed Hosted AI native-app RSA login, account-scoped short-lived LLM-token exchange, bounded live model discovery, and provider-envelope translation through the existing Anthropic, Google, Responses, and Chat builders. Buffered delivery retains events under the shared translator budget and cancels delegated streams on early exit. Experimental and unofficial; the Zed terms risk is intentionally surfaced in user docs and release review. |
 | `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. Assistant reasoning replays as ChatMessagePrompt #11 thinking, #12 signature and #18 signature type (`src/adapters/devin/reasoning-signature.ts`): the #10/#21 pair arrives after the visible answer and becomes its own signature-only reasoning item, so a single unsigned thinking block plus exactly one signature-only block is replayed as one signed prompt, and a signature-only turn (GPT, Gemini) is replayed rather than dropped. An Anthropic signature is replayed, but because the streamed thinking is a summary the signature may not cover, a turn Cognition refuses with `invalid_argument` before any visible output (reasoning alone does not count) is retried once with Anthropic signatures withheld and the thinking text kept. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog, JWT, and `src/web-search/devin-executor.ts` native search support RPCs remain outside inference-send accounting. Provider-stated pre-output 429 reset delays are surfaced immediately by default, releasing shared active-turn capacity. A positive `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` explicitly enables bounded waiting and up to two replays on standalone turns, which hold that capacity until completion or cancellation. Combo children bypass that wait and surface a pre-output 429 so the next target can run. During an opted-in standalone wait, safe heartbeats commit the response preflight and keep the stream's stall watchdog fed. Invalid values fail closed to the immediate-refusal behavior. A recorded tenant host is used only for the stored account whose credential owns the transmitted key, searched in the configured provider id and then its deprecated alias; a configured, forwarded, or unmatched key uses the configured base URL or the US default. Native search previews the current route by effective adapter without mutating combo selection state, pins one admitted active-account snapshot for the request, and calls `GetWebSearchResults`, so it starts no CLI or second model. The wire model UID comes from the catalog's family metadata (`ClientModelConfig` #23/#30/#31): a family id with no effort anchors on the family's default member and selects the nearest enabled rung, rounding up first; an effort moves only the effort axis, to the lowest rung at or above it (else the highest below) while Fast Mode, 1M Context and the other axes stay at the anchor's values unless the caller asked for `fast` or a `1m` value; not lowering a requested effort outranks keeping those axes (an unranked member counts as lower), a disabled row the caller named is kept when the request still selects it so the preflight names that refusal, and resolution never leaves the family. Rows without family metadata fall back to suffix resolution, whose variant scan matches the collapsed base rather than a string prefix. With no caller or configured output cap, the selected row's catalog `maxOutputTokens` fills CompletionConfiguration #2; #3 is `max_newlines` and is sent at a fixed value, never a context window. The leading system text is sent as `GetChatMessage` #2, a failed tool result sets ChatMessagePrompt #9 and keeps an in-band `ERROR:` marker, and Gemini uids have JSON-Schema type arrays expressed as type-only `anyOf` branches in tool parameters. Shared constraints remain on the surrounding node, so nested schemas have one wire representation while outer enum/const, boolean constraints (including `not`, `oneOf`, and `allOf`) on null, and existing null-branch restrictions retain their conjunctive meaning. A null-only type keeps its null constraint even when an outer enum/const excludes null, preserving an unsatisfiable schema without producing an empty anyOf. Schema resource identifiers, anchors, definition maps, and existing anyOf branches remain on their original node. The type constraint is appended to existing allOf entries without shifting their indices, so JSON Pointer targets and reference scopes remain unchanged. A pre-output `invalid_argument` on a history whose word-piece estimate, using the sanitized and truncated tool descriptions actually sent on the wire, reaches 95% of the selected UID's catalog input window, capped by configured provider and model limits (512 KiB of text only when no window is known) is surfaced as `context_length_exceeded` so Codex compacts; a small request with the same code stays a plain 400. Known limit: a malformed schema on a history already at or above that 95% threshold is also reported as overflow because the upstream returns the same `invalid_argument`. The `COGNITION_BLOCKLIST_REWRITES` sanitizer rewrites exact phrases Cognition refuses with `permission_denied`; it runs only on instruction surfaces — tool descriptions and the #2 system prompt — while message text, replayed thinking (#11), and tool-call arguments stay byte-exact, because a rewrite there would silently change literal content such as patches or quoted file bytes; a trigger inside a data field surfaces as the upstream `permission_denied` instead (the Codex `<permissions instructions>` escalation boilerplate is the recorded #2 case). |
@@ -236,7 +245,7 @@ within the inclusive output total as `reasoningOutputTokens`, including final cu
 Missing or invalid optional detail stays unreported internally; totals and cache accounting do not change.
 The Chat/Responses projections expose that subset as `reasoning_tokens`; no text-based estimate is made.
 `src/adapters/run-turn-queue.ts` preflight callers may supply an optional wait bound; timeout hands
-the outstanding iterator read to replay once, while callers without a bound keep the existing wait.
+the outstanding iterator read to replay once, while callers without a bound keep the existing wait. The optional failure classifier on `src/adapters/coding-agent/turn.ts` receives failed Result frames or the bounded, redacted process-exit diagnostic. Qoder supplies its vendor semantics from `src/adapters/qoder/adapter.ts`, including PAT rejection and account quota exhaustion. Numeric `error_code` values are authoritative: 105 permits PAT-rejection recovery, 110/118 permit account-quota recovery, 114 is a terminal permission refusal, and the other supported quota codes do not grant recovery. Unknown numeric codes retain the original error without text fallback. With no numeric code, quota recovery requires the supported account-daily prefix and no team/model/shared qualifier; generic credit-limit text grants none. Exit classification cannot replace an earlier terminal or protocol failure. The internal error event's `apiKeyRecovery: true` permits consideration, not execution, of key recovery and is never serialized. Only Qoder's private classifier grants recovery permission. Without a classifier, CodeBuddy and Claude CLI retain their original normalized events without permission; neither `tokenEnv` nor the unchanged shared parser's status or legacy quota classification grants it.
 
 Fast response evidence follows the [response-tier observation contract](transports/responses.md#response-tier-observation-authority):
 an explicit provider declaration can mark an intermediary's echo non-authoritative without
@@ -354,11 +363,11 @@ destinations untouched. Five catalog ids carry explicit text-and-image input met
 Provider-scoped capability hints remain authoritative when discovery returns an id without
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
-routed-model fallback.
-Meta's two direct surfaces keep separate reasoning contracts: `meta-model` remains capped at
-`xhigh`, while `meta-muse` advertises `max` and sends the transparent Muse compatibility
-User-Agent required by that credential surface. The existing registry header merge keeps an
-operator-supplied User-Agent authoritative.
+routed-model fallback. Custom-named Azure OpenAI providers obtain missing image/text input metadata and context/output limits through the destination-gated lookup in `src/providers/derive.ts`, consumed by shared catalog hints. Discovery refreshes public models.dev Azure rows through `src/providers/azure-model-metadata.ts`; stale cache and bundled hints remain available offline. This uses known model ids without changing transport selection or persisting model declarations; see [the shared catalog contract](catalog.md#shared-catalog).
+Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps Muse Spark at `xhigh`
+and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
+advertises `max` and sends the transparent Muse compatibility User-Agent required by that
+credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
@@ -377,6 +386,8 @@ Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and f
 frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
 repairs exactly those two saved values and runs inside the shared startup repair pass in
 `src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+The same pass runs `src/providers/stale-no-vision-seed-migration.ts`: a saved `noVisionModels` list identical, in order, to a retired
+whole-list seed (Qoder Global's roster, before its adapter forwarded images) on a registry-owned row is removed; edited lists stay.
 
 It covers both states that reach a running process, because the sidecar predicate reads
 `noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale
@@ -498,20 +509,16 @@ One search makes at most three physical sends in total: connection-reset recover
 OpenAI helpers recheck the resolved [stored-account credit policy](codex-account-controls.md#stored-account-authentication-policy) immediately before every physical send, including those retries. An unchanged caller-owned Direct credential is not governed by stored-pool consent.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
-any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
-instruction.
+any cell it opened rather than leaving it in progress. Assistant text is not treated as a search instruction.
 
 `src/web-search/passthrough-bridge.ts` withholds at most 8,388,608 UTF-16 code units of
 SSE data payloads per leg; this is not a byte or total-heap measurement. A companion cap of
 65,536 events is derived from that budget at a realistic 128-code-unit serialized delta, so it
 only bounds per-event object overhead the character budget cannot see rather than refusing a
-large client-executed tool call streamed as fine-grained argument deltas. The first over-budget
-event fails the leg before releasing any held tool call, and reports that refusal as the
-bridge's own bound rather than as an upstream read failure.
-Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
+large client-executed tool call streamed as fine-grained argument deltas. The first over-budget event fails the leg before releasing any held tool call, and reports that refusal as the
+bridge's own bound rather than as an upstream read failure. Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
 close every search cell opened by the current leg as failed before one failed terminal and DONE.
-Successful release serializes held events lazily rather than building another full frame array;
-release, discard, and the next leg reset the held payload counter and identity sets.
+Successful release serializes held events lazily rather than building another full frame array; release, discard, and the next leg reset the held payload counter and identity sets.
 `tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
 upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
 
@@ -525,8 +532,7 @@ than a vendor-specific override. This is a model and settings rule, not a creden
 backend's credential locator, so no key crosses backends. `reasoning` and `xSearch` are not gated —
 `reasoning` is a generic effort level and `xSearch` is xai-only with no per-backend default and no
 `webSearchBridge` equivalent. `resolveSidecarBackend` lives in `src/web-search/sidecar-providers.ts`
-rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a
-value import of the barrel; the barrel re-exports it.
+rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a value import of the barrel; the barrel re-exports it.
 `tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
 anthropic, xai, and gemini, plus the unset-backend default.
 
@@ -540,14 +546,11 @@ keeps a self-hosted Ollama on `127.0.0.1` working. Both checks are synchronous a
 resolve no DNS, so a hostname that resolves into metadata or private space is a disclosed residual
 rather than a blocked case. That residual is strictly larger than `baseUrl`'s: `baseUrl` also runs
 the async `providerDestinationResolvedError` at management write, which the endpoint does not, and
-parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is
-synchronous. The plan-time check is the
-authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`,
-and `ocx config import` all reach `configSchema` only and never call
+parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is synchronous. The plan-time check is the
+authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`, and `ocx config import` all reach `configSchema` only and never call
 `providerWebSearchBridgeConfigError`, and `resolveOllamaWebSearchEndpoint` is the only reader of
 this field in the tree, so a value that survives file load still cannot be spent. It refuses
-silently by design; config-time is where the operator is told why. The planner requires the
-provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+silently by design; config-time is where the operator is told why. The planner requires the provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
 
 ## Meta Responses tool selection
 
@@ -556,10 +559,8 @@ uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choi
 `auto` selection keeps its meaning. Explicit `none` sets `tools` to an empty list, removes
 `additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
 outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
-upstream send because Muse supports only `auto`. Filtering a required tool never changes the
-caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
-destination. The input body, historical tool calls and results, and non-Meta requests keep their
-existing meaning.
+upstream send because Muse supports only `auto`. Filtering a required tool never changes the caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
+destination. The input body, historical tool calls and results, and non-Meta requests keep their existing meaning.
 
 ## Shared type declarations
 
@@ -568,14 +569,13 @@ provider and account types (`src/types/provider.ts`, `src/types/accounts.ts`), a
 request shape (`src/types/request.ts`). Two files also own small resolvers that must agree at every
 boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted names, declared-name
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
-same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream
-HTTP-version pin, shared by the config load schema, the management write boundary, and the fetch
-runtime, so no boundary accepts a value another rejects.
+same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
+config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
+`claude-haiku-5-5`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, and `union-alpha` to Anthropic across direct and captured static policy resolution, even with Chat/Responses overrides.
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the
-public request model. [Memory phase routing](transports/responses-failover.md#memory-phase-routing)
-owns the selection rule.
+public request model. [Memory phase routing](transports/responses-failover.md#memory-phase-routing) owns the selection rule.
 
 Preflight heartbeat retention keeps `replayUnsafe` sticky in the replayed tail, so a second preflight cannot forget earlier side effects after the original marker is evicted.
 
@@ -585,7 +585,7 @@ Antigravity discovery in `src/providers/antigravity-models.ts` collapses complet
 
 Antigravity catalog rows carry the observed complete effort map from `src/providers/antigravity-models.ts` through the in-memory cache. `src/providers/antigravity-effort-families.ts` uses that evidence to group public rows and project suffix allowlists into the base selection, including both final catalog merge callers. Internal retained suffix rows remain available to combo resolution. Authoritative new-model reconciliation normalizes both the prior baseline and policy input before detecting arrivals: an existing suffix family is not a new model. All-disabled tiers transfer a base disable once; a known base keeps the operator's later choice. Genuinely new families still follow new-model policy. Saved defaults, combo targets, suffix disables and provider selections remain unchanged. A discovered ladder advertises only its wire-backed efforts unless explicitly overridden; unknown single-wire models gain no invented ladder.
 
-Known Claude Sonnet and Opus 5.5 base and low/medium/high IDs share a deterministic usage identity in `src/providers/antigravity-models.ts`, independently of live discovery. This accounting map does not migrate saved routing selections; Claude 4.6 and unknown suffix identities remain unchanged.
+Known Claude Sonnet and Opus 5.5 base and low/medium/high IDs share a deterministic usage identity in `src/providers/antigravity-models.ts`, independently of live discovery. This accounting map does not migrate saved routing selections; Claude 4.6 and unknown suffix identities remain unchanged. Antigravity model entitlement is per account: one account may list Claude 4.6, another only the Claude 5.5 suffix families, and Gemini 4 Argon only on Ultra/Enterprise. `ANTIGRAVITY_MODELS` is therefore a static superset (Gemini 3.8 Flash, Gemini 4 Argon, Claude Opus 5.5, Claude Sonnet 5.5), and `ANTIGRAVITY_KNOWN_PICKER_MODELS` keeps dropped bases known to routing, discovery collapse and usage identity. The catalog exposes only what the active account's authoritative discovery returns. `src/providers/antigravity-account-roster.ts` records each account's discovered roster (in memory, six-hour freshness, scoped to config home); `src/oauth/generic-account-failover.ts` ranks Antigravity accounts by it the way it ranks Kiro listings: a listing account wins, a known non-listing account is skipped while another remains, and an account without a fresh roster is unknown and stays usable. Gemini 4 Argon requests and Antigravity model discovery send the Antigravity CLI User-Agent; every other model keeps the IDE User-Agent.
 
 
 ## Combo model refusal evidence

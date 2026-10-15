@@ -3,6 +3,7 @@ import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { isPassiveRead } from "../../lib/passive-read";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
@@ -291,6 +292,8 @@ export async function fetchAllModels(
   /** Management renders disabled rows using this detached state after inventory drift. */
   publishProjection?: (projection: OcxConfig) => void,
 ): Promise<CatalogModel[]> {
+  // A Remote Link read: no upstream, no initial selection, no write (#6959).
+  if (isPassiveRead()) return [];
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
   const discoveryBaseline = captureModelDiscoveryBaseline(config);
@@ -364,7 +367,7 @@ export function stripRegistryOnlyStaticHeaders(name: string, provider: OcxProvid
 /** Shared Desktop profile DTO builder for the management API and CLI. */
 export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxClaudeDesktopProfile) {
   const { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
-  const { DESKTOP_SUPPORTS_1M_THRESHOLD } = await import("../../claude/desktop-3p");
+  const { routeSupportsOneMillion } = await import("../../claude/long-context");
   const { reconcileDesktopProfile, renderDesktopProfile } = await import("../../claude/desktop-profile");
   const routed = filterCatalogVisibleModels(await fetchAllModels(config), config);
   const profileModels: DesktopProfileModel[] = [
@@ -413,8 +416,8 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
     effortSupported: effortByRoute.get(route) ?? false,
     // Read-only view of the 1M capability the written Desktop config already emits,
-    // derived from the SAME threshold so the dashboard chip can never disagree.
-    supports1m: (modelByRoute.get(route)?.contextWindow ?? 0) >= DESKTOP_SUPPORTS_1M_THRESHOLD,
+    // derived from the SAME predicate so the dashboard chip can never disagree.
+    supports1m: routeSupportsOneMillion(route, modelByRoute.get(route)?.contextWindow),
     assignment: profile.assignments[route]!,
   }));
   return {

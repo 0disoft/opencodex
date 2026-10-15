@@ -13059,6 +13059,25 @@
 				"maxLevel": "high"
 			}
 		},
+		"gemini-4-argon": {
+			"id": "gemini-4-argon",
+			"name": "Gemini 4 Argon",
+			"api": "google-generative-ai",
+			"provider": "google",
+			"baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"thinking": {
+				"mode": "google-level",
+				"minLevel": "low",
+				"maxLevel": "high"
+			}
+		},
 		"gemini-flash-latest": {
 			"id": "gemini-flash-latest",
 			"name": "Gemini Flash Latest",
@@ -60410,7 +60429,7 @@
 				"cacheRead": 0.5,
 				"cacheWrite": 6.25
 			},
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
@@ -60436,7 +60455,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60462,7 +60481,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60488,7 +60507,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60514,7 +60533,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60540,7 +60559,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60566,7 +60585,7 @@
 				"text",
 				"image"
 			],
-			"contextWindow": 373000,
+			"contextWindow": 1050000,
 			"maxTokens": 128000,
 			"applyPatchToolType": "freeform",
 			"thinking": {
@@ -60797,6 +60816,32 @@
 				"mode": "effort",
 				"minLevel": "minimal",
 				"maxLevel": "xhigh"
+			}
+		},
+		"gpt-6-astra": {
+			"id": "gpt-6-astra",
+			"name": "GPT-6 Astra",
+			"cost": {
+				"input": 10,
+				"output": 50,
+				"cacheRead": 1,
+				"cacheWrite": 12.5
+			},
+			"api": "openai-responses",
+			"provider": "openai",
+			"baseUrl": "",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"contextWindow": 1050000,
+			"maxTokens": 128000,
+			"applyPatchToolType": "freeform",
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "low",
+				"maxLevel": "max"
 			}
 		}
 	},

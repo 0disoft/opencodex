@@ -24,13 +24,16 @@ import { teeWithBoundedInspection } from "../inspection-tee";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
+  liveMainQuotaDispatch,
   codexQuotaOutcomeMeta,
   codexDenialOutcomeMeta,
   isFixedCodexAccount,
   shouldDeferCodexResetDerivedCooldown,
 } from "./core-codex-account";
+import { isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import type { ResponsesTerminalStatus } from "../../bridge";
-import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./ws-upstream";
+import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
@@ -105,6 +108,7 @@ import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-func
 import {
   createUndeclaredToolCallGuardBlockRewrite,
   currentTurnWireToolCatalogBody,
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
   undeclaredToolCallNameInResponse,
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
@@ -139,6 +143,7 @@ import {
   httpStatusFromTerminalError,
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
+  noteUpstreamRequestId,
 } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
@@ -404,8 +409,12 @@ export async function deliverPassthroughResponse(
     | "noteInspectedPayload"
     | "normalizeFunctionCompletionJson"
     | "localUpstream"
+    | "terminalOutcomeRecorded"
   >,
 ): Promise<Response> {
+  const { route } = requestState;
+  // The proof must belong to the response whose headers are published.
+  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
   const { logCtx, config, options, req } = requestContext;
   const {
     codexSafetyBufferingOptions,
@@ -429,8 +438,7 @@ export async function deliverPassthroughResponse(
     normalizeFunctionCompletionJson,
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
-  const { parsed, route, subagentQuotaFailureModel, clientRequestedStream, translatorBudget, inboundWire } = requestState;
-  const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
+  const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -452,6 +460,7 @@ export async function deliverPassthroughResponse(
   }
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    if (!upstreamResponse.ok) noteUpstreamRequestId(logCtx, headers);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
@@ -478,7 +487,9 @@ export async function deliverPassthroughResponse(
       ? (status: ResponsesTerminalStatus, httpStatusOverride?: number): void => {
         if (terminalOutcomeRecorded) return;
         terminalOutcomeRecorded = true;
-        recordTerminalOutcome(status, httpStatusOverride);
+        // A restored pre-output refusal whose account outcome dispatch already wrote (#6969) keeps
+        // every other terminal callback but must not write the same refusal a second time.
+        if (!nativeExchange.terminalOutcomeRecorded) recordTerminalOutcome(status, httpStatusOverride);
       }
       : undefined;
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
@@ -534,6 +545,20 @@ export async function deliverPassthroughResponse(
           // account — fence it on the credential the request was holding.
           ...(admissionState.authCtx.kind === "pool" ? { credentialGeneration: admissionState.authCtx.generation } : {}),
         });
+      }
+    } else {
+      // The WS observer is the only plain-main publisher for a WebSocket exchange;
+      // a prelude projection carries the prelude snapshot, not fresh evidence.
+      // The dispatch claim is authoritative because downstream wrappers can replace the Response.
+      if (arrivalMainDispatch && !isMainQuotaDispatchWsClaimed(arrivalMainDispatch)
+        && !(isCodexWsUpstreamResponse(upstreamResponse) || isCodexWsPreludeProjection(upstreamResponse))) {
+        const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+        // Import yields; same-account token replacement leaves the identity writer live.
+        // Re-check the credential fence with no await before publication.
+        if (isMainQuotaDispatchLive(arrivalMainDispatch)) {
+          applyAccountQuotaFromUpstreamHeaders(MAIN_CODEX_ACCOUNT_ID, upstreamResponse.headers,
+            arrivalMainDispatch.configGeneration, arrivalMainDispatch.writer, { modelId: route.modelId });
+        }
       }
     }
 
@@ -639,6 +664,7 @@ export async function deliverPassthroughResponse(
         route.provider.webSearchBridge?.backend,
         config,
         openAiSidecar,
+        route.providerName,
       );
       const webSearchBridgePlan = planPassthroughWebSearchBridge(parsed, route.provider, {
         providerName: route.providerName,
@@ -831,14 +857,17 @@ export async function deliverPassthroughResponse(
           : undefined,
         // Last: every rewrite above can still rename or reshape a call item, so the guard must
         // compare the names the client will actually receive against the declared catalog.
-        nativeExchange.undeclaredToolGuardActive
+        // Deferred-catalog wires keep the rewrite for its normalization half only: a provider's
+        // `default.X` call still collapses to the declared `X`, but an undeclared name is the
+        // client's own deferred registry's business, not this proxy's verdict.
+        nativeExchange.undeclaredToolGuardActive || declaredWireToolNames.size > 0
           ? createUndeclaredToolCallGuardBlockRewrite(
             declaredWireToolNames,
             declaredNamelessClientCallTypes,
             providerExecutedCallTypes,
             declaredBareWireToolNames,
             recoverableBareCustomWireToolNames,
-            enforceDeclaredToolNames,
+            { refuseUndeclared: nativeExchange.undeclaredToolGuardActive },
           )
           : undefined,
         grokUpstreamEchoEnabled
@@ -1296,10 +1325,7 @@ export async function deliverPassthroughResponse(
       if (grokUpstreamEchoEnabled) {
         clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
       }
-      // #1700: same inbound-wire refusal policy as the SSE relay above. Both the plain JSON answer and
-      // the reframed-SSE branch below are built from this body, so one check covers them. This
-      // runs BEFORE the continuation cache write below: a refused turn must not become state a
-      // later `previous_response_id` replay can expand from.
+      // Both response formats use this body, before a refused turn can enter continuation state.
       if (nativeExchange.undeclaredToolGuardActive) {
         const undeclared = (() => {
           try {
@@ -1315,9 +1341,15 @@ export async function deliverPassthroughResponse(
             return undefined;
           }
         })();
-        if (enforceDeclaredToolNames && undeclared !== undefined) {
-          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared));
+        if (undeclared !== undefined) {
+          return formatErrorResponse(502, "upstream_error", undeclaredToolCallMessage(undeclared), {
+            code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+          });
         }
+      }
+      // Same split as the SSE rewrite: normalization applies whenever a declared name exists,
+      // even on wires whose deferred catalog stands the refusal down.
+      if (declaredWireToolNames.size > 0) {
         clientJson = normalizeDefaultNamespaceInJson(
           clientJson,
           declaredWireToolNames,

@@ -9,6 +9,8 @@ import type { CodingAgentDeps } from "../../src/adapters/coding-agent/turn";
 import { buildCodingAgentToolCatalog, CODING_AGENT_TOOL_LIMITS } from "../../src/adapters/coding-agent/tool-catalog";
 import { buildResponseJSON } from "../../src/bridge/response-json";
 import { clearQoderBinaryCache, QODER_CN_PROFILE, QODER_GLOBAL_PROFILE, resolveQoderProfile } from "../../src/adapters/qoder/profiles";
+import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -23,13 +25,13 @@ function parsed(overrides: Partial<OcxParsedRequest> = {}): OcxParsedRequest {
   return { modelId: "Qwen3.8-Max", stream: true, options: {}, context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] }, ...overrides } as OcxParsedRequest;
 }
 
-function fakeChild(frames: string[], options: { parked?: boolean } = {}): ChildProcess {
+function fakeChild(frames: string[], options: { parked?: boolean; exitCode?: number; stderr?: string } = {}): ChildProcess {
   const child = new EventEmitter() as ChildProcess & { killed: boolean; exitCode: number | null };
   const stdout = new PassThrough();
   for (const frame of frames) stdout.write(enc.encode(frame));
   if (!options.parked) stdout.end();
   child.stdout = stdout;
-  child.stderr = Readable.from([]);
+  child.stderr = Readable.from(options.stderr ? [options.stderr] : []);
   child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
   child.killed = false;
   child.exitCode = null;
@@ -43,7 +45,7 @@ function fakeChild(frames: string[], options: { parked?: boolean } = {}): ChildP
     return true;
   };
   if (!options.parked) {
-    setTimeout(() => { child.exitCode = 0; child.emit("close", 0); }, 2);
+    setTimeout(() => { child.exitCode = options.exitCode ?? 0; child.emit("close", child.exitCode); }, 2);
   }
   return child;
 }
@@ -561,14 +563,63 @@ describe("qoder adapter", () => {
     expect(events[0]).toMatchObject({ type: "error", code: "non_canonical_destination" });
   });
 
-  test("rejects unverified image input instead of silently dropping or forwarding it", async () => {
+  test("Global discovery fallback does not classify models as vision sidecar consumers", () => {
+    const global = getProviderRegistryEntry("qoder")!;
+    expect(global.models).toContain("Qwen3.8-Max");
+    expect(global.noVisionModels).toBeUndefined();
+    expect(global.modelInputModalities).toBeUndefined();
+    expect(isModelVisionSidecarConsumer(global, "Qwen3.8-Max")).toBe(false);
+    expect(isModelVisionSidecarConsumer(global, "unknown-live-id")).toBe(false);
+  });
+
+  test("keeps residual Qoder CN image input rejected before spawn", async () => {
     let spawned = 0;
-    const adapter = createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => { spawned++; return fakeChild([]); } });
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return fakeChild([]);
+      },
+    });
     const request = parsed({ context: { messages: [{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }] } });
     const events: AdapterEvent[] = [];
     await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
     expect(spawned).toBe(0);
-    expect(events[0]).toMatchObject({ type: "error", code: "unsupported_input_modality" });
+    expect(events[0]).toMatchObject({
+      type: "error",
+      status: 400,
+      code: "unsupported_input_modality",
+      retryable: false,
+    });
+  });
+
+  test("forwards Qoder Global raw image input through the shared coding-agent projection", async () => {
+    let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
+    const adapter = createQoderAdapter(provider(), {
+      which: () => "/bin/qoder",
+      spawn: () => {
+        spawned++;
+        return child;
+      },
+    });
+    const request = parsed({ modelId: "unknown-live-id", context: { messages: [{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }] } });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    expect(wire.message.content).toContainEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AA==" },
+    });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
   test("maps Qoder credit exhaustion to a non-retryable 429", async () => {
@@ -1262,4 +1313,87 @@ describe("qoder authoritative tool-turn completion", () => {
     expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_call_required", status: 502 });
   });
 
+});
+
+describe("Qoder API-key recovery evidence", () => {
+  test.each([
+    [105, 401, "authentication_error", "invalid_api_key", true, undefined],
+    [110, 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    [113, 429, "insufficient_quota", "insufficient_quota", false, undefined],
+    [114, 403, "permission_error", "permission_denied", false, undefined],
+    ...[115, 116, 117, 119, 122].map(code => [code, 429, "insufficient_quota", "insufficient_quota", false, undefined] as const),
+    [118, 429, "insufficient_quota", "insufficient_quota", true, undefined],
+    [999, 502, "upstream_error", "upstream_error", false, undefined],
+    [999, 401, "authentication_error", "invalid_api_key", false, "invalid personal access token"],
+  ] as const)("result %s keeps numeric scope", async (vendorCode, status, errorType, code, allowed, resultText) => {
+    const result = resultText ?? "You've reached your daily usage limit for Chat. Come back tomorrow...";
+    const child = fakeChild([JSON.stringify({ type: "result", is_error: true, error_code: vendorCode,
+      result }) + "\n"]);
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => child })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", status, errorType, code });
+    if (allowed) expect(events.at(-1)).toHaveProperty("apiKeyRecovery", true);
+    else expect("apiKeyRecovery" in events.at(-1)!).toBe(false);
+  });
+
+  test.each([
+    ["You've reached your daily usage limit for Chat. Come back tomorrow...", 429, "insufficient_quota", "insufficient_quota", true],
+    ["You've reached your daily usage limit for Chat.", 429, "insufficient_quota", "insufficient_quota", true],
+    ["You've reached your daily usage limit for Chat", 429, "insufficient_quota", "insufficient_quota", true],
+    ["You've reached your daily usage limit for Chat. Come back tomorrow at 00:00 UTC.", 429, "insufficient_quota", "insufficient_quota", true],
+    ["daily usage limit", 429, "insufficient_quota", "insufficient_quota", false],
+    ["credit usage limit", 429, "insufficient_quota", "insufficient_quota", false],
+    ["Team daily usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["Team credit usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["Model daily usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["This model's credit usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["Shared daily usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["Shared credit usage limit reached", 429, "insufficient_quota", "insufficient_quota", false],
+    ["You've reached your daily usage limit for Chat for this team", 429, "insufficient_quota", "insufficient_quota", false],
+    ["You've reached your daily usage limit for Chat for this model", 429, "insufficient_quota", "insufficient_quota", false],
+    ["You've reached your daily usage limit for Chat (shared)", 429, "insufficient_quota", "insufficient_quota", false],
+    ["invalid personal access token", 401, "authentication_error", "invalid_api_key", true],
+    ["token rejected", 401, "authentication_error", "invalid_api_key", true],
+    ["Qoder authentication rejected", 401, "authentication_error", "invalid_api_key", true],
+    ["Too many requests: rate limit reached", 429, "rate_limit_error", "rate_limit_exceeded", false],
+    ["authentication service error", 502, "upstream_error", "upstream_error", false],
+  ] as const)("message %s", async (result, status, errorType, code, allowed) => {
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder",
+      spawn: () => fakeChild([JSON.stringify({ type: "result", is_error: true, result }) + "\n"]) })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", status, errorType, code });
+    expect((events.at(-1) as Extract<AdapterEvent, { type: "error" }>).apiKeyRecovery).toBe(allowed ? true : undefined);
+    expect(JSON.stringify(buildResponseJSON(events, "Qwen3.8-Max"))).not.toContain("apiKeyRecovery");
+  });
+
+  test.each([
+    [41, "", true],
+    [1, "QoderAuthError: QODER_PERSONAL_ACCESS_TOKEN contains a token that was rejected", true],
+    [1, "QODER_PERSONAL_ACCESS_TOKEN contains a token that was rejected", false],
+    [1, "QoderAuthError token that was rejected", false],
+    [1, "QoderAuthError: QODER_PERSONAL_ACCESS_TOKEN", false],
+    [2, "QoderAuthError: QODER_PERSONAL_ACCESS_TOKEN token that was rejected", false],
+  ] as const)("exit %s with %s", async (exitCode, stderr, allowed) => {
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder",
+      spawn: () => fakeChild([], { exitCode, stderr }), killGraceMs: 100 })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "error", status: allowed ? 401 : 502,
+      code: allowed ? "invalid_api_key" : "process_exit_error" });
+    expect((events.at(-1) as Extract<AdapterEvent, { type: "error" }>).apiKeyRecovery).toBe(allowed ? true : undefined);
+  });
+
+  test("an earlier terminal beats exit 41", async () => {
+    const frame = '{"type":"result","is_error":true,"error_code":119,"result":"model quota"}\n';
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder",
+      spawn: () => fakeChild([frame], { exitCode: 41 }), killGraceMs: 100 })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+    const errors = events.filter(e => e.type === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: "insufficient_quota" });
+    expect(errors[0]!.apiKeyRecovery).toBeUndefined();
+  });
 });

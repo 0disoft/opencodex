@@ -4,7 +4,7 @@ description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Eighteen clients work this way, each with a switch:
+file, and removes it again. Nineteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -22,6 +22,7 @@ file, and removes it again. Eighteen clients work this way, each with a switch:
 | Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
+| Qoder | `settings.json` in `$QODER_CONFIG_DIR`, default `~/.qoder` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
@@ -29,9 +30,28 @@ file, and removes it again. Eighteen clients work this way, each with a switch:
 
 "omo" names three products that share the `~/.omo` folder. The **omo** tab manages Pi-based omo
 (the senpi engine) through `~/.omo/agent/models.json`, as in the table above. Codex-based omo
-(LazyCodex) gets its own controls on the Codex tab, described in
+(LazyCodex) gets its own section on the same tab, shown only when LazyCodex is detected, described in
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
+
+Qoder IDE / qodercli supports export and managed configuration through the Dashboard and CLI:
+
+```bash
+ocx export --client qoder --json
+ocx integration client enable --client qoder
+ocx integration client disable --client qoder
+```
+
+Qoder uses `settings.json` in `QODER_CONFIG_DIR` when that variable is set, and
+`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges `providers.opencodex` and
+OpenCodex entries in `modelConfigs.customModels`, preserving other providers, custom models,
+and settings. Disable removes the recorded OpenCodex entries; restore uses the existing
+snapshot workflow. The provider's default model is the first model in the sorted export.
+Custom models use their catalog context window, falling back to 128000 input tokens.
+The generated API key is a non-secret placeholder: Qoder integration requires loopback
+access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
+loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
+changes refresh an already enabled Qoder integration like the other managed clients.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -287,6 +307,17 @@ profiles** remains a separate bulk action and is not bound to one combined previ
 
 ## What to expect, honestly
 
+**Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
+The shared integration reader refuses larger files as unsafe to read, and the writer
+refuses a merged configuration that exceeds the same limit with `write_failed`, leaving
+the original configuration unchanged. Cline's recovery marker also has this limit;
+it includes both files' before-and-after contents plus metadata, so Cline can hit the
+limit even when each individual file is smaller than 4 MiB.
+
+Back up the client configuration yourself, then remove unneeded entries or reduce the
+exported model list before retrying. **Replace** does not bypass the limit. If the
+configuration must stay larger, manage it manually instead of using the Connect switch.
+
 **Formatting is generally not preserved.** Applying parses a config and writes it back
 out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
 OMP, DSH and Hermes are the exceptions: OMP and Hermes patch only `providers.opencodex`.
@@ -532,6 +563,14 @@ per-profile refusal, residual and separately labeled redacted backup information
 inspect the affected profile before retrying. This refresh is separate from each
 profile's preview/bound mutation workflow.
 
+Sync refreshes only profiles whose sync preference is on, so an empty result is not a failure.
+If `ocx integration client status --client aside` shows a profile as `off (stale)`, status
+prints the commands to reconnect it: review `ocx integration client preview --client aside
+--operation apply --profile N`, and run `ocx integration client enable --client aside --profile N`
+only if the preview permits the change and you accept it. Nothing is re-enabled automatically.
+A malformed `asideProfileSync` block in `config.json` turns every profile off and logs a
+warning when the config loads.
+
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
 available. Fully quit and reopen Aside to load changed model files.
@@ -539,10 +578,29 @@ available. Fully quit and reopen Aside to load changed model files.
 
 ## ZCode 3.14 and later
 
-ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+By default, ZCode 3.14 stores its custom providers in `~/.zcode/v2/provider_config.json` and left
 `~/.zcode/v2/config.json` reachable only through a one-shot import that runs when the new file is
 missing. ZCode creates the new file the first time it runs, so on any install that has ever been
 launched the import is already spent and a write to `config.json` reaches nothing.
+
+ZCode can relocate its data root with an absolute `dataBaseDir` in
+`~/.zcode/v2/setting.json`. This bootstrap file always stays under the default home;
+the provider store moves to `<dataBaseDir>/.zcode/v2/provider_config.json`.
+`ZCODE_DATA_DIR` takes precedence and names the `.zcode` root directly, while
+`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` takes precedence for the provider file.
+`ZCODE_DATA_BASE_DIR` is a separate native selector and is not an alias for `ZCODE_DATA_DIR`.
+
+Unreadable, malformed or relative bootstrap settings leave the active root unknown.
+The bootstrap must be a regular file of at most 4 MiB; symbolic links and special files
+are refused during export and integration path discovery. Repair the bootstrap file or
+supply an explicit `ZCODE_DATA_DIR` to select the intended data root.
+Apply, overwrite and refresh refuse with a repair message instead of claiming a successful
+legacy write. An existing explicit provider file can still establish the active store.
+Ownership recorded at the original default config or store keeps its path, fingerprints
+and undo history; disable removes that original block before a later enable can use the
+relocated store. An older undo also refuses while another path owns the integration.
+If an earlier explicit selector no longer identifies the owned file, restore that selector
+before disabling; opencodex retains the record and refuses to abandon the block.
 
 opencodex writes `provider_config.json` directly where it can. Enabling the integration adds the
 `opencodex` provider rule to that file, a catalog refresh updates it, and disabling removes exactly
@@ -652,24 +710,32 @@ key) in the app's API key field. The app sends it as `Authorization: Bearer`, wh
 
 ## omo (Codex / LazyCodex) role models
 
-When LazyCodex is installed, the Codex tab shows an **omo (Codex / LazyCodex)** section listing
+When LazyCodex is installed, the omo tab shows an **omo (Codex / LazyCodex)** section below the Pi-based omo controls, listing
 every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the model each one is pinned
 to. Codex runs a role on that pin no matter which model the parent asks for, so this is where a
 role's model is actually decided. LazyCodex counts as installed when the `omo@sisyphuslabs`
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
 `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
-section is hidden and the command line reports it as not installed. Pick a model on a row and
-press Save:
+section is hidden and the command line reports it as not installed. Pick a model and a reasoning
+effort on a row and press Save. A row whose role has no model pin can save an effort on its own;
+the role keeps inheriting its model:
 
-- opencodex rewrites only the root `model = "..."` line of that role's file. The role's
-  instructions, comments, and other keys are left exactly as they were. A role with no pin gets
-  one added near the top of the file.
-- The same value is written to `codex.agents.<role>.model` in `~/.omo/omo.jsonc`, which
-  LazyCodex 5.1.1 and later reads. If that file does not exist it is not created. If it contains
+- opencodex updates only the root `model = "..."` and `model_reasoning_effort = "..."` keys of that role's file.
+  Missing pins are inserted near the top. Choosing **Inherit effort**, available on every row,
+  sends `"effort": null` to clear the effort pin, removing its line and trailing comment.
+  The role's instructions, other comments, and other keys are left exactly as they were.
+- The model is written to `[codex].agents.<role>.model` in `~/.omo/omo.jsonc`, which
+  LazyCodex 5.1.1 and later reads, and a changed effort LazyCodex supports goes to
+  `[codex].agents.<role>.reasoning` in the same entry. If that file does not exist it is not created. If it contains
   comments it is left untouched, because saving would remove them; the tab says so, and you can
   set the value there by hand. Symlinks and non-regular files are rejected; on macOS and Linux,
   a FIFO is rejected without waiting for a writer. A skipped mirror does not undo the role-file save.
+
+If the role-file save succeeds but the omo.jsonc write fails, the row's button becomes
+**Retry omo.jsonc**, which resends the same effort choice, including an **Inherit effort** clear
+(`null`). Until that retry succeeds, a later Save or Auto-assign Apply for the role that leaves the
+effort alone carries the pending choice with it; an explicitly picked effort takes its place.
 
 Nothing happens until you press Save; syncing or restarting opencodex never changes a role file.
 New Codex sessions pick up the change. The same controls exist on the command line:
@@ -678,6 +744,24 @@ New Codex sessions pick up the change. The same controls exist on the command li
 ocx agent roles
 ocx agent roles set explorer xai/grok-4.5
 ```
+
+`ocx agent roles set <role> <model> --effort <level>` also sets the role's reasoning effort: it
+inserts or replaces the role file's `model_reasoning_effort` value and writes `[codex].agents.<role>.reasoning`
+in omo.jsonc when LazyCodex has that level (`ultra` stays in the role file only, and an older
+`reasoning` is removed). On `PUT /api/codex-agent-roles/{role}`, omitting `effort` keeps the pin,
+a level sets it, and `null` removes the role file's `model_reasoning_effort` line, its trailing
+comment, and the omo.jsonc `reasoning`. A Save that changes only the model leaves both effort values as they were.
+Omitting `model` leaves the role file's `model` pin and the omo.jsonc `model` exactly as they were,
+so a role without a pin keeps inheriting its model while its effort changes or clears; the dashboard
+sends this effort-only request for such a row. When omo.jsonc can be written, a role without an entry there
+gets one holding only `reasoning` if the saved effort is one LazyCodex supports (`none` is written as
+`off`); for such a role, clearing the effort or saving `ultra` adds no entry. A `null` model is refused with 400 `invalid_model`, because a save never removes a model
+pin, and a request with neither `model` nor `effort` is refused with 400 `empty_update` before the role file or omo.jsonc is
+read. `ocx agent roles set` always takes a model.
+Only an existing one-line string value can be removed; a multiline or non-string value is refused
+with 409 `unsupported_model_value`, leaving both files unchanged. Clearing removes only the
+role's own override: Codex then resolves the effort as it does for any role without one (an explicit
+spawn value, the `[agents]` default, or the parent session), not a fixed model default.
 
 ### Auto-assign
 
@@ -700,9 +784,11 @@ picks a model. opencodex then picks the cheapest model from your picker list tha
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
 cannot be applied. Nothing is written until you press Apply on a row or Apply all. Applying uses the
-same save as picking by hand, and also rewrites the role's `model_reasoning_effort` when the file already has
-one. The effort is placed on the chosen model's own levels: its lowest, its default, one above the
-default, or its highest.
+same save as picking by hand. Every sized role whose chosen model has a non-empty effort ladder gets
+an effort proposal, and Apply or `--apply` inserts or replaces its `model_reasoning_effort` value.
+The effort is placed on the chosen model's own levels: its lowest, its default, one above the
+default, or its highest. An empty ladder gives no effort proposal (`proposedEffort: null`);
+Apply omits `effort` and leaves any existing effort pin as it was. A null proposal never clears a pin.
 
 ```bash
 ocx agent roles suggest

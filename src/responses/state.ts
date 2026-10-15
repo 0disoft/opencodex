@@ -31,7 +31,7 @@ import { recoverStaleResponseStateTemps } from "./state/temp-recovery";
 export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
-import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, spillCounters, spillWriteHealth } from "./state/spill-failure";
+import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, resetSpillCountersForTests, spillCounters, spillWriteHealth } from "./state/spill-failure";
 import { loadSnapshotEntry } from "./state/snapshot-codec";
 import { isBodyNonPersistable } from "./state/body-policy";
 export { isBodyNonPersistable, markBodyNonPersistable } from "./state/body-policy";
@@ -710,11 +710,6 @@ export function sweepOrphanedResponseSpills(): number {
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
 
 async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise<SnapshotWriteOutcome> {
-  // Serialize writers so concurrent flush + debounce cannot race on temps / ACL (#612).
-  const previous = persistGate;
-  let release!: () => void;
-  persistGate = new Promise<void>(resolve => { release = resolve; });
-  await previous;
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
@@ -751,13 +746,19 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
         lastSnapshotTarget = resolveWriteTarget(path);
       }
       persistAttemptHookForTests?.();
-      if (revision === stateRevision) return "stable";
+      if (revision === stateRevision) {
+        // Cancel only the timer whose mutation this stable revision includes,
+        // before an awaiting caller's microtask can record a newer revision.
+        if (persistTimer) clearTimeout(persistTimer);
+        persistTimer = null;
+        pendingPersistPath = null;
+        drainPendingSpillUnlinks();
+        return "stable";
+      }
     }
     return "unstable";
   } catch {
     return "failed";
-  } finally {
-    release();
   }
 }
 
@@ -792,21 +793,30 @@ function schedulePersistAt(path: string, replace = false): void {
 }
 
 async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
-  if (persistTimer) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  pendingPersistPath = null;
-  const attemptLimit = awaitFollowUp ? MAX_SNAPSHOT_REWRITE_ATTEMPTS : 1;
-  let outcome = await writeBoundedSnapshot(path, attemptLimit);
-  if (outcome === "unstable" && awaitFollowUp) {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = null;
+  // Include follow-up scheduling in the gate: releasing after only the disk write
+  // lets shutdown observe an empty timer before the background pass re-arms it.
+  const previous = persistGate;
+  let release!: () => void;
+  persistGate = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
     pendingPersistPath = null;
-    outcome = await writeBoundedSnapshot(path, attemptLimit);
+    const attemptLimit = awaitFollowUp ? MAX_SNAPSHOT_REWRITE_ATTEMPTS : 1;
+    let outcome = await writeBoundedSnapshot(path, attemptLimit);
+    if (outcome === "unstable" && awaitFollowUp) {
+      if (persistTimer) clearTimeout(persistTimer);
+      persistTimer = null;
+      pendingPersistPath = null;
+      outcome = await writeBoundedSnapshot(path, attemptLimit);
+    }
+    if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
+  } finally {
+    release();
   }
-  if (outcome === "stable") drainPendingSpillUnlinks();
-  else if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
 }
 
 function schedulePersist(): void {
@@ -816,15 +826,8 @@ function schedulePersist(): void {
 }
 
 async function flushResponseSnapshot(): Promise<void> {
-  if (persistTimer) {
-    await persistNow(pendingPersistPath ?? snapshotPath(), true);
-    return;
-  }
-  // No pending timer: still await any in-flight write so shutdown does not race (#612).
+  // The gate includes the background pass's timer decision, not just its write.
   await persistGate;
-  // A bounded background pass may have scheduled its same-path follow-up while
-  // this flush was waiting on the single-flight gate. Shutdown owns one awaited
-  // bounded follow-up rather than returning behind that unref'd timer.
   if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
 }
 
@@ -876,20 +879,29 @@ export function replayOverlapSkipsForTests(): number {
  * This ceiling therefore bounds what the store owns, which is every file it can
  * account for, and not the directory as a whole.
  */
-function enforceSpilledResponseBudget(): number {
+function enforceSpilledResponseBudget(requiredHeadroomBytes?: number): number {
   // Price in-flight publications too: a file being created by
   // `writeResponseSpillDurablyAsync` occupies the volume before it reaches `states`.
   let spilledBytes = accountedResponseSpillBytes();
-  if (spilledBytes <= spillByteCap()) return 0;
+  // Admission (#6747) passes the room its publication needs, 0 included. Evict only while that
+  // room is still reachable: re-read accounting after each attempt, since a failed unlink stays
+  // charged, and stop the moment the publication cannot fit so no unrelated continuation pays.
+  const admission = requiredHeadroomBytes !== undefined;
+  const headroom = admission && requiredHeadroomBytes > 0 ? requiredHeadroomBytes : 0;
+  const feasible = (): boolean => !admission
+    || (spilledBytes = accountedResponseSpillBytes()) - spilledResponseBytes() + headroom <= spillByteCap();
+  if (!feasible() || spilledBytes <= spillByteCap() - headroom) return 0;
   const before = spilledBytes;
   // Deferred generations go first. They are already superseded, so releasing one
   // costs only the crash window the queue exists to cover — the same trade
   // PENDING_SPILL_UNLINKS_MAX already makes against unbounded disk. Evicting a
   // live continuation to make room for a dead file would be the wrong order.
-  while (spilledBytes > spillByteCap() && pendingSpillUnlinks.length > 0) {
+  while (spilledBytes > spillByteCap() - headroom && pendingSpillUnlinks.length > 0) {
     const ref = pendingSpillUnlinks.shift()!;
     spilledBytes -= ref.payloadBytes;
     deleteResponseSpill(ref);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   // Ordered by createdAt, not by map order. `states` is not an age index:
   // demotion and spill replacement delete and reinsert entries, and
@@ -906,9 +918,11 @@ function enforceSpilledResponseBudget(): number {
     .sort((a, b) => a[1].createdAt - b[1].createdAt
       || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   for (const [id, entry] of spilled) {
-    if (spilledBytes <= spillByteCap()) break;
+    if (spilledBytes <= spillByteCap() - headroom) break;
     spilledBytes -= entry.spill.payloadBytes;
     deleteEntry(id);
+    if (admission) spillCounters.headroomEvictions += 1;
+    if (!feasible()) return before - spilledBytes;
   }
   return before - spilledBytes;
 }
@@ -1210,6 +1224,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillLastSuccessAt: spillWriteHealth.lastSuccessAt,
     spillAclRetryReturnedTimeouts: spillCounters.aclRetryReturnedTimeouts,
     spillAclTimeoutMemoRefusals: spillCounters.aclTimeoutMemoRefusals,
+    spillCapacityRefusals: spillCounters.capacityRefusals, spillHeadroomEvictions: spillCounters.headroomEvictions,
     spillLastFailureAt: spillWriteHealth.lastFailureAt,
     spillReadFailures: spillCounters.readFailures,
     replayScopeMismatchDrops,
@@ -1321,11 +1336,7 @@ export function clearResponseStateMemoryForTests(): void {
   oldestResidentAt = null;
   stateRevision = 0;
   pendingSpillUnlinks.length = 0;
-  spillCounters.writes = 0;
-  spillCounters.writeFailures = 0;
-  spillCounters.readFailures = 0;
-  spillCounters.aclRetryReturnedTimeouts = 0;
-  spillCounters.aclTimeoutMemoRefusals = 0;
+  resetSpillCountersForTests();
   spillWriteHealth.consecutiveFailures = 0;
   spillWriteHealth.lastFailureCode = null;
   spillWriteHealth.lastFailureOrigin = null;

@@ -19,11 +19,15 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
+import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
+import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync } from "../config";
+import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync, loadConfig } from "../config";
 import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -535,6 +539,7 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
+  if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
@@ -865,14 +870,26 @@ export interface OAuthCredentialWriteReceipt {
   previousAccount: ProviderAccount | undefined;
 }
 
+/** Recheck B immediately before persist, including writes queued behind another mutation. */
+function registrationPersistGuard(provider: string, assertBeforePersist?: () => void): (() => void) | undefined {
+  if (provider !== "anthropic2") return assertBeforePersist;
+  return () => {
+    assertBeforePersist?.();
+    assertAnthropicInstanceLoginConfig(loadConfig(), provider);
+  };
+}
+
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
 ): Promise<OAuthCredentialWriteReceipt | null> {
+  if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return null;
   const receipt = await mutateStore(store => {
+    if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
+    if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
     const previousActiveAccountId = set?.activeAccountId;
     const previousSelectionRevision = set?.selectionRevision;
@@ -891,6 +908,7 @@ export async function saveCredentialWithReceipt(
       const existing = set.accounts.find(a => matchesAnthropicImport(a.credential, safe));
       if (existing) {
         existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
+          plan: mergeOAuthPlan(safe, existing.credential),
           accountId: safe.accountId ?? existing.credential.accountId, email: safe.email ?? existing.credential.email };
         set.selectionRevision = previousSelectionRevision;
         delete existing.needsReauth;
@@ -904,9 +922,17 @@ export async function saveCredentialWithReceipt(
         accountId = id;
       }
     } else if (identity) {
-      const existing = set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
+      // Kiro: a shared organization profile ARN is not a user, so its identity also carries the
+      // same-session whoami email (#6641); the helper never guesses between identified users.
+      const existing = provider === "kiro"
+        ? findKiroAccountForLogin(set.accounts, safe)
+        : set.accounts.find(a => (a.credential.accountId ?? a.credential.email) === identity);
       if (existing) {
-        existing.credential = safe;
+        const incoming = provider === "kiro" ? withRetainedKiroUser(safe, existing.credential) : safe;
+        // Same identity: a login whose tier read failed keeps the stored label (plan absent),
+        // while an observed unknown (plan null) still clears it.
+        const plan = mergeOAuthPlan(incoming, existing.credential);
+        existing.credential = plan === undefined ? incoming : { ...incoming, plan };
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;
@@ -918,7 +944,13 @@ export async function saveCredentialWithReceipt(
         // active identity-less row in place prevents a stale duplicate that stays selectable
         // and would re-refresh into a second row with the same identity.
         const active = set.accounts.find(a => a.id === set.activeAccountId);
-        if (!opts.preserveIdentityless && active && active.credential.accountId === undefined && active.credential.email === undefined) {
+        // Kiro rows of one organization differ only by user: while another row shares the profile,
+        // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
+        const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
+          && active.credential.email === undefined
+          && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
+            || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
+        if (!opts.preserveIdentityless && active && legacyUpgrade) {
           active.credential = safe;
           delete active.needsReauth;
           delete active.needsReauthReason;
@@ -972,7 +1004,7 @@ export async function saveCredentialWithReceipt(
       previousAccount: previousAccounts.get(accountId),
     };
   }, [provider, safe], {
-    assertBeforePersist: opts.assertBeforePersist,
+    assertBeforePersist: registrationPersistGuard(provider, opts.assertBeforePersist),
     finalizeResult: (receipt, store) => {
       receipt.selectionRevision = store[provider]?.selectionRevision;
     },
@@ -998,6 +1030,25 @@ export async function saveCredential(
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
 ): Promise<void> {
   await saveCredentialWithReceipt(provider, cred, opts);
+}
+
+/**
+ * Record the same-session whoami user on a Kiro row saved before whoami named it (#6641).
+ * Applies only while the row still holds the proven session's refresh token and profile ARN
+ * and has no user yet; tokens, routing, plan and health are left exactly as stored.
+ */
+export async function bindKiroAccountUserEmail(
+  accountId: string,
+  proof: { profileArn: string; refresh: string; email: string },
+): Promise<boolean> {
+  return await mutateStore(store => {
+    const account = store.kiro?.accounts.find(candidate => candidate.id === accountId);
+    const credential = account?.credential;
+    if (!credential || credential.email !== undefined) return false;
+    if (credential.accountId !== proof.profileArn || credential.refresh !== proof.refresh) return false;
+    credential.email = proof.email;
+    return true;
+  }, [accountId, proof]);
 }
 
 /** Native device approval always gets a new slot; no unverified identity can replace one. */
@@ -1071,11 +1122,14 @@ export async function upsertCredentialByIdentity(
   provider: string,
   cred: OAuthCredentials,
 ): Promise<"inserted" | "updated"> {
+  if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe || (!safe.accountId && !safe.email)) {
     throw new Error("Refusing to persist OAuth credential without verified identity");
   }
   return await mutateStore(store => {
+    if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
+    if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
     const matchesEmailOnly = (account: ProviderAccount): boolean => {
       if (account.credential.accountId) return false;
@@ -1106,7 +1160,7 @@ export async function upsertCredentialByIdentity(
       store[provider] = { activeAccountId: id, accounts: [account] };
     }
     return "inserted";
-  }, [provider, safe]);
+  }, [provider, safe], { assertBeforePersist: registrationPersistGuard(provider) });
 }
 
 /**
@@ -1180,16 +1234,19 @@ export function getAccountCredentialWithStatus(
   };
 }
 
-/** Persist a refreshed credential for a SPECIFIC account without touching activeAccountId. */
+/** Persist an explicit login/reauth credential for one account; runtime rotations use mergeAccountCredential. */
 export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
   opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
 ): Promise<void> {
+  if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
   if (!safe) return;
   await mutateStore(store => {
+    if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
+    if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
@@ -1205,7 +1262,7 @@ export async function saveAccountCredential(
       set.activeAccountId = account.id;
       set.selectionRevision = randomUUID();
     }
-  }, [provider, accountId, safe], { assertBeforePersist: opts.assertBeforePersist });
+  }, [provider, accountId, safe], { assertBeforePersist: registrationPersistGuard(provider, opts.assertBeforePersist) });
 }
 
 function accountSelection(set: ProviderAccountSet): OAuthAccountSelection {
@@ -1285,12 +1342,19 @@ export async function setAnthropicAccountThreshold(
   threshold: number | null,
   options: { assertBeforePersist?: () => void } = {},
 ): Promise<boolean> {
+  return setAnthropicAccountThresholdForInstance("anthropic", accountId, threshold, options);
+}
+
+export async function setAnthropicAccountThresholdForInstance(
+  instance: AnthropicInstanceId, accountId: string, threshold: number | null,
+  options: { assertBeforePersist?: () => void } = {},
+): Promise<boolean> {
   const normalizedThreshold = threshold === null ? null : parseAnthropicAccountThreshold(threshold);
   if (threshold !== null && normalizedThreshold === null) {
     throw new Error("threshold must be an integer 0-100 or null");
   }
   const result = await mutateStore(store => {
-    const set = store.anthropic;
+    const set = store[instance];
     const account = set?.accounts.find(row => row.id === accountId);
     if (!set || !account) return { status: "not-found" as const };
     if ((account.autoSwitchThresholdOverride ?? null) === normalizedThreshold) return { status: "unchanged" as const };
@@ -1299,12 +1363,12 @@ export async function setAnthropicAccountThreshold(
     else account.autoSwitchThresholdOverride = normalizedThreshold;
     set.selectionRevision = randomUUID();
     return { status: "updated" as const, before, after: accountSelection(set) };
-  }, [accountId, normalizedThreshold], { assertBeforePersist: options.assertBeforePersist, afterPersist: result => {
+  }, [instance, accountId, normalizedThreshold], { assertBeforePersist: options.assertBeforePersist, afterPersist: result => {
     if (result.status !== "updated") return;
     // Publish the policy-owned transition before the generic selection event. This
     // preserves an exact previous-revision manual intent without opening an ABA gap.
     publishOAuthAccountRoutingPolicyChange(Object.freeze({
-      provider: "anthropic",
+      provider: instance,
       before: Object.freeze(result.before),
       after: Object.freeze(result.after),
     }));
@@ -1478,10 +1542,10 @@ export async function markAccountNeedsReauth(
   }, [provider, accountId]);
 }
 
-export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
+export async function mergeAccountCredential(provider:string,accountId:string,credential:OAuthCredentials,opts:{expectedGeneration?:string;afterPrePersistRead?:()=>void|Promise<void>;assertOwnership?: (store: AuthStore) => void}={}):Promise<{superseded:false}|{superseded:true;stored:OAuthCredentials}>{const safe=normalizeCredential(credential);if(!safe)throw new Error("Refusing to persist invalid OAuth credential");if(isAnthropicInstanceId(provider))assertAnthropicCredentialSource(provider,safe);return await mutateStore(async store=>{await opts.afterPrePersistRead?.();const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account)throw new Error(`OAuth account disappeared before persist: ${provider}`);if(opts.expectedGeneration!==undefined&&credentialGeneration(account.credential)!==opts.expectedGeneration)return{superseded:true,stored:account.credential};opts.assertOwnership?.(store);account.credential=safe;delete account.refreshAttentionGeneration;if(account.needsReauthReason!=="verify_account"){delete account.needsReauth;delete account.needsReauthReason;}return{superseded:false};},[provider,accountId,safe,opts.expectedGeneration]);}
 // A late refresh failure must not change an operator-paused account's health. Check under
 // the mutation lock, not before awaiting it, so a concurrent pause cannot be overwritten.
-export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account"):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
+export async function markAccountNeedsReauthIfGeneration(provider:string,accountId:string,generation:string,writerGeneration=captureConfigGeneration(),reason?:"verify_account",isCurrent?:(store:AuthStore)=>boolean):Promise<boolean>{const key=oauthAccountKey(provider,accountId);if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;return await mutateStore(store=>{const account=store[provider]?.accounts.find(x=>x.id===accountId);if(!account?.credential||account.paused||credentialGeneration(account.credential)!==generation)return false;if(writerGeneration<lastReconciledGeneration&&!liveOAuthAccountKeys.has(key))return false;if(isCurrent&&!isCurrent(store))return false;account.needsReauth=true;if(reason==="verify_account")account.needsReauthReason=reason;return true;},[provider,accountId,generation]);}
 
 /** Attention is projected only; refresh selection continues to use the stored terminal flag. */
 export function accountNeedsReauthForStatus(provider: string, account: ProviderAccount, now = Date.now()): boolean {

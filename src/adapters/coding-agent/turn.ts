@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import { commandInvocation } from "../../lib/win-exec";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -103,6 +105,14 @@ export function redactSecrets(text: string, tokenEnv: string | undefined, creden
     .replace(/\b(sk-[A-Za-z0-9_-]{6,})\b/g, "[redacted]");
 }
 
+export type CodingAgentFailure = {
+  profile: CodingAgentProviderProfile;
+  error: Extract<AdapterEvent, { type: "error" }>;
+} & (
+  | { source: "result"; frame: Record<string, unknown> }
+  | { source: "process-exit"; exitCode: number; stderr: string }
+);
+
 /** Inputs for one headless CLI turn: region profiles, request context, and family-specific arg/env builders. */
 export interface CodingAgentTurnInput {
   /** Region profiles for this family; the turn fails closed if the base URL matches none. */
@@ -121,6 +131,8 @@ export interface CodingAgentTurnInput {
    * The MCP handler never executes the client tool.
    */
   toolBridge?: CodingAgentToolBridgeInput;
+  /** Vendor semantics and recovery permission stay with the adapter. */
+  classifyFailure?: (failure: CodingAgentFailure) => Extract<AdapterEvent, { type: "error" }>;
   deps: CodingAgentDeps;
 }
 
@@ -287,6 +299,19 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   const env = buildEnv(profile, apiKey);
   const invocation = commandInvocation(binary, args, platform, { env });
 
+  // An opaque CLI invocation is one send. Its internal retries are not observable here;
+  // terminal usage still settles the complete amount, including usage above the estimate.
+  let producer: { close(): void } | undefined;
+  let permit: SingleUseDispatchPermit | undefined;
+  try {
+  producer = incoming.sendBudget?.beginSpendProducer?.();
+  const decision = incoming.sendBudget?.reserveDispatch({
+    sendClass: "initial", targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
+  });
+  if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
+  permit = decision?.allowed ? decision.permit : undefined;
+  if (permit && !permit.use()) throw new SendBudgetExhaustedError();
+  incoming.onPhysicalSend?.({ ordinal: 1 });
   let child: ChildProcess;
   try {
     child = spawnFn(invocation.file, invocation.args, {
@@ -304,9 +329,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       code: "cli_spawn_failed",
       retryable: false,
     });
-    // A synchronous spawn() throw skips the event-loop `finally` below, so the private
-    // bridge dir would leak unless it is removed here as well.
-    if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
     return;
   }
 
@@ -483,7 +505,11 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
         }
-        const mappedEvents = mapStreamMessageToEvents(message, state);
+        const mappedEvents = mapStreamMessageToEvents(message, state).map(event => {
+          if (message.type !== "result" || event.type !== "error") return event;
+          if (input.classifyFailure) return input.classifyFailure({ source: "result", frame: message, error: event, profile });
+          return event;
+        });
         if (state.toolCallLimitExceeded) {
           emitOnce({
             type: "error",
@@ -665,9 +691,6 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   } finally {
     releaseOpenToolBlocks(state);
     cleanup();
-    if (toolBridgeDir) {
-      await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
-    }
   }
 
   // Reap the process so no zombie is left behind (§三十): wait for the real `close`, and
@@ -717,14 +740,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       const exitMsg = stderr
         ? `${profile.label} CLI exited with code ${child.exitCode}: ${stderr}`
         : `${profile.label} CLI exited with non-zero exit code ${child.exitCode}`;
-      emitOnce({
-        type: "error",
-        message: exitMsg,
-        status: 502,
-        errorType: "upstream_error",
-        code: "process_exit_error",
-        retryable: false,
-      });
+      const error: Extract<AdapterEvent, { type: "error" }> = {
+        type: "error", message: exitMsg, status: 502, errorType: "upstream_error",
+        code: "process_exit_error", retryable: false,
+      };
+      emitOnce(input.classifyFailure
+        ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
+        : error);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
         type: "error",
@@ -746,6 +768,15 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         code: "protocol_error",
         retryable: false,
       });
+    }
+  }
+  } finally {
+    try { permit?.release(); }
+    finally {
+      try { producer?.close(); }
+      finally {
+        if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+      }
     }
   }
 }
