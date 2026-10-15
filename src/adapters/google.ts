@@ -1,3 +1,4 @@
+import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
@@ -983,7 +984,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
@@ -1202,10 +1203,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
+      // Zen accepts Gemini wire and x-goog-api-key at its own model endpoint.
+      const zenEndpoint = openCodeZenGeminiEndpoint(provider, routedModelId);
+      const endpoint = zenEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
+      const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
+      if (!apiKey) throw new Error(`${zenEndpoint ? "OpenCode Zen" : "google (AI Studio)"} requires a non-empty API key`);
       headers["x-goog-api-key"] = apiKey;
 
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);

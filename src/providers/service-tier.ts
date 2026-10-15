@@ -33,6 +33,7 @@ type ServiceTierCapabilityProvider = Pick<
   | "modelAdapters"
   | "baseUrl"
   | "authMode"
+  | "googleMode"
   | "apiKeyTransport"
   | "chatServiceTier"
   | "fastWire"

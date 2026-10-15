@@ -1,3 +1,5 @@
+import { openCodeZenBaseUrl, type OpenCodeZenDestination } from "./opencode-zen";
+
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
  * zod load schema, the management write boundary (POST/PATCH), and the fetch runtime, so
@@ -98,9 +100,7 @@ const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = O
 });
 
 /** Just enough of a provider config to tell whether it still points at the pinned endpoint. */
-export interface WirePinProvider {
-  readonly baseUrl?: unknown;
-}
+export interface WirePinProvider extends OpenCodeZenDestination {}
 
 function normalizedEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -113,6 +113,7 @@ function normalizedEndpoint(value: unknown): string | undefined {
 }
 
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
+  if (providerName === "opencode-zen" && openCodeZenBaseUrl(provider)) return { "gemini-": "google" };
   if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
   const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
   return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;
