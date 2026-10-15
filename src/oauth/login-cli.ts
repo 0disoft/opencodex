@@ -15,6 +15,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
+import { reportOAuthLoginError } from "./login-cli-errors";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -159,7 +160,7 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): P
         return await ask("Paste redirect URL or code (or wait for browser): ");
       },
     });
-  });
+  }).catch(reportOAuthLoginError);
   // A device or polling provider never prompts, so nothing above waited on the launcher. It is
   // still owed an answer before this claims the login worked.
   await browser.settled();

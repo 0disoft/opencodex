@@ -53,7 +53,7 @@ this wire projection does not change the usage ledger.
 
 ## CLI readiness diagnostics
 
-The [CLI management contract](cli-management.md#cli-readiness-diagnostics) owns terminal-safe human diagnostics, structured-output fidelity and capability argument failures. Its [data-key and observation contract](cli-management.md#data-key-probes-and-observation-streams) also owns explicit stdin cancellation, credential separation and bounded follow lifetimes.
+The [CLI management contract](cli-management.md#cli-readiness-diagnostics) owns terminal-safe human diagnostics, structured-output fidelity and capability argument failures. Its [data-key and observation contract](cli-management.md#data-key-probes-and-observation-streams) also owns explicit stdin cancellation, credential separation and bounded follow lifetimes. `src/oauth/login-cli.ts` delegates failed provider logins to `src/oauth/login-cli-errors.ts`: the terminal prints the public OAuth message with a validated HTTP status when available, or the fixed `oauth_authentication_failed` code, and exits 1 (`tests/oauth/oauth-login-cli-errors.test.ts`).
 
 ## CLI resolve and stop contracts for embedding shells
 
