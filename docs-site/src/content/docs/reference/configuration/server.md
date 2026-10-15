@@ -126,6 +126,10 @@ SOCKS5 (Clash mixed-port listeners included) belongs on `ALL_PROXY`, not `HTTP_P
 
 `ocx start --socks5` writes that value; `ocx start --socks5-off` clears it.
 
+HTTPS requests through SOCKS5 have a separate 30-second TLS handshake deadline.
+A stalled handshake fails without disabling certificate verification; caller
+cancellation can stop it sooner.
+
 If an older development build changed resume-history metadata before backup support existed, run
 `ocx recover-history --legacy-openai --yes` to force native-provider recovery.
 It force-relabels every user-message `opencodex` row, including legitimate dedicated-provider
@@ -609,6 +613,7 @@ modes, the preview, and the per-request trace.
 | `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
 | `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the `anthropic` OAuth provider on `api.anthropic.com`, including stored account pools. Requires `managedMessagesNative`. For the settled `anthropic` provider, an enabled pool supplies true for absent native flags when `anthropicAccountPool.nativeMessages` is absent or true. Explicit false/malformed flags and a false/malformed pool preference remain off. Other providers and pool-off keep explicit rollout behavior. Eligible pooled requests retain shared selection, affinity and bounded pre-output recovery. Recognized JSON-string `metadata.user_id` account UUIDs are aligned with the serving OAuth credential; device and session fields are preserved. |
 | `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
+| `protocols.rollout.antigravityDirect?` | `boolean` | `true` | Send a Chat or Messages request to a single Google Antigravity route without the internal Responses body in either direction. Request settings still pass through the usual policies, and a request the lane cannot carry uses the bridge. Set `false` to turn it off. |
 | `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
 
 Malformed protocol blocks retain a conservative disabled native policy when loaded from disk.

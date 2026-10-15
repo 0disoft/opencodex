@@ -1,3 +1,4 @@
+import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 // German — generated from en.ts. Must match TKey set (compile-checked).
 import type { TKey } from "./en";
 
@@ -5,6 +6,14 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  ...desktopCompatibilityCopy("de"),
+  "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
+  "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",
+  "claude.tierDefaults.title": "CLI-Standardmodelle",
+  "claude.tierDefaults.preview": "Claude-Einstellungen ansehen",
+  "claude.tierDefaults.apply": "Auf Claude-Einstellungen anwenden",
+  "claude.tierDefaults.applied": "Claude-Einstellungen entsprechen den gespeicherten Standardwerten.",
+  "claude.tierDefaults.failed": "Standardwerte konnten nicht angewendet werden. Erneut Vorschau anzeigen und Claude-Einstellungen prüfen.",
   "sidecar.pool": "Kontopool",
   "sidecar.poolCurrent": "Pool der aktuellen Anfrage",
   "sidecar.poolA": "Anthropic",
@@ -118,6 +127,25 @@ export const de: Record<TKey, string> = {
   "nav.combos": "Combos",
   "nav.subagents": "Sub-Agenten",
 
+  "nav.advisor": "Berater",
+  "advisor.description": "Ein unabhängiges Expertenmodell, das die Aufgabe des Workers prüft und Rat zurückgibt. Die Konsultation gehört OpenCodex: Der Worker kann das synthetische Advisor-Tool aufrufen, und die Preflight-Politik versucht zusätzlich automatisch eine Konsultation pro Aufgabe — sobald die Aufgabe Orientierungsbelege geliefert hat (ein Tool-Aufruf des Assistenten oder ein Tool-Ergebnis nach der letzten Nutzernachricht) und ohne Mitwirkung des Workers. Der Versuch wird für Clients mit einer stabilen Konversationsidentität pro Aufgabe dedupliziert; ein Client ohne eine solche überspringt diese Deduplizierung und kann den Versuch bei jeder neu geeigneten Anfrage erneut erleben.",
+  "advisor.enabled": "Berater aktiviert",
+  "advisor.model": "Expertenmodell",
+  "advisor.modelPlaceholder": "z. B. gpt-6-astra oder anthropic/claude-sonnet-4-6",
+  "advisor.effort": "Denkintensität",
+  "advisor.policy": "Richtlinie",
+  "advisor.policy.manual": "Manuell — nur wenn der Worker fragt",
+  "advisor.policy.preflight": "Preflight — automatischer Konsultationsversuch, sobald Orientierungsbelege vorliegen",
+  "advisor.timeout": "Zeitlimit (ms)",
+  "advisor.save": "Beratereinstellungen speichern",
+  "advisor.saved": "Beratereinstellungen gespeichert.",
+  "advisor.loadFailed": "Beratereinstellungen konnten nicht geladen werden. Läuft der Proxy?",
+  "advisor.warning.noModel": "Aktiviert, aber kein Expertenmodell konfiguriert — der Advisor kann erst nach der Modellkonfiguration ausgeführt werden.",
+  "advisor.costNote": "Konsultationen sind echte zusätzliche Modellaufrufe und erscheinen in der Nutzung unter dem Beratermodell, nicht dem Worker-Modell.",
+  "advisor.privacyNote": "Hinweis zu mehreren Anbietern: Konsultationen senden die Aufgabenkonversation und Tool-Ergebnisse an den konfigurierten Berater-Anbieter, der sich vom Worker-Anbieter unterscheiden kann. Aufgabeninhalte werden nicht von Geheimnissen bereinigt — aktivieren Sie den Berater nicht bei Aufgaben, deren Inhalte Sie diesem Anbieter nicht anvertrauen würden. Das Einschalten allein zeichnet diese Zustimmung nicht auf.",
+  "advisor.disclosure": "Eine Konsultation kann die letzte Nutzeraufgabe, geparsten Nutzer-/Assistenten-/Entwicklertext, Tool-Aufrufe und Argumente, Tool-Ergebnisse, den Tool-Katalog des Workers, die Worker-Identität, das konfigurierte Berater-Modell und eine optionale Fokusfrage senden. OpenCodex fügt keine Provider-API-Schlüssel, Authorization-Header, OAuth-Token, Backend-Geheimnisse, Prozessumgebung oder verborgenes Chain-of-Thought ein. Aufgabeninhalt wird nicht von Geheimnissen bereinigt: ein eingefügter Schlüssel, ein Geheimnis in einer Datei oder ein von einem Tool ausgegebenes Token kann mitgesendet werden. Der Berater-Anbieter kann vom Worker-Anbieter abweichen.",
+  "advisor.consent.label": "Ich verstehe, dass Berater-Konsultationen die Konversation dieser Aufgabe, Tool-Aufrufe und Tool-Ergebnisse an den konfigurierten Berater-Anbieter senden können, der vom Worker-Anbieter abweichen kann. Aufgabeninhalt wird nicht von Geheimnissen bereinigt.",
+  "advisor.consent.required": "Der Berater ist nicht lauffähig, solange die Zustimmung zur Kontextfreigabe fehlt. Ohne sie wird kein Aufgabeninhalt gesendet.",
   // routing intelligence
   "routing.title": "Routing-Intelligenz (beta)",
   "routing.subtitle": "Policy-Profile, Trockenlauf-Bewertung und routinggestützte Analysen.",
@@ -1539,6 +1567,9 @@ export const de: Record<TKey, string> = {
   "integrations.tab.aside": "Aside",
   "integrations.tab.raycast": "Raycast",
   "integrations.tab.omo": "omo",
+  "integrations.tab.qoder": "Qoder",
+  "api.clientConfig.clientQoder": "Qoder",
+  "integrations.semantics.qoder": "Verwaltet OpenCodex-Anbieter und eigene Modelle in ~/.qoder/settings.json. Erfordert Loopback-Zugriff. Andere Einstellungen bleiben erhalten; Rückgängig stellt den Snapshot wieder her.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",
@@ -2669,8 +2700,6 @@ export const de: Record<TKey, string> = {
   "modal.badge.subscriptionCli": "Abo-CLI",
   "pws.sponsor.orcaTitle": "Das passende Modell für jede Anfrage",
   "pws.sponsor.orcaDescription": "Ein OpenAI-kompatibles Gateway mit adaptivem Routing und automatischem Failover.",
-  "pws.sponsor.packyTitle": "Claude Code, Codex und Gemini an einem Ort",
-  "pws.sponsor.packyDescription": "Ein API-Relay für Ihre KI-Programmierwerkzeuge. Starten Sie mit einem Token der Codex-Gruppe.",
   "pws.sponsor.tokenlabTitle": "Ein API-Schlüssel für führende Modelle",
   "pws.sponsor.tokenlabDescription": "Responses, Chat Completions, Streaming und Tool-Aufrufe für Coding-Agenten, mit wählbarem Bereitstellungsmodus und nutzungsbasierter Abrechnung.",
   "pws.sponsor.visit": "{provider} entdecken",
