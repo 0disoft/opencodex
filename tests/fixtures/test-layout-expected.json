@@ -5,6 +5,7 @@
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
   "codex-history-pending-wal.test.ts": "codex-integration",
+  "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",
   "owner-registry-isolation.test.ts": "config",
   "service-health-sentinel-policy.test.ts": "service",
