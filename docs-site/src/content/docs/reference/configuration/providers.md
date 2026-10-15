@@ -1802,3 +1802,23 @@ raised output allowance would exceed that ceiling.
   }
 }
 ```
+
+### Native Chat thinking replay
+
+These Chat reasoning lists also apply to native `/v1/chat/completions` tool-call continuation.
+The proxy preserves supplied `reasoning_content` and restores omitted reasoning from upstream
+JSON or SSE responses using tool-call ids. Original reasoning replay requires a stable
+`thread-id`, `session_id`, or `session-id` header on each request and the same provider, endpoint,
+model and credential. The cache is process-local and bounded; a restart, expiry, eviction, or
+missing conversation header uses the configured minimal placeholder instead. A placeholder
+cannot reconstruct lost reasoning. Clients should retain upstream `reasoning_content` in their
+assistant history for reliable resumed conversations.
+
+When `preserveReasoningContentModels` is unset, DeepSeek Flash/Pro model names are recognized
+across versions, including `deepseek-v4.1-flash`, namespaced ids and gateway suffixes. Explicit
+lists remain authoritative: `preserveReasoningContentModels: []` disables automatic repair,
+while `requiresReasoningPlaceholderModels: []` disables placeholders and still allows cached
+original reasoning. Other model families require the preserve declaration.
+Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
+calls. The configured placeholder fills these omissions; no original reasoning can be recovered
+from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.
