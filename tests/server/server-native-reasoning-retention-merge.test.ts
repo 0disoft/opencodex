@@ -58,7 +58,8 @@ function bind(request: ReturnType<typeof parsed>, context = account()) {
 describe("native reasoning retention with upstream replay ownership", () => {
   test("ingress snapshots retention alongside Claude replay and mint metadata", () => {
     const source = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
-    expect(source).toMatch(/parsed = parseRequest\(body\);\s*parsed\._nativeReasoningRetention = resolveNativeReasoningRetention\(config\);\s*if \(options\.inboundWire === "anthropic"\) \{\s*parsed\._nativeReasoningReplay = options\.nativeReasoningReplay;\s*parsed\._nativeReasoningMint = options\.nativeReasoningMint;/);
+    // The snapshot follows the Antigravity direct-request decode, which replaces `parsed`.
+    expect(source).toMatch(/parsed = parseRequest\(body\);[\s\S]{0,400}?if \(options\.directRequest\) parsed = options\.directRequest\.decode\(parsed\);\s*parsed\._nativeReasoningRetention = resolveNativeReasoningRetention\(config\);\s*if \(options\.inboundWire === "anthropic"\) \{\s*parsed\._nativeReasoningReplay = options\.nativeReasoningReplay;\s*parsed\._nativeReasoningMint = options\.nativeReasoningMint;/);
   });
 
   test("untagged Responses history can retain ciphertext while native compaction stripping remains armed", () => {

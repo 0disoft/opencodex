@@ -101,6 +101,8 @@ export interface OcxParsedRequest {
   _stripReasoningEncryptedContent?: boolean;
   /** Native compaction remains nonportable even when reasoning-only retention is enabled. */
   _stripNativeCompactionEncryptedContent?: boolean;
+  /** Retention kept reasoning ciphertext across a model/account change; arms streamed rejection recovery. */
+  _nativeReasoningRetainedAcrossRoute?: boolean;
   /**
    * Set when replayed reasoning item ids name items in a store this destination cannot read: by
    * prepareOpaqueBlobRecovery before the one recovery rebuild, and by bindRouteReasoningReplayScope

@@ -170,6 +170,7 @@ export function bindRouteReasoningReplayScope(args: {
       && (!identityChange.modelChanged || retention?.modelSwitch === true)
       && (!identityChange.credentialChanged || retention?.accountSwitch === true);
     if (!mayRetainReasoning) parsed._stripReasoningEncryptedContent = true;
+    else parsed._nativeReasoningRetainedAcrossRoute = true;
     // Only a different destination or credential makes the replayed item ids unresolvable; a
     // model change on the same store keeps them.
     if (reasoningReplayItemStoreChanged(parsed._reasoningReplayScope)) {

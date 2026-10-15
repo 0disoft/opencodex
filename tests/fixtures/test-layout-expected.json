@@ -2,6 +2,7 @@
   "config-native-reasoning-retention.test.ts": "config",
   "server-native-reasoning-retention-merge.test.ts": "server",
   "server-native-reasoning-retention.test.ts": "server",
+  "responses-retained-reasoning-stream-recovery.test.ts": "responses",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "service-log.test.ts": "service",
   "service-health-sentinel-policy.test.ts": "service",
