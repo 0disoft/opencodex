@@ -281,8 +281,7 @@ export default function ProviderAccountCard({
           </div>
         </div>
 
-        {analyzed.readinessStatus === "unknown" && <span className="badge badge-muted">{t("pws.quotaUnknown")}</span>}
-      {quotaControls}
+        {quotaControls}
         {/* Compact Bar Columns: Clean Gemini/Claude headers & round % */}
         <div className="pwi-dense-bars-grid">
           {showReauth && (
