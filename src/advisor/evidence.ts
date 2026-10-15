@@ -59,7 +59,7 @@ function exitCode(text: string): number | undefined {
 export function collectAdvisorRepairEvidence(parsed: OcxParsedRequest): AdvisorRepairEvidence | undefined {
   const calls = new Map<string, { tool: string; args: Record<string, unknown>; invokedAt: number }>();
   const sessions = new Map<string, Validation>();
-  const failures = new Map<string, { failure: AdvisorRepairEvidence["firstFailure"]; callId: string; repair?: AdvisorRepairEvidence["repair"] }>();
+  const failures = new Map<string, { failure: AdvisorRepairEvidence["firstFailure"]; callId: string; repair?: AdvisorRepairEvidence["repair"] & { callId: string } }>();
   let candidate: AdvisorRepairEvidence | undefined;
   let candidateFingerprint: string | undefined;
   const messages = parsed.context.messages;
@@ -81,7 +81,7 @@ export function collectAdvisorRepairEvidence(parsed: OcxParsedRequest): AdvisorR
     const output = contentText(message.content);
     if (["apply_patch", "Write", "Edit", "write_file", "edit_file"].includes(call.tool) && !message.isError
       && output.trim() && !/^(?:error|failed|failure)\b/i.test(output.trim())) {
-      for (const failure of failures.values()) if (call.invokedAt > failure.failure.message) failure.repair = { message: i + 1, tool: call.tool };
+      for (const failure of failures.values()) if (call.invokedAt > failure.failure.message) failure.repair = { message: i + 1, tool: call.tool, callId: message.toolCallId };
       continue;
     }
     let check: Validation | undefined;
@@ -104,9 +104,10 @@ export function collectAdvisorRepairEvidence(parsed: OcxParsedRequest): AdvisorR
     const earlier = failures.get(check.fingerprint);
     if (earlier?.repair && check.invokedAt > earlier.repair.message) {
       candidate = {
-        id: digest(JSON.stringify([check.fingerprint, earlier.callId, earlier.repair.message, message.toolCallId])),
+        // Positions are prompt references only: history pruning must not mint a new event.
+        id: digest(JSON.stringify([check.fingerprint, earlier.callId, earlier.repair.callId, message.toolCallId])),
         command: check.command,
-        firstFailure: earlier.failure, repair: earlier.repair, repeatedFailure: failure,
+        firstFailure: earlier.failure, repair: { message: earlier.repair.message, tool: earlier.repair.tool }, repeatedFailure: failure,
       };
       candidateFingerprint = check.fingerprint;
     }

@@ -31,6 +31,16 @@ describe("Advisor deterministic repair evidence", () => {
     expect(prompt).toContain('"repeatedFailure"');
   });
 
+  test("event identity survives unrelated history changes and distinguishes the repair call", () => {
+    const history = [...failed("first"), ...repaired(), ...failed("retry")];
+    const original = collectAdvisorRepairEvidence(parsed([task, ...history]))!;
+    const shifted = collectAdvisorRepairEvidence(parsed([task, ...tool("orientation", "read_file", {}, "File contents"), ...history]))!;
+    expect(shifted.id).toBe(original.id);
+    expect(shifted.repair.message).toBe(original.repair.message + 2);
+    const otherRepair = repaired().map(item => ({ ...item, call_id: "other-edit" }));
+    expect(collectAdvisorRepairEvidence(parsed([task, ...failed("first"), ...otherRepair, ...failed("retry")]))!.id).not.toBe(original.id);
+  });
+
   test.each([
     ["one failure", [task, ...failed("first")]],
     ["no edit", [task, ...failed("first"), ...failed("retry")]],

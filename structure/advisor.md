@@ -233,6 +233,8 @@ policies retain request limits and the existing preflight ledger without the dur
   The preflight ledger key and each failed-repair event key are independent, so initial advice
   or a successful manual consultation cannot suppress a later repair event. A claim still
   serializes concurrent consultations of the same event and failure uses the existing cooldown.
+  Event identity uses the paired tool-call IDs; shifting history positions changes source
+  references without granting the same failed repair a second consultation.
   Automatic adaptive calls require stable conversation identity; clients without it retain only
   request-bounded manual access. All adaptive attempts, including manual calls, use the durable
   `maxConsultationsPerTask` allowance (integer 1–3, default 3). The worker's three-consultation
