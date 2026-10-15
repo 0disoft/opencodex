@@ -9,6 +9,7 @@
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",
+  "service-health-sentinel-linux.test.ts": "service",
   "service-state-isolation.test.ts": "service",
   "owner-registry-isolation.test.ts": "config",
   "service-health-sentinel-policy.test.ts": "service",
