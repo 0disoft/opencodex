@@ -287,14 +287,14 @@ export async function prepareResponsesRequest(
       effort: comboEffortRow.effort,
     };
   }
+  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
+    && Array.isArray((body as { input?: unknown }).input)
+    && ((body as { input: unknown[] }).input).some((item: unknown) =>
+      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
   if (!concreteSelection && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const rawModel = (body as { model?: unknown }).model;
-    const rawInput = (body as { input?: unknown }).input;
-    const isCompactionTrigger = Array.isArray(rawInput)
-      && rawInput.some((item: unknown) =>
-        typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
     if (typeof rawModel === "string" && !rawModel.includes("/") && isCompactionTrigger
       && !comboRows.fastRow && !comboEffortRow
       && !resolveComboId(config, rawModel)) {
@@ -323,6 +323,7 @@ export async function prepareResponsesRequest(
     }
   }
   let shadowCallIntercepted = false;
+  let shadowCallMatches = false;
   // Luna is also selectable by users/children. Both intercept sites use the same
   // per-turn provenance; WS frames must not inherit the handshake's classification.
   const threadSpawn = isThreadSpawnRequest(req.headers);
@@ -332,6 +333,7 @@ export async function prepareResponsesRequest(
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
       && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
+      shadowCallMatches = true;
       const shadowComboId = resolveComboId(config, shadowIntercept.model);
       if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
         shadowCallIntercepted = true;
@@ -351,8 +353,8 @@ export async function prepareResponsesRequest(
   // already owned by the intercept. A spawned sub-agent turn names its model on purpose,
   // the same reason the shadow intercept leaves it alone. Like the sites above it, this
   // must run before comboIdFromRawBody reads `model`.
-  if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall
-    && !shadowCallIntercepted && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
+  if (!concreteSelection && !options.compactionRoutingOverride && !isCompactionTrigger && !options.internalDecisionCall
+    && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
     options.mainHardLockFallbackOverride = applyMainHardLockFallbackOverride(body, config);
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
@@ -596,7 +598,7 @@ export async function prepareResponsesRequest(
   // The selector the caller actually sent, captured before shadow interception
   // or a subagent fallback rewrites it, so a refusal names the client's own
   // request rather than a destination it never asked for.
-  const inboundSelector = parsed.modelId;
+  const inboundSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {
     const slash = selector.indexOf("/");
     if (slash <= 0) return false;
@@ -682,7 +684,7 @@ export async function prepareResponsesRequest(
     }
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.internalDecisionCall && !preserveShadowModel && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.mainHardLockFallbackOverride && !options.internalDecisionCall && !preserveShadowModel && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -735,7 +737,8 @@ export async function prepareResponsesRequest(
         };
       }
     }
-    if (options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)) {
+    if ((options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route))
+      || options.mainHardLockFallbackOverride) {
       credentialDomainWasRewritten = true;
       // The destination does not share the conversation's credential domain, so it can neither
       // verify the source backend's reasoning ciphertext nor decode its native compaction blob.

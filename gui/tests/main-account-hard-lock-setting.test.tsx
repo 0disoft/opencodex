@@ -522,6 +522,9 @@ describe("main account hard-lock fallback setting", () => {
     await click(fallbackSwitch(host));
     expect(puts[1]).toEqual({ model: "combo/x", reasoningEffort: "low", enabled: true });
     expect(fallbackSwitch(host).getAttribute("aria-pressed")).toBe("true");
+    // Picking a new model while paused re-enables the reroute immediately.
+    await click(fallbackSwitch(host));
+    expect(fallbackSwitch(host).getAttribute("aria-pressed")).toBe("false");
   });
 
   test("picking a model PUTs it immediately and enables the effort select", async () => {
@@ -530,16 +533,20 @@ describe("main account hard-lock fallback setting", () => {
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init!.body)).codexMainAccountHardLockFallback;
         puts.push(body);
-        return response({ ok: true, ...settingsWithFallback({ model: body.model }) });
+        return response({ ok: true, ...settingsWithFallback(body) });
       }
       if (String(_input).endsWith("/api/models")) {
-        return response([{ id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" }]);
+        return response([
+          { id: "gpt-5.3", provider: "openai", namespaced: "gpt-5.3", native: true },
+          { id: "disabled", provider: "deepseek", namespaced: "deepseek/disabled", disabled: true },
+          { id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" },
+        ]);
       }
-      return response(settings(true));
+      return response(settingsWithFallback({ model: "combo/x", enabled: false }));
     }) as typeof fetch);
     await act(async () => { await flush(); await flush(); });
     await chooseOption(host, 0, "deepseek/deepseek-chat");
-    expect(puts).toEqual([{ model: "deepseek/deepseek-chat" }]);
+    expect(puts).toEqual([{ model: "deepseek/deepseek-chat", enabled: true }]);
     expect(fallbackSwitch(host).getAttribute("aria-pressed")).toBe("true");
     expect(selectTriggers(host)[1]!.hasAttribute("disabled")).toBe(false);
   });

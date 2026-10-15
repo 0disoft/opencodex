@@ -1,11 +1,34 @@
 import type { OcxConfig } from "../../types";
+import { resolveComboId } from "../../combos";
 import { isBareOpenAiFamilyModel } from "../../router";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
   resolveMainAccountHardLockFallback,
 } from "../../codex/main-account-hard-lock";
+import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
+import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { providerCodexAccountMode } from "../../providers/registry";
+
+function isConfiguredComboSelector(config: OcxConfig, modelId: string): boolean {
+  const comboId = resolveComboId(config, modelId);
+  return Boolean(comboId && Object.hasOwn(config.combos ?? {}, comboId));
+}
+
+function targetsBlockedCanonicalOpenAi(config: OcxConfig, modelId: string): boolean {
+  if (isBareOpenAiFamilyModel(modelId) && !isConfiguredComboSelector(config, modelId)) return true;
+  const slash = modelId.indexOf("/");
+  if (slash <= 0) return false;
+  const providerName = modelId.slice(0, slash);
+  const rest = modelId.slice(slash + 1);
+  if (providerName !== OPENAI_CODEX_PROVIDER_ID || !isBareOpenAiFamilyModel(rest)) return false;
+  const provider = config.providers?.[OPENAI_CODEX_PROVIDER_ID];
+  return !provider || isCanonicalOpenAiForwardProvider({
+    ...provider,
+    ...(provider.authMode === undefined ? { authMode: "forward" as const } : {}),
+  });
+}
 
 /**
  * What one rewritten request carries so the log can show the model the client asked for
@@ -52,15 +75,25 @@ function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: strin
 export function applyMainHardLockFallbackOverride(
   body: unknown,
   config: OcxConfig,
+  now = Date.now(),
 ): MainHardLockFallbackOverride | null {
   const parsed = rawModelOf(body);
   if (!parsed) return null;
   const fallback = resolveMainAccountHardLockFallback(config);
   if (!fallback) return null;
-  if (isBareOpenAiFamilyModel(fallback.model)) return null;
-  if (!isBareOpenAiFamilyModel(parsed.model) || parsed.model === NATIVE_RESERVE_MODEL) return null;
-  if (getMainAccountHardLockStatus(config).state !== "blocked") return null;
-  if (getEligiblePoolAccounts(config).length > 0) return null;
+  if (targetsBlockedCanonicalOpenAi(config, fallback.model)) return null;
+  if (!isBareOpenAiFamilyModel(parsed.model)
+    || parsed.model === NATIVE_RESERVE_MODEL
+    || isConfiguredComboSelector(config, parsed.model)) return null;
+  if (getMainAccountHardLockStatus(config, now).state !== "blocked") return null;
+  const accountMode = providerCodexAccountMode(
+    OPENAI_CODEX_PROVIDER_ID,
+    config.providers?.[OPENAI_CODEX_PROVIDER_ID],
+  );
+  if (accountMode !== "direct"
+    && getEligiblePoolAccounts(config, undefined, now, codexQuotaScopeForModel(parsed.model)).length > 0) {
+    return null;
+  }
 
   parsed.raw.model = fallback.model;
   if (fallback.reasoningEffort !== undefined) {

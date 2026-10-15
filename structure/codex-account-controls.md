@@ -82,14 +82,19 @@ rewrites that request to the configured model (plus an optional reasoning effort
 dispatch reads `model`. The rewrite is bounded on every side so it can never widen what the lock
 protects:
 
-- `getEligiblePoolAccounts` is the same eligibility choke point the dispatch consults, so "the
-  Pool can serve it" is one shared answer, not a second opinion. An empty eligible list is what
-  makes the fallback the request's only way through; the lock excludes the main account there
-  itself.
+- `getEligiblePoolAccounts` is consulted under the request model's quota scope whenever canonical
+  `openai` is in Pool mode, so "the Pool can serve it" shares the dispatch's own eligibility and
+  scoped-cooldown rules. An empty eligible list (or Direct mode, which never consults stored Pool
+  accounts) is what makes the fallback the request's only way through; the lock excludes the main
+  account there itself.
 - Only bare Codex-native selectors qualify. Provider-qualified rows, combos, account namespaces
-  and policy routes name their own destination on purpose, and Luna Reserve keeps its own
-  admission. A Codex-native fallback target never applies — rerouting gpt-* to gpt-* would
-  re-enter the same refusal, so the honest behavior is the refusal.
+  (including `nativeAlias` combos), compaction triggers, shadow-intercepted helper calls and policy
+  routes name their own destination on purpose, and Luna Reserve keeps its own admission. A
+  Codex-native fallback target (bare `gpt-*` or canonical `openai/gpt-*`) never applies — rerouting
+  to the same blocked route would re-enter the refusal, so the honest behavior is the refusal.
+- Rewritten turns mark a credential-domain rewrite, strip foreign reasoning ciphertext, preserve
+  the caller's inbound selector for API-key scope checks and `requestedModel` logging (including
+  combo fallback targets), and do not overwrite the session lane's remembered combo.
 - A malformed section (blank or padded model, undeclared effort) disables the reroute entirely —
   the same disable-don't-widen reading as the compaction override — while the load and write
   boundaries report the malformation. The lock's own refusal behavior is untouched either way.

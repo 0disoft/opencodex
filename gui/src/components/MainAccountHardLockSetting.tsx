@@ -9,7 +9,7 @@ import { hardLockThresholds, type MainAccountHardLockStatus } from "../hooks/use
 type Props = { apiBase: string; onSaved: () => Promise<boolean> };
 type FallbackSetting = { enabled?: boolean; model?: string; reasoningEffort?: string } | null;
 type Snapshot = { codexMainAccountHardLock: boolean; mainAccountHardLock: MainAccountHardLockStatus; codexMainAccountHardLockFallback: FallbackSetting };
-type ModelInfo = { id: string; provider: string; namespaced: string };
+type ModelInfo = { id: string; provider: string; namespaced: string; native?: boolean; disabled?: boolean };
 
 /** Same ladder the memory-models and compaction-routing panels offer for their targets. */
 const FALLBACK_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
@@ -149,7 +149,9 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         if (!Array.isArray(rows)) throw new Error("models");
         if (mountedRef.current) {
           setModels(rows.filter(row => row !== null && typeof row === "object"
-            && typeof (row as ModelInfo).namespaced === "string") as ModelInfo[]);
+            && typeof (row as ModelInfo).namespaced === "string"
+            && (row as ModelInfo).native !== true
+            && (row as ModelInfo).disabled !== true) as ModelInfo[]);
         }
       } catch { /* saved value stays selectable */ }
     }, 0);
@@ -162,7 +164,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
       window.clearTimeout(modelsTimer);
       stop();
     };
-  }, [load]);
+  }, [apiBase, load]);
 
   useEffect(() => {
     if (confirming || saving || !restoreFocusRef.current) return;
@@ -283,7 +285,8 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     if (!model) return;
     // Picking a destination is an enabling act: the model always lands with the reroute
     // on, so a fresh setup configures in one pick and the switch only pauses/resumes.
-    void saveFallback({ ...(fallback ?? {}), model });
+    const { enabled: _paused, ...rest } = fallback ?? {};
+    void saveFallback({ ...rest, model, ...(fallback?.enabled === false ? { enabled: true } : {}) });
   };
   const changeFallbackEffort = (effort: string) => {
     void saveFallback({ ...(fallback ?? {}), ...(effort ? { reasoningEffort: effort } : { reasoningEffort: undefined }) });
