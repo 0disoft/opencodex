@@ -53,7 +53,7 @@ export interface AdvisorConsultOutcome {
    * Operator config blocked the consultation before any outbound call. Not a provider
    * failure: preflight must release a claim instead of recording a cooldown.
    */
-  blocked?: "consent" | "settings";
+  blocked?: "consent" | "settings" | "budget";
 }
 
 /** The structural plan the optional advisor subsystem registers per request. */

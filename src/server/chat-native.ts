@@ -1,5 +1,6 @@
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
+import { observeAdvisorNativeReasoning } from "./inference/advisor-diagnostics";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
@@ -334,7 +335,7 @@ export async function runNativeChatAttempt(
   };
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
-    return buildOpenAIChatPassthroughRequest(
+    const request = buildOpenAIChatPassthroughRequest(
       activeProvider,
       execution.chatBody,
       route.modelId,
@@ -343,6 +344,8 @@ export async function runNativeChatAttempt(
       config.fastMode,
       route.providerName,
     );
+    observeAdvisorNativeReasoning(req.headers, logCtx, request.body);
+    return request;
   };
   try {
     activeRequest = buildActiveRequest();
