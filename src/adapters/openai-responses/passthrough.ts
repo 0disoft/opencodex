@@ -503,6 +503,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   outBody,
                   destinationDecodesNativeCompactionBlob(provider),
                   stripNativeCompaction,
+                  parsed._compactionRequest !== true,
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
