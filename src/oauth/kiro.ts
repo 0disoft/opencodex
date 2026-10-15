@@ -27,8 +27,9 @@ import {
   type KiroImportDiagnostic,
 } from "./kiro-credentials";
 import { homedir } from "node:os";
-import { getAccountSet, saveAccountCredential } from "./store";
+import { bindKiroAccountUserEmail, getAccountSet, saveAccountCredential } from "./store";
 import { KIRO_BUILDER_ID_SERVICE_PROFILE_ARN } from "../adapters/kiro-constants";
+import { kiroUserEmail } from "./kiro-account-identity";
 
 const DEFAULT_REGION = "us-east-1";
 const REFRESH_URL = "https://prod.{region}.auth.desktop.kiro.dev/refreshToken";
@@ -44,6 +45,10 @@ const KIRO_TERMINAL_REFRESH_ERRORS = new Set([
   "access_denied",
   "expired_token",
 ]);
+// The desktop refresh endpoint rejects a dead refresh token with HTTP 401 and a bare
+// `{"message":"Bad credentials"}` body, without an OAuth `error` code. Only that exact
+// pair is a terminal verdict; it is surfaced under this fixed code, never the raw text.
+const KIRO_DESKTOP_BAD_CREDENTIALS = "bad_credentials";
 
 interface ImportedKiroToken {
   access: string;
@@ -246,8 +251,10 @@ export function environmentKiroRoutingMetadata(): Pick<KiroOAuthMetadata, "profi
 }
 
 /**
- * Before Add-account switches the external CLI identity, bind any matching legacy identity-less
- * OCX row to the current CLI session. Unmatched identity-less rows are left alone here so a
+ * Before Add-account switches the external CLI identity, bind any matching legacy OCX row to the
+ * current CLI session: identity-less rows gain their identity, and rows keyed only by a profile
+ * ARN gain the same-session whoami user, so the user being added next is told apart from them
+ * when both share an organization profile (#6641). Unmatched rows are left alone here so a
  * cancelled browser login cannot destroy the only stored credential; after a successful add they
  * remain selectable but cannot borrow the new CLI identity (and reauth refuses identity-less slots).
  */
@@ -258,7 +265,7 @@ async function bindMatchingLegacyIdentitylessKiroAccounts(
   const set = getAccountSet("kiro");
   if (!set) return;
   const legacyAccounts = set.accounts.filter(
-    account => account.credential.accountId === undefined && account.credential.email === undefined,
+    account => account.credential.email === undefined,
   );
   if (legacyAccounts.length === 0) return;
 
@@ -275,7 +282,14 @@ async function bindMatchingLegacyIdentitylessKiroAccounts(
     if (!refresh || imported.refresh !== refresh) continue;
     const bound = await oauthCredentialFromImported(imported, runner, signal);
     if (!bound.accountId && !bound.email) continue;
-    await saveAccountCredential("kiro", account.id, bound);
+    const storedArn = account.credential.accountId;
+    if (storedArn === undefined) {
+      await saveAccountCredential("kiro", account.id, bound);
+      continue;
+    }
+    // An ARN-keyed row only gains its user; tokens, routing, plan and health stay as stored.
+    if (bound.accountId !== storedArn || !bound.email) continue;
+    await bindKiroAccountUserEmail(account.id, { profileArn: storedArn, refresh, email: bound.email });
   }
 }
 
@@ -535,12 +549,14 @@ async function kiroTokenRefreshError(response: Response, awsSsoRefresh = false):
   let oauthError: string | undefined;
   let refreshAttention = false;
   try {
-    const payload = await response.json() as { error?: unknown };
+    const payload = await response.json() as { error?: unknown; message?: unknown };
     // This input-error code is attention evidence only for our AWS SSO refresh request,
     // never a terminal grant verdict. Do not surface arbitrary upstream descriptions.
     refreshAttention = awsSsoRefresh && response.status === 400 && payload.error === "invalid_request";
     if (typeof payload.error === "string" && KIRO_TERMINAL_REFRESH_ERRORS.has(payload.error)) {
       oauthError = payload.error;
+    } else if (!awsSsoRefresh && response.status === 401 && payload.message === "Bad credentials") {
+      oauthError = KIRO_DESKTOP_BAD_CREDENTIALS;
     }
   } catch {
     // Error bodies are untrusted and intentionally excluded from the surfaced message.
@@ -659,10 +675,40 @@ function metadataForRotatedKiroCliCredential(
   };
 }
 
+/**
+ * Users of one organization share its profile ARN (#6641). A row that names its user adopts the
+ * local CLI session only when same-session whoami reports that user and the CLI still holds the
+ * matched session. A row without a user keeps the profile match only while no other stored Kiro
+ * row shares the profile. Cancellation propagates as cancellation, never as the refresh refusal.
+ */
+async function localKiroCliSessionBelongsToUser(
+  credential: OAuthCredentials,
+  local: ImportedKiroCredential,
+  runner: KiroCliRunner,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const email = kiroUserEmail(credential);
+  if (!email) {
+    return !(getAccountSet("kiro")?.accounts ?? []).some(account =>
+      account.credential.refresh !== credential.refresh && account.credential.accountId === local.profileArn);
+  }
+  const identity = await readKiroCliIdentity(runner, signal);
+  signal?.throwIfAborted();
+  if (identity.email !== email) return false;
+  let current: ImportedKiroCredential | null;
+  try {
+    current = readKiroCliSqliteCredential();
+  } catch {
+    return false;
+  }
+  return current !== null && (current.refresh || current.access) === (local.refresh || local.access);
+}
+
 export async function refreshKiroToken(
   refresh: string,
   signal?: AbortSignal,
   credential?: OAuthCredentials,
+  options: { cliRunner?: KiroCliRunner } = {},
 ): Promise<OAuthCredentials> {
   if (!refresh) throw new Error("Kiro: no refresh token available (re-run `kiro-cli login`).");
   try {
@@ -672,6 +718,9 @@ export async function refreshKiroToken(
     if (!credential) throw error;
     const local = matchingRotatedKiroCliCredential(refresh, credential);
     if (!local) throw error;
+    if (!await localKiroCliSessionBelongsToUser(credential, local, options.cliRunner ?? defaultKiroCliRunner, signal)) {
+      throw error;
+    }
     const retryMetadata = metadataForRotatedKiroCliCredential(credential, local);
     try {
       const fresh = await refreshAwsSsoOidcToken(local.refresh, signal, {

@@ -6,6 +6,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
@@ -648,6 +649,21 @@ export function metricsExportConfigError(value: unknown): string | null {
   return null;
 }
 
+/** Load degrades a malformed service health recovery section to off; live writes reject it. */
+export function serviceHealthRecoveryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "serviceHealthRecovery") || raw.serviceHealthRecovery === undefined) return null;
+  const section = rawConfigRecord(raw.serviceHealthRecovery);
+  if (!section) return "schema_invalid: serviceHealthRecovery: must be an object or omitted";
+  if (Object.keys(section).some(key => key !== "enabled")) {
+    return "schema_invalid: serviceHealthRecovery: contains an unsupported field";
+  }
+  if (section.enabled !== undefined && typeof section.enabled !== "boolean") {
+    return "schema_invalid: serviceHealthRecovery.enabled: must be a boolean";
+  }
+  return null;
+}
+
 
 function skillsConfigError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
@@ -679,7 +695,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
-    ?? compactionRecoveryConfigError(value) ?? configReasoningPinsConfigError(value)
+    ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)
     ?? claudeSubagentEffortError(value)
@@ -710,6 +726,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
     ?? metricsExportConfigError(value)
+    ?? serviceHealthRecoveryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
