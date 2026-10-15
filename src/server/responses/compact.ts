@@ -1038,7 +1038,8 @@ export async function handleResponsesCompact(
         promoteAccountId?: string;
       } = {},
     ) => {
-      if (!usesCodexForwardPoolAuth(ctx, route.provider)) return;
+      // A gateway response is not evidence about any Codex account.
+      if (gatewayTransport || !usesCodexForwardPoolAuth(ctx, route.provider)) return;
       recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {
         ...meta,
         threadId: ctx.kind === "pool" || ctx.kind === "main-pool" ? ctx.affinityKey : undefined,
@@ -1102,9 +1103,11 @@ export async function handleResponsesCompact(
       sendAuthCtx: CodexAuthContext,
       onPhysicalDispatch?: () => void,
     ): Promise<Response> => {
+      // A gateway send carries only its own transport headers, whatever recovery handed in.
+      const wireHeaders = gatewayTransport ? new Headers(gatewayTransport.headers) : sendHeaders;
       if (gatewayReplayParsed) bindRouteReasoningReplayScope({
         parsed: gatewayReplayParsed, providerName: route.providerName, provider: sendProvider,
-        adapterName: sendProvider.adapter, codexAuthContext: sendAuthCtx, forwardHeaders: sendHeaders,
+        adapterName: sendProvider.adapter, codexAuthContext: sendAuthCtx, forwardHeaders: wireHeaders,
       });
       const requireSendPlaintextReasoning = !isOpenAiOperatedResponsesDestination(sendProvider)
         && requiresPlaintextReasoningReplay(sendProvider);
@@ -1131,7 +1134,7 @@ export async function handleResponsesCompact(
         compactUrl,
         applyUpstreamRecoveryInit({
           method: "POST",
-          headers: sendHeaders,
+          headers: wireHeaders,
           body: JSON.stringify({ ...sendBody as typeof compactBody, model: route.modelId }),
         }, upstreamRecovery),
         req.signal,
@@ -1221,6 +1224,7 @@ export async function handleResponsesCompact(
     if (
       upstream.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
+      && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
       && !req.signal.aborted
     ) {
@@ -1348,6 +1352,7 @@ export async function handleResponsesCompact(
       // compact turn that may already have been processed.
       && !isNonReplayableResponse(upstream)
       && !storedPool401ReplayAttempted
+      && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
@@ -1452,6 +1457,7 @@ export async function handleResponsesCompact(
     if (
       shouldRetryCodexPoolAccountTransient(upstream)
       && !storedPool401ReplayAttempted
+      && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
