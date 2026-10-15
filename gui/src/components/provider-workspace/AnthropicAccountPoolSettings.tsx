@@ -212,6 +212,7 @@ export default function AnthropicAccountPoolSettings({
     enabled: boolean;
     threshold: number;
     strategy: AccountPoolStrategy;
+    strategyChanged?: boolean;
     stickyLimit: number;
     quotaWindow: AccountPoolQuotaWindow;
     nativeMessages: boolean;
@@ -225,7 +226,7 @@ export default function AnthropicAccountPoolSettings({
       && saveAbortRef.current === controller && !controller.signal.aborted;
     const previousState = state;
     // A save that does not change the strategy leaves an unmodeled stored name alone.
-    const keepStoredStrategy = previousState?.unmodeledStrategy != null && next.strategy === previousState.strategy;
+    const keepStoredStrategy = previousState?.unmodeledStrategy != null && !next.strategyChanged;
     setSaving(true);
     setError(null);
     setWarning(false);
@@ -444,11 +445,12 @@ export default function AnthropicAccountPoolSettings({
             strategySelectId={controlId(provider, "strategy")}
             stickyInputId={controlId(provider, "sticky-limit")}
             onStrategyChange={(next) => {
-              if (next === strategy) return;
+              if (next === strategy && !state.unmodeledStrategy) return;
               void save({
                 enabled: true,
                 threshold,
                 strategy: next,
+                strategyChanged: true,
                 stickyLimit,
                 quotaWindow,
                 nativeMessages,

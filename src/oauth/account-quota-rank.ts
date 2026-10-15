@@ -183,26 +183,27 @@ export function rankAccountsByResetFirst(
   ring: readonly string[],
   requestedModelId?: string | null,
   now = Date.now(),
+  accounts?: ReadonlyMap<string, ProviderAccount>,
 ): string[] {
   if (ring.length < 2) return [...ring];
-  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId);
-  const healthy = ranked.filter(id => !isAccountQuotaExhausted(provider, id, requestedModelId));
+  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts);
+  const healthy = ranked.filter(id => !isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
   if (healthy.length < 2) return ranked;
   if (
     hasPassiveAccountQuota(provider)
-    && !ring.every(id => headroomOf(provider, id, requestedModelId) !== null)
+    && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null)
   ) return ranked;
 
   const withReset = healthy.map((id, index) => ({
     id,
     resetAt: accountResetTimestamp(provider, id, requestedModelId, now) ?? Number.POSITIVE_INFINITY,
-    headroom: headroomOf(provider, id, requestedModelId) ?? 0,
+    headroom: headroomOf(provider, id, requestedModelId, accounts?.get(id)) ?? 0,
     index,
   }));
 
   withReset.sort((a, b) => (a.resetAt - b.resetAt) || (b.headroom - a.headroom) || (a.index - b.index));
   const sortedHealthy = withReset.map(r => r.id);
-  const exhausted = ranked.filter(id => isAccountQuotaExhausted(provider, id, requestedModelId));
+  const exhausted = ranked.filter(id => isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
   return [...sortedHealthy, ...exhausted];
 }
 
