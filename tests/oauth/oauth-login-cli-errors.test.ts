@@ -38,6 +38,7 @@ for (const scenario of [
   { provider: "xai", status: 400, body: JSON.stringify({ error: "invalid_grant", error_description: marker }), diagnostic: "HTTP 400 invalid_grant" },
   { provider: "anthropic", status: 200, body: marker, diagnostic: "oauth_authentication_failed" },
   { provider: "anthropic", status: 0, body: marker, diagnostic: "network_error" },
+  { provider: "xai", status: 0, body: marker, diagnostic: "network_error" },
 ]) {
   const label = scenario.status === 0 ? "an unreachable token endpoint" : `token HTTP ${scenario.status} (${scenario.diagnostic})`;
   test(`${scenario.provider} login prints a fixed error for ${label}`, async () => {
@@ -62,7 +63,7 @@ for (const scenario of [
         globalThis.fetch = (_input, init) => localFetch(${endpoint}, init);
         OAUTH_PROVIDERS[${JSON.stringify(scenario.provider)}].login = async ctrl => {
           if (${JSON.stringify(scenario.provider)} === "xai") {
-            return await postXaiToken(${endpoint}, { grant_type: "authorization_code", code: "test-code" });
+            return await postXaiToken(${endpoint}, { grant_type: "authorization_code", code: "test-code" }, undefined, { sleep: async () => {}, random: () => 0 });
           }
           return await new AnthropicOAuthFlow(ctrl).exchangeToken("test-code", "test-state", "http://127.0.0.1/callback");
         };

@@ -30,6 +30,7 @@ export function oauthLoginFailureDiagnostic(error: unknown): string {
   // programming TypeError carries none and stays in the generic bucket.
   const code = error instanceof TypeError ? (error as { code?: unknown }).code : undefined;
   if ((error instanceof AnthropicTokenError && error.requestNotSent)
+    || (error instanceof XaiTokenRequestError && error.status === undefined)
     || (typeof code === "string" && code !== "")) return "network_error";
   return "oauth_authentication_failed";
 }
