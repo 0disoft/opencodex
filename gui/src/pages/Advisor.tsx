@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { useT, type TKey } from "../i18n/shared";
+import { AdvisorModelSelect } from "../components/AdvisorModelSelect";
 import AdvisorActivity from "./advisor/AdvisorActivity";
 import "./advisor/advisor.css";
 
@@ -128,13 +129,11 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
         </div>
         <div className="advisor-editor-row">
           <label htmlFor="advisor-model" className="advisor-editor-label">{t("advisor.model")}</label>
-          <input
-            id="advisor-model"
-            type="text"
+          <AdvisorModelSelect
+            apiBase={apiBase}
             value={draft.model}
             disabled={saving}
-            placeholder={t("advisor.modelPlaceholder")}
-            onChange={event => edit({ model: event.target.value })}
+            onChange={model => edit({ model })}
           />
         </div>
         <div className="advisor-editor-row">
