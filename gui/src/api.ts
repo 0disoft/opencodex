@@ -41,13 +41,14 @@ interface SessionRevision { state: TargetRuntime; generation: object }
 interface SessionSnapshot extends SessionRevision { token: string | null }
 interface RecoveryAttempt extends SessionRevision { plane: ApiPlane; active: boolean }
 
-type AdminTokenPrompt = (verifyToken: AdminTokenVerifier) => Promise<string | null>;
+type AdminTokenPrompt = (verifyToken: AdminTokenVerifier, rememberAllowed?: boolean) => Promise<string | null>;
+const defaultAdminTokenPrompt: AdminTokenPrompt = (verify, allowed) => promptForAdminToken(verify, undefined, allowed);
 type RebootstrapResult = { kind: "minted"; token: string } | { kind: "unavailable" } | { kind: "failed" };
 
 let installed = false;
 let rawFetch: typeof fetch | null = null;
 let configuredTargets: ApiTargets | null = null;
-let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
+let requestAdminToken: AdminTokenPrompt = defaultAdminTokenPrompt;
 let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
 let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 const runtimes = new Map<ApiPlane, TargetRuntime>();
@@ -290,6 +291,19 @@ export function fetchApiSessionValidation(plane: ApiPlane, input: RequestInfo | 
 
 function clearLegacySessionToken(): void {
   try { sessionStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* storage may be disabled */ }
+  try {
+    const storage = window.localStorage;
+    for (let i = storage.length - 1; i >= 0; i--) {
+      const key = storage.key(i);
+      if (key === "opencodex.remembered-admin-token" || key?.startsWith("opencodex.remembered-admin-token:")) storage.removeItem(key);
+    }
+  } catch { /* do not read or migrate old bearer tokens */ }
+}
+
+export function canRememberDashboardDevice(plane: ApiPlane): boolean {
+  const target = runtime(plane).target;
+  return target.transport !== "relay" && target.serverOrigin === window.location.origin
+    && (window.location.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname));
 }
 
 function targetAbsoluteBase(target: ApiTarget): URL {
@@ -381,14 +395,26 @@ export async function bootstrapApiSession(plane: ApiPlane, signal?: AbortSignal)
   finally { recovery.active = false; }
 }
 
-async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
+async function verifyAdminToken(recovery: RecoveryAttempt, token: string, remember = false): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
+  const { plane, state } = recovery;
+  if (remember && !canRememberDashboardDevice(plane)) return "unavailable";
   try {
-    const state = runtime(plane);
-    const [input, init] = withAuth(plane, `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`, { cache: "no-store" }, token);
-    const response = await rawFetch(input, init);
-    if (response.status === 401) return "rejected";
-    return response.ok ? "accepted" : "unavailable";
+    return await withFetchDeadline(rebootstrapTimeoutMs, undefined, async signal => {
+      const path = remember ? "/api/session/remember" : ADMIN_TOKEN_VALIDATION_PATH;
+      const [input, init] = withAuth(plane, state.target.baseUrl + path,
+        { method: remember ? "POST" : "GET", cache: "no-store", signal, credentials: remember ? "same-origin" : "omit", redirect: "error" }, token);
+      const response = await rawFetch!(input, init);
+      if (signal.aborted || !isCurrentRecovery(recovery)) return "unavailable";
+      if (response.status === 401) return "rejected";
+      if (!response.ok) return "unavailable";
+      if (remember) {
+        const body = await response.json();
+        if (signal.aborted || !isCurrentRecovery(recovery) || !storeSession(plane, body?.session?.token,
+          body?.session?.csrfToken, body?.session?.browserOrigin, body?.session?.serverOrigin, recovery)) return "unavailable";
+      }
+      return "accepted";
+    });
   } catch { return "unavailable"; }
 }
 
@@ -421,13 +447,14 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
         state.promptCancelled = true;
         return sessionSnapshot(state);
       }
-      const prompted = await requestAdminToken(async token => {
+      const prompted = await requestAdminToken(async (token, remember) => {
         if (!isCurrentRecovery(recovery)) return "unavailable";
-        const result = await verifyAdminToken(plane, token);
+        const result = await verifyAdminToken(recovery, token, remember);
         return isCurrentRecovery(recovery) ? result : "unavailable";
-      });
+      }, canRememberDashboardDevice(plane));
       if (!isCurrentRecovery(recovery)) return null;
       if (prompted) {
+        if (state.session.token?.startsWith("ocx_session_")) return sessionSnapshot(state);
         updateSession(state, { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin }, recovery);
         return isCurrentRecovery(recovery) ? sessionSnapshot(state) : null;
       }
@@ -512,7 +539,7 @@ export function fetchAudioUpload(endpoint: string, init: RequestInit): Promise<R
   return (rawFetch ?? fetch)(url.href, { ...init, credentials: "omit", redirect: "error" });
 }
 
-export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = promptForAdminToken): void {
+export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = defaultAdminTokenPrompt): void {
   installed = false;
   rawFetch = null;
   configuredTargets = null;
