@@ -597,7 +597,12 @@ export async function prepareResponsesTransport(
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
-      const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
+      let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
+      if (!current && route.provider.requestPacing?.enabled
+        && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")) {
+        const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
+        if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
+      }
       if (!current) throw new Error("API key selection is unavailable before dispatch");
       route.provider = current;
       await resolveCopilotSelection(requestParsed, true);
@@ -625,7 +630,8 @@ export async function prepareResponsesTransport(
       ? (options.sendBudget as import("../../lib/request-execution-budget").RequestExecutionBudget).beginSpendProducer?.() : undefined;
     try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (!selectionIsCurrent(adapterBindings.get(selectedAdapter))) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      const selectionRefreshed = !selectionIsCurrent(adapterBindings.get(selectedAdapter));
+      if (selectionRefreshed) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
       const binding = adapterBindings.get(selectedAdapter);
       const run = rawRunTurns.get(selectedAdapter);
       if (!run) throw new Error("Selected provider no longer supports this turn transport");
@@ -635,15 +641,21 @@ export async function prepareResponsesTransport(
       // Both main and image-loop callers already acquired the initial pacing slot.
       // Subsequent physical messages retain this adapter/credential and are paced normally.
       try {
-        attemptSlot = attempt === 0
-          ? incoming.pacingSlot ?? await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal)
+        // A pre-acquired lease belongs to the original selection, never its replacement.
+        if (attempt === 0 && selectionRefreshed) releaseProviderRequestSlot(incoming.pacingSlot);
+        attemptSlot = attempt === 0 && !selectionRefreshed && incoming.pacingSlot
+          ? incoming.pacingSlot
           : await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal);
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
           pacingSlot: attemptSlot,
           turnScopedPacing: true,
           beforeDispatch: () => {
-            if (sent) return;
+            if (sent) {
+              if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+                && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
+              return;
+            }
             if (!selectionIsCurrent(binding)) {
               refused = true;
               throw new Error("Account selection changed before the first turn dispatch");
@@ -652,7 +664,7 @@ export async function prepareResponsesTransport(
             sent = true;
           },
         });
-        await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -669,10 +681,16 @@ export async function prepareResponsesTransport(
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
   const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
-    return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute) => {
+    return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute, reacquirePacing) => {
       let destination = input;
       let dispatchInit = init;
+      let pacingChanged = false;
       for (let attempt = 0; attempt < 3; attempt++) {
+        if (pacingChanged) {
+          if (!reacquirePacing) throw new Error("Refreshed dispatch requires pacing readmission");
+          await reacquirePacing(route.provider, route.modelId);
+          pacingChanged = false;
+        }
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
           const binding = requestBindings.get(wireRequest);
@@ -775,7 +793,9 @@ export async function prepareResponsesTransport(
         sameTargetToken = transportToken;
         destination = rebuilt.url;
         dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
-        // The next iteration validates synchronously and calls fetch in that same turn.
+        pacingChanged = route.provider.requestPacing?.enabled === true
+          && (!!route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin");
+        // A refreshed key must reacquire admission before the next synchronous send guard.
       }
       throw new Error("OAuth account selection changed repeatedly before dispatch");
     };

@@ -133,12 +133,15 @@ const requestPacingSchema = z.object({
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
   maxConcurrentRequests: z.number().int().min(1).optional(),
   models: z.record(z.string().trim().min(1), requestPacingRuleSchema).optional(),
+  keySelection: z.enum(["active", "round-robin"]).optional(),
+  keys: requestPacingRuleSchema.optional(),
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined
   || value.minIntervalMs !== undefined
   || value.maxConcurrentRequests !== undefined
+  || value.keys !== undefined || value.keySelection === "round-robin"
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
-  message: "enabled request pacing needs a provider rule or model override",
+  message: "enabled request pacing needs a provider, model, or key rule, or round-robin selection",
 });
 
 export function requestPacingConfigError(value: unknown): string | null {
