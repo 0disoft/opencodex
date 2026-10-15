@@ -28,6 +28,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  "deferred-send-reporter.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
@@ -61,6 +62,8 @@ export const RESPONSES_CORE_MODULES = [
   "antigravity-validation-refusal.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "advisor-slot.ts",
+  "advisor-plan-slot.ts",
   "policy-refusal.ts",
 ] as const;
 

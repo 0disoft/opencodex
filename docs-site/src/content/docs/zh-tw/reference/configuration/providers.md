@@ -5,6 +5,12 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 自訂供應商的上下文視窗
+
+自訂供應商未回報或設定模型視窗時，OpenCodex 依序使用 Azure 中繼資料、按模型 ID 查詢的內建廠商／聚合中繼資料、已啟用的 Context cap，最後回退至 128k。已發現值與設定值取較小者，Context cap 仍限制視窗，內建供應商行為不變。精確 ID 優先，大小寫或點號／連字號變體僅在無衝突時匹配；未知或浮動別名不猜測。推斷影響 Codex 壓縮預算及其他客戶端目錄（含 Claude 長上下文選擇），但不作為路由的實測能力。同名模型不保證中轉支援官方視窗；請用 modelContextWindows 或 Context cap 設定實際上限。不會自動啟用 cap，也不會呼叫模型探測。OpenAI API 視窗不代表 Codex 訂閱視窗。
+
+此推斷預設關閉，需按供應商設定 `inferContextWindow: true` 開啟。未開啟時，缺少視窗的模型使用已啟用的 Context cap，否則回退至 128k。
+
 ## 首次註冊時的模型選擇
 
 新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
@@ -77,9 +83,10 @@ ocx models provider openrouter on
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context 上限。這些覆寫 `contextWindow` 且永不提高較小的即時中繼資料。 |
+| `inferContextWindow?` | `boolean` | 僅限自訂供應商，預設關閉。設為 `true` 時以內建模型中繼資料補足缺少的視窗；這是估計值，不代表中轉的實測容量。 |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model 輸入提示，如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 用於目錄自動壓縮提示的正數 per-model max input 限制。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；沒有已知的權威 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；無法解析出有效 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
 | `defaultMaxOutputTokens?` | `number` | 當客戶端省略 `max_output_tokens` 時的供應商範圍 `openai-chat` 後備。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正數 per-model `openai-chat` 後援預算；精確／模式比對勝過供應商預設。 |
 | `headers?` | `Record<string, string>` | 額外上游標頭。Authorization、cookie、API-key 標頭、內嵌換行與無效名稱被拒絕。 |
@@ -186,6 +193,10 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次 round-robin 選擇上保留的成功新 session 綁定。範圍 1–100。 |
 
 只有共用5小時或每週額度明確拒絕的429才會冷卻帳號並切換。暫時速率限制保留親和性，只暫停該帳號的請求准入；每個請求最多一次短暫的同帳號重試及一次合格兄弟帳號切換。沒有依據回應標頭的429只允許一次同帳號短暫重試，不冷卻帳號，也不產生Retry-After。預設單帳號行為不變。Fable專屬拒絕不限制Sonnet；手動選擇和親和性均檢查請求模型的共用與家族額度。被動家族資訊在30分鐘或已知重設時到期，由一個服務請求依序重新驗證。用量門檻仍是軟偏好，全部候選耗盡時保留原有退回機制，不是用量或帳單硬上限。親和性為行程本地且有界。Token 更新失敗保留原有重新認證規則。已分類的訂閱或帳號計費 403 可在輸出前切換帳號，並按 `Retry-After` 或預設十分鐘冷卻；一般權限拒絕不切換。若所有合格帳號都在冷卻，客戶端收到附帶已知 `Retry-After` 的 429，而非認證錯誤。
+
+當請求可用的每個帳號都因配額耗盡而被保留（共用 5 小時或每週視窗，或所請求模型家族的每週視窗）時，這個 429 是用量上限而非速率限制：Responses 本文的 `error.type` 與 `error.code` 為 `usage_limit_reached`；若每個被保留帳號的上游重設時間都已知，還會附上 `resets_at`（最早重設的 epoch 秒）。Codex 會停止並顯示何時可再試，而不是一路重試到 "exceeded retry limit"。最後一個帳號因配額耗盡被拒且沒有可替換帳號時，也會得到相同回應。只要有一個被保留帳號只是暫時限速、正在重新驗證模型家族或因權限被拒，回應就維持可重試的 `rate_limit_exceeded`。Combo 目標維持速率限制形式，讓 combo 能轉到下一個目標。原生 `/v1/messages` 維持 Anthropic 的 `rate_limit_error` 類型，訊息中會說明用量上限。
+
+只要一次新的用量讀取（儀表板的提供者頁面，或 `ocx account list anthropic --quota --refresh`）顯示每個被拒絕的視窗都低於 100%，配額冷卻就會提前解除，不論它來自 `Retry-After` 或視窗重設。這適用於升級方案或視窗提早重新開放的情況。在拒絕之前開始的讀取永遠不會解除它，權限類 403 冷卻會等到其截止時間。
 
 :::caution[實驗性]
 除非你了解 Anthropic 帳號政策風險，否則保持停用。不確定時偏好手動 `ocx account use anthropic <id>` 切換。

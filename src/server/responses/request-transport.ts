@@ -1,4 +1,5 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -55,6 +56,11 @@ import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
+import {
+  AdmissionModelDeniedError,
+  admissionModelDeniedResponse,
+  assertRouteAllowedByScope,
+} from "../admission-model-scope";
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -87,7 +93,7 @@ import {
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
-import { clientCancelledResponse } from "./core-errors";
+import { anthropicPoolCooldownResponse, clientCancelledResponse } from "./core-errors";
 import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
 
 /** Return a renewed Chat wire to the native owner before sending inference. */
@@ -108,6 +114,8 @@ export async function prepareResponsesTransport(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "inboundSelector"
+    | "admissionScope"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -296,6 +304,7 @@ export async function prepareResponsesTransport(
   const copilotRequestedModel = route.modelId;
   /** Project only bounded Copilot refusal metadata; upstream bodies and session tokens never reach the client. */
   const copilotRefusalResponse = (error: unknown): Response | undefined => {
+    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error);
     if (!(error instanceof CopilotAutoHttpError) || ![401, 403, 429].includes(error.status)) return;
     const response = formatErrorResponse(error.status, error.status === 429 ? "rate_limit_error" : "authentication_error",
       error.message);
@@ -356,6 +365,13 @@ export async function prepareResponsesTransport(
       replayOAuthCredentialSnapshot = { accountId: refreshed.accountId, generation: refreshed.generation };
       selected = await negotiate();
     }
+    assertRouteAllowedByScope(
+      // The scope captured at admission: a key edited or removed while negotiation was in
+      // flight must not widen this request. The refusal names the caller's own selector.
+      requestState.admissionScope,
+      requestState.inboundSelector,
+      { providerName: route.providerName, modelId: selected.modelId },
+    );
     copilotSessionExpiresAt = selected.expiresAt ?? Infinity;
     route.provider = selected.provider;
     route.modelId = selected.modelId;
@@ -697,7 +713,7 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
-              fetchImpl,
+              anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider),
               destination,
               { ...dispatchInit, redirect: "manual" },
               { providerName: route.providerName, provider: route.provider },
@@ -724,6 +740,7 @@ export async function prepareResponsesTransport(
         let nextAdapter: ProviderAdapter;
         try { nextAdapter = await refreshDispatchAdapter(requestParsed); }
         catch (error) {
+          if (error instanceof AdmissionModelDeniedError) throw error;
           const refusal = copilotRefusalResponse(error);
           if (refusal) return refusal;
           throw error;
@@ -784,12 +801,9 @@ export async function prepareResponsesTransport(
           // Route names may resemble account IDs; log only the matched rule position.
           if (anthropicRouteDecision) console.warn(`[${anthropicInstance}-pool] route:#${anthropicRouteDecision.position} ${selection.reason}; answering locally`);
           if (selection.reason === "all-cooled") {
-            const retryAfterSec = anthropicRouting!.getAnthropicPoolRetryAfterSeconds(Date.now(), anthropicRouteDecision, route.modelId);
-            return formatErrorResponse(
-              429,
-              "rate_limit_error",
-              anthropicRouteDecision ? "Anthropic OAuth accounts for this model route are temporarily rate-limited" : "All Anthropic OAuth accounts are temporarily rate-limited",
-              retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
+            return anthropicPoolCooldownResponse(
+              anthropicRouting!.anthropicPoolCooldownError(Date.now(), anthropicRouteDecision, route.modelId),
+              { comboAttempt: options.comboAttempt, logCtx },
             );
           }
           return formatErrorResponse(401, "authentication_error", anthropicRouteDecision ? "No eligible Anthropic OAuth account for this model route" : "No eligible Anthropic OAuth account available");

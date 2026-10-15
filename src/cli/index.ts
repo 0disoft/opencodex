@@ -11,11 +11,11 @@ import { packageVersion } from "../lib/package-version";
 import { codexHomeIsAbsent } from "../codex/codex-home-owner";
 import { getCodexHome } from "../codex/paths";
 import { admitUpdateRestartChild } from "./update-restart-child";
+import { HEALTH_SENTINEL_STANDALONE_ARG, startServiceHealthSentinel } from "../service/health-sentinel-launch";
 import { UpdateRestartRequired } from "./update-restart-candidate";
 import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
-
 // Best-effort recovery for runtime execution and spawned children if launched
 // from an unlinked/deleted working directory (runs after hoisted ESM module imports).
 try {
@@ -155,9 +155,9 @@ import {
   reconcileEnsureDesiredIntegrations,
 } from "./ensure-desired-integrations";
 import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./ensure-readiness";
+import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-desktop-cold-start";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
-
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
@@ -168,6 +168,7 @@ import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+import { startServiceLogging } from "../service/logging";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -207,11 +208,13 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
+if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (await import("../service/health-sentinel-main")).runHealthSentinelProcess());
 
 // The compiled executable also launches the isolated MCP servers.
 // Handle these private entrypoints before CLI preflight or command dispatch.
@@ -280,6 +283,7 @@ async function chooseListenPort(
       `Port ${preferred} is reserved for unauthenticatedLoopbackListener; choose a different proxy port.`,
     );
   }
+  await (await import("./auxiliary-listener-preflight")).assertAuxiliaryListenerPortsAvailable(config);
   // Soft start: brief prefer-retry then ephemeral hop.
   // Explicit `--port` (service wrappers / update restart): wait for the pinned port
   // to free without killing any listener (healthy ocx / foreign). Never hop.
@@ -623,6 +627,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Records are visible now; background work may observe this runtime without a gap.
   scheduleCatalogPrewarm();
   installCrashGuards();
+  let healthSentinel: ReturnType<typeof startServiceHealthSentinel> = null; // opt-in #6671, started once ready
   // No pre-emptive snapshot here. `injectCodexConfig` journals the exact bytes it
   // is about to transform; snapshotting earlier only captured a baseline that could
   // already be stale by the time injection ran (#477).
@@ -646,6 +651,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     try { routingHealer?.stop(); } catch { /* best-effort */ }
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
+    try { healthSentinel?.stop(); } catch { /* best-effort */ }
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE });
@@ -746,6 +752,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
   await refreshOwnedRaycastCatalog(config, port);
+  if (!cleaned && !shuttingDown) healthSentinel = startServiceHealthSentinel(config); // after startup reconciliation; never mid-boot or mid-drain
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
   // final here — and neither write site warns on its own, or a boot that hits
@@ -811,9 +818,16 @@ async function handleEnsure(options: { existingIsSuccess?: boolean; forceStart?:
     console.log("Codex autostart is disabled.");
     return false;
   }
-  const live = owner.live;
+  let live = owner.live;
+  if (!live) {
+    // OpenCodex Desktop owns or runs this proxy: wait for it or start it, never a competing CLI proxy (#6971).
+    const desktopStart = await runDesktopColdStart(productionDesktopColdStartDeps(timeoutMs => waitForProxy(timeoutMs)));
+    if (desktopStart.kind === "failed") { console.error(`❌ ${desktopStart.message}`); process.exitCode = 1; return false; }
+    // Also for restart: the proxy was absent and Desktop started it, so the live tail below applies.
+    if (desktopStart.kind === "live") live = desktopStart.live;
+  }
   if (live) {
-    if (options.existingIsSuccess === false) {
+    if (options.existingIsSuccess === false && live === owner.live) {
       console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
       return false;
     }
@@ -1798,7 +1812,9 @@ async function handleStatus() {
   if (status.json.hub) {
     for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
   }
-  console.log(`   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
+  console.log(status.json.remoteHub.link
+    ? `   Remote Link Home: ${status.json.connection.state} (${status.json.remoteHub.link.homePhrase}, ${status.json.remoteHub.link.linkId})`
+    : `   ${status.json.connection.transport === "link" ? "Remote Link Home" : "Remote hub"}: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }

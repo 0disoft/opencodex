@@ -31,7 +31,7 @@ against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to 
 role until proven otherwise, and the instruction silently lost `developer` precedence.
 
 The translated `Qwen3.8-27B` Chat route follows its [pinned template](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/chat_template.jinja): a late `system` raises, `developer` is unsupported, and a late `user` renders in place; the `OrcaSAQ-2-Cyber-27B` GGUF family pins the same contract and takes the same mapping.
-Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
+Flash-Next uses the same mapping for the exact `flash-next` and `Qwen3.8-Flash-Next` ids (the failure is reported in [#6242](https://github.com/lidge-jun/opencodex/issues/6242)). Gateway-namespaced ids such as LiteLLM's `openai/Qwen3.8-27B` and `oh-my-gpu/flash-next` match too. The Orca exception requires `GGUF` in the final model segment before any optional colon quant tag; non-GGUF Orca variants keep their configured mapping. Text-only developer items therefore keep their content and slot but use the `user` wire role,
 losing developer precedence. Other models retain the mapping above; native Chat passthrough
 is unchanged. The rule is recorded in `tests/fixtures/qwen38-27b-chat-template-contract.json`
 and exercised by `tests/adapters/openai/openai-chat-qwen38-leading-system.test.ts`.
@@ -46,6 +46,9 @@ configuration pages and Claude Code guides are held against their English source
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
 ## Reasoning and tool-result compatibility
+
+For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
+Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; other hosts, byte budgets and configured replay rules keep their existing behavior.
 
 ### Inline think-tag recovery
 
