@@ -1,0 +1,82 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { initializeManagementAuthState, createManagementSessionControl, issueGuiSession, requireManagementAuth } from "../../src/server/management-auth";
+import { handleSessionRoutes } from "../../src/server/management/session-routes";
+import type { ManagementContext } from "../../src/server/management/context";
+import { remoteConfig } from "../helpers/management-auth-fixture";
+
+const previousHome = process.env.OPENCODEX_HOME;
+const previousToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+let home: string;
+const config = remoteConfig();
+const origin = "https://dashboard.example.test";
+function request(path = "/api/session/remember", cookie?: string, overrides: HeadersInit = {}, method = "POST") {
+  return new Request(origin + path, { method, headers: { Host: "dashboard.example.test", Origin: origin,
+    "User-Agent": "Safari-PWA-fixture", "X-OpenCodex-API-Key": "ocx_admin_fixture", ...(cookie ? { Cookie: cookie } : {}), ...overrides } });
+}
+function login() {
+  const state = initializeManagementAuthState(config);
+  const req = request();
+  const response = handleSessionRoutes({ req, url: new URL(req.url), config, principal: "admin-token",
+    sessionControl: createManagementSessionControl(state) } as ManagementContext);
+  return { state, response };
+}
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-persistent-dashboard-")); process.env.OPENCODEX_HOME = home; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_fixture"; });
+afterEach(() => { process.env.OPENCODEX_HOME = previousHome; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousToken; rmSync(home, { recursive: true, force: true }); });
+
+test("remember exchanges the admin token for a device cookie and a server-issued session", async () => {
+  const { response } = login();
+  expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!;
+  expect(cookie).toContain("HttpOnly"); expect(cookie).toContain("Secure"); expect(cookie).toContain("SameSite=Strict"); expect(cookie).toContain("Path=/"); expect(cookie).not.toContain("Domain="); expect(cookie).not.toContain("ocx_admin_fixture");
+  const body = await response!.json();
+  expect(body.session.token).toStartWith("ocx_session_");
+  expect(body.session.issuance).toBe("remembered-admin");
+  const disk = readFileSync(join(home, "dashboard-sessions.json"), "utf8");
+  expect(disk).not.toContain("ocx_admin_fixture");
+  expect(disk).not.toContain(cookie.split(";")[0]!.split("=")[1]!);
+});
+
+test("a device resumes after a server restart, but not on another origin or browser", () => {
+  const { response } = login(); expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const restarted = initializeManagementAuthState(config);
+  const resumed = issueGuiSession(request("/opencodex-session", cookie, {}, "GET"), config, restarted);
+  expect(resumed?.token).toStartWith("ocx_session_");
+  expect(issueGuiSession(request("/", cookie, { "User-Agent": "another-device" }, "GET"), config, restarted)).toBeNull();
+  const other = new Request("https://other.example.test/", { headers: { Host: "other.example.test", Cookie: cookie, "User-Agent": "Safari-PWA-fixture" } });
+  expect(issueGuiSession(other, config, restarted)).toBeNull();
+});
+
+test("expiry is absolute and rotating the admin token invalidates persistent devices", () => {
+  const { response } = login(); expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const req = request("/", cookie, {}, "GET");
+  expect(issueGuiSession(req, config, initializeManagementAuthState(config), { trustedTailscaleIngress: false, now: Date.now() + 31 * 86400_000 })).toBeNull();
+  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_rotated";
+  expect(issueGuiSession(req, config, initializeManagementAuthState(config))).toBeNull();
+});
+
+test("logout durably forgets this device and revokes all resumed sessions", async () => {
+  const { state, response } = login(); expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const resumed = issueGuiSession(request("/", cookie, {}, "GET"), config, state)!;
+  const session = (await response!.json()).session;
+  const req = request("/api/session/logout", cookie, { "X-OpenCodex-API-Key": session.token, "X-OpenCodex-GUI-Origin": origin, "X-OpenCodex-CSRF-Token": session.csrfToken });
+  const result = handleSessionRoutes({ req, url: new URL(req.url), config, principal: "gui-session", sessionControl: createManagementSessionControl(state) } as ManagementContext);
+  expect(result?.status).toBe(200); expect(result!.headers.get("set-cookie")).toContain("Max-Age=0");
+  expect(issueGuiSession(request("/", cookie, {}, "GET"), config, initializeManagementAuthState(config))).toBeNull();
+  const replay = request("/api/config", cookie, { "X-OpenCodex-API-Key": resumed.token, "X-OpenCodex-GUI-Origin": origin }, "GET");
+  expect(requireManagementAuth(replay, state, config)?.status).toBe(401);
+});
+
+test("remember rejects cross-origin, plaintext remote and unauthenticated issuance", () => {
+  const state = initializeManagementAuthState(config); const control = createManagementSessionControl(state);
+  for (const req of [request(undefined, undefined, { Origin: "https://attacker.test" }), new Request("http://dashboard.example.test/api/session/remember", { method: "POST", headers: { Host: "dashboard.example.test", Origin: "http://dashboard.example.test" } })]) {
+    const result = handleSessionRoutes({ req, url: new URL(req.url), config, principal: "admin-token", sessionControl: control } as ManagementContext);
+    expect(result?.status).toBe(403);
+  }
+  const req = request(); expect(handleSessionRoutes({ req, url: new URL(req.url), config, principal: "gui-session", sessionControl: control } as ManagementContext)?.status).toBe(403);
+});
