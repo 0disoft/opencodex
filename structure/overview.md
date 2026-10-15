@@ -131,6 +131,13 @@ still cover the rule, which is a judgement only review makes.
   activation checks are the sanctioned pattern. Gated Lab activation also stays synchronous
   until `startServer` returns; see [`compatibility-lab.md`](adapters/compatibility-lab.md).
   Enforced by `tests/lab/core-lab-boundary.test.ts`.
+- **INV-LAYER-01** — The `src/` static value-import graph only gets less cyclic. Every module still
+  on a cycle is listed in `tests/fixtures/import-cycle-baseline.json`; a module outside it joining a
+  cycle fails, and a listed module that leaves every cycle has to be dropped with
+  `bun scripts/import-cycles.ts --update`, which never adds one. `src/config.ts` and the core
+  request-path entrypoints sit on no cycle at all. Type-only imports and dynamic `import()` form no
+  edge, so deferring an edge behind `import()` is a sanctioned way to break a loop (issue #6386).
+  Enforced by `tests/ci-workflows/import-cycle-ratchet.test.ts`.
 - **INV-RESTORE-01** — `ocx restore` restores native Codex from the pristine catalog with
   retired bare/account-qualified native rows omitted from the output; the original backup stays
   unchanged. The service-stop and uninstall paths of the same promise are covered
