@@ -141,9 +141,10 @@ test('synchronous factory exit leaves no timer keeping process alive',async()=>{
  const {execFile}=await import('node:child_process');
  const moduleURL=new URL('../../src/lib/opaque-proxy-lifecycle/owner-manager.ts',import.meta.url).href;
  await new Promise<void>((resolve,reject)=>execFile(process.execPath,['--eval',`
+  import assert from "node:assert/strict";
   import {createOwnerManager} from ${JSON.stringify(moduleURL)};
   const owner={};const manager=createOwnerManager({owner,createWorker:({onExit})=>{onExit();return {listen(){throw Error('must not start')},close(){}};}});
-  try {await manager.start(owner,{authorized:true,authorization:${JSON.stringify(authorization)}});process.exitCode=2;}catch{}
+  await assert.rejects(manager.start(owner,{authorized:true,authorization:${JSON.stringify(authorization)}}), /Stale readiness/);
  `],{timeout:1500},error=>error?reject(error):resolve()));
 });
 test('composition forwards real ingress termination to matching owner generation',async()=>{
