@@ -39,6 +39,8 @@ export interface NormalizedComboTarget {
   weight: number;
   /** Emergency-only target, deferred under `cooldownWaitPolicy` (#5691). */
   lastResort: boolean;
+  /** Pay-per-use target; issued keys reach it only with `allowMeteredComboTargets`. */
+  metered: boolean;
   reasoningEfforts?: OcxComboDefaultEffort[];
   /** Optional JEV decision description. */
   modelProfile?: string;
@@ -427,6 +429,12 @@ export function comboConfigIssues(
         message: `targets[${i}].lastResort must be a boolean`,
       });
     }
+    if (target.metered !== undefined && typeof target.metered !== "boolean") {
+      issues.push({
+        path: ["targets", i, "metered"],
+        message: `targets[${i}].metered must be a boolean`,
+      });
+    }
     if (target.modelProfile !== undefined
       && (typeof target.modelProfile !== "string"
         || target.modelProfile.trim().length === 0
@@ -503,6 +511,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
         ? { modelProfile: target.modelProfile.trim() }
         : {}),
       lastResort: target.lastResort === true,
+      metered: target.metered === true,
     })),
   };
 }

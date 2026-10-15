@@ -1,6 +1,6 @@
 # GUI And Management API
 
-Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
+`src/server/management/combo-routes.ts` retains omitted `metered: true` metadata by trimmed provider/model identity during dashboard-shaped saves. Explicit false clears the flag; false defaults are omitted from persisted targets. Key consent follows the [runtime contract](runtime.md#request-local-target-compatibility). Anthropic OAuth account DTOs include `autoSwitchThresholdOverride` (integer or null),
 `autoSwitchThreshold` (pool default) and `effectiveAutoSwitchThreshold`. The dedicated
 `PUT /api/oauth/accounts/auto-switch` accepts `{ provider: "anthropic", accountId, threshold }`;
 explicit null restores inheritance and missing/invalid values fail. Other providers are rejected.

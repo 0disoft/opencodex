@@ -349,6 +349,12 @@ export interface OcxApiKeyEntry {
    * that is the only point at which the model about to be billed is known.
    */
   allowedModels?: string[];
+  /**
+   * Lets this key reach combo targets marked `metered`. Absent means no: an issued key stops
+   * at the last unmetered target. Environment-token and loopback callers must use an opted-in
+   * configured key to reach metered targets.
+   */
+  allowMeteredComboTargets?: boolean;
 }
 
 export interface OcxPendingApiKeyRotation {
@@ -1338,6 +1344,11 @@ export interface OcxComboTarget {
    * see `OcxComboConfig.cooldownWaitPolicy` (#5691).
    */
   lastResort?: boolean;
+  /**
+   * Pay-per-use target (for example an API-key row behind subscription targets). Only the
+   * configured keys with `allowMeteredComboTargets: true` may reach it.
+   */
+  metered?: boolean;
 }
 
 export interface OcxComboConfig {

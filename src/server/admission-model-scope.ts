@@ -77,6 +77,16 @@ export function resolveAdmissionModelScope(
   return entry ? admissionModelScopeOf(entry) : undefined;
 }
 
+/** Metered combo dispatch requires an explicitly opted-in configured key. */
+export function admissionMayUseMeteredComboTargets(
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+): boolean {
+  if (!admission || admission.kind !== "configured") return false;
+  const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
+  return entry?.allowMeteredComboTargets === true;
+}
+
 /**
  * Does this scope admit this resolved destination?
  *

@@ -9,7 +9,7 @@ type ComboInput = {
   reasoningEffortMode?: "strict" | "adaptive";
   nativeAlias?: boolean;
 };
-const TARGET_KEYS = new Set(["provider", "model", "weight", "reasoningEfforts", "modelProfile", "lastResort"]);
+const TARGET_KEYS = new Set(["provider", "model", "weight", "reasoningEfforts", "modelProfile", "lastResort", "metered"]);
 
 export function parseComboTargets(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value) || value.length === 0) throw new CliUsageError("Targets input must be a nonempty array");
@@ -40,6 +40,9 @@ export function parseComboTargets(value: unknown): Array<Record<string, unknown>
     }
     if (Object.hasOwn(target, "lastResort") && typeof target.lastResort !== "boolean") {
       throw new CliUsageError("Target lastResort must be a boolean");
+    }
+    if (Object.hasOwn(target, "metered") && typeof target.metered !== "boolean") {
+      throw new CliUsageError("Target metered must be a boolean");
     }
     // Preserve raw slashes, target order, explicit false and omitted metadata.
     return { ...target };

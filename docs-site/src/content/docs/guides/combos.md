@@ -15,6 +15,12 @@ This is useful when you want either:
 Combos sit in front of normal provider routing. Read [Model Routing](/guides/model-routing/) first
 if `provider/model` selectors are new to you.
 
+## Metered fallback consent
+
+Mark a pay-per-use combo target with `"metered": true` when it follows subscription targets. Every caller skips marked targets unless its configured `apiKeys[]` entry has `"allowMeteredComboTargets": true`. Omitted or false consent denies metered dispatch; environment-token and loopback callers must use an opted-in configured key. Model/provider scopes still apply. This applies to initial selection, failover and recovery across combo strategies. Unmarked targets retain existing behavior; this flag does not detect billing automatically.
+
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without key consent, exhaustion returns the last unmetered error. Dashboard saves retain an omitted metered flag; explicitly setting it to false clears it. Set the key consent in the config file; the dashboard does not expose this field.
+
 ## 60-second quickstart
 
 This example creates `combo/main` with Anthropic first and OpenAI second. Both providers must
