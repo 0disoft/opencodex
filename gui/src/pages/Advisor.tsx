@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { useT, type TKey } from "../i18n/shared";
-import { AdvisorModelSelect } from "../components/AdvisorModelSelect";
 
 /**
  * Advisor sidecar configuration (PR1: minimal but real). Reads and writes the RESOLVED
@@ -127,11 +126,13 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
         </div>
         <div style={ROW_STYLE}>
           <label htmlFor="advisor-model" style={LABEL_STYLE}>{t("advisor.model")}</label>
-          <AdvisorModelSelect
-            apiBase={apiBase}
+          <input
+            id="advisor-model"
+            type="text"
             value={draft.model}
             disabled={saving}
-            onChange={model => edit({ model })}
+            placeholder={t("advisor.modelPlaceholder")}
+            onChange={event => edit({ model: event.target.value })}
           />
         </div>
         <div style={ROW_STYLE}>
