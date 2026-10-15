@@ -17,7 +17,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 
-const MESSAGE_VERDICT_CODES = new Set([CYBER_POLICY_ERROR_CODE, "context_length_exceeded", "client_closed_request"]);
+const PINNED_VERDICT_CODES = new Set([CYBER_POLICY_ERROR_CODE, "client_closed_request"]);
 
 export function formatErrorResponse(
   status: number,
@@ -31,9 +31,12 @@ export function formatErrorResponse(
   // and a 400 modality refusal into invalid_request_error, so the combo loop cooled and hopped
   // on the wrong evidence. The child body reaches only that loop, whose consumer re-applies
   // this formatter's allowlist before anything reaches a client. The overrides below still win.
-  // A verdict read from the full message outranks the caller's code: the consumer sees only the
-  // first 500 characters, so a generic code replacing it would turn a late cyber refusal into a hop.
-  if (options?.classified && options.code && !MESSAGE_VERDICT_CODES.has(error.code ?? "")) {
+  // The caller's code fills in only where the message adds nothing to the status and type. A
+  // verdict read from the full message (quota, cyber policy, context overflow, catalog size)
+  // outranks a generic adapter code: the consumer sees only the first 500 characters, so
+  // replacing it turned a late cyber refusal into a hop and spent quota into a target cooldown.
+  const messageVerdict = error.code !== classifyError(status, type, "").code;
+  if (options?.classified && options.code && !messageVerdict && !PINNED_VERDICT_CODES.has(error.code ?? "")) {
     error.type = type;
     error.code = options.code;
   }

@@ -13,6 +13,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const MODEL = "claude-opus-5-5";
+const SIBLING_MODEL = "claude-sonnet-5-5";
 let childFailure: AdapterEvent | undefined;
 let runTurnCalls = 0;
 let fallbackCalls = 0;
@@ -73,7 +74,7 @@ function config(targets: Array<{ provider: string; model: string }>): OcxConfig 
     port: 0,
     defaultProvider: "cursor",
     providers: {
-      cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", authMode: "oauth", models: [MODEL] },
+      cursor: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", authMode: "oauth", models: [MODEL, SIBLING_MODEL] },
       fallback: {
         adapter: "anthropic", baseUrl: "https://fallback.test", authMode: "key",
         apiKey: "fixture-fallback-key", models: [MODEL],
@@ -148,6 +149,21 @@ for (const stream of [false, true]) {
     expect(response.status).toBe(400);
     expect(JSON.parse(response.text).error.code).toBe("cyber_policy");
     expect(fallbackCalls).toBe(0);
+  });
+
+  // A coding-agent CLI reports spent account quota as a generic 502 upstream_error; only the
+  // message says quota. That verdict cools the whole provider, so the sibling model is skipped.
+  test(`a quota verdict read from the message outranks a generic child code (stream=${stream})`, async () => {
+    childFailure = {
+      type: "error", status: 502, errorType: "upstream_error", code: "upstream_error",
+      message: `${"Agent transcript detail. ".repeat(30)}Account quota exhausted.`,
+    };
+    const response = await respond(config([
+      { provider: "cursor", model: MODEL }, { provider: "cursor", model: SIBLING_MODEL }, { provider: "fallback", model: MODEL },
+    ]), stream);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("fallback answered");
+    expect(runTurnCalls).toBe(1);
   });
 }
 
