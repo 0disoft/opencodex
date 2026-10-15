@@ -40,6 +40,7 @@ import { submitVideoJob } from "./xai-video-client";
 import { downloadVideoToArtifact, createImageBudget, pruneArtifacts } from "./artifacts";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "./synthetic-tool";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
+import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -287,6 +288,7 @@ class LoopError extends Error {
  */
 export interface ImageBridgeDeps {
   parsed: OcxParsedRequest;
+  clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
   plan?: ImageBridgePlan;
@@ -1085,12 +1087,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    guardEmptyToolCatalogStream(produce(), deps.clientToolCatalogRestriction, translatorBudget), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
       translatorBudget,
       replayCacheScope: parsed._reasoningReplayScope,
+      ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
