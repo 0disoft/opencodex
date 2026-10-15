@@ -16,6 +16,7 @@ import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRu
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
 import { createUpdateServiceHomePolicy, inspectUpdateServiceHome } from "./service-home-authority";
+import { UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
@@ -490,8 +491,8 @@ export async function runUpdate(): Promise<void> {
 
   const { serviceStatePaths } = await import("../service");
   const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
-  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message));
-  if (!homePolicy.check()) return 1;
+  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"));
+  if (!homePolicy.checkPackage()) return 1;
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
@@ -516,7 +517,7 @@ export async function runUpdate(): Promise<void> {
   }
   let trayWasInstalled = false;
   let trayWasRunning = false;
-  if (process.platform === "win32") {
+  if (!homePolicy.packageOnly && process.platform === "win32") {
     try {
       const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
       const tray = getWindowsTrayStatus();
@@ -734,7 +735,11 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
 
-  if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+  if (homePolicy.packageOnly && pendingTeardownOutstanding()) {
+    console.error("Pending teardown requires manual recovery before package replacement; run 'ocx stop' from the owning installation.");
+    return 1;
+  }
+  if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
     if (!homePolicy.check()) return 1;
     const preStopPlan = planUpdateRuntimeHandling({
       ...(await resolvedRuntimeOwnership()),
@@ -824,7 +829,7 @@ export async function runUpdate(): Promise<void> {
     supervision: observeSupervision(),
   });
   const replacementLiveness = currentPackageRuntimeLiveness();
-  if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+  if (!homePolicy.checkPackage() || replacementOwnership.subjectToken !== initialOwnership.subjectToken
     || !replacementPlan.mayReplacePackage
     || replacementLiveness !== "dead") {
     replacementRefusal = replacementPlan.notice
@@ -904,6 +909,11 @@ export async function runUpdate(): Promise<void> {
   });
   if (r.status === 0) {
     console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
+    if (homePolicy.packageOnly) {
+      homePolicy.check(homePolicy.initial);
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
+      return process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : undefined;
+    }
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     // Re-enter through the verified active package launcher. This keeps the Codex
     // shim, tray, service and proxy recovery paths on the same package/group that

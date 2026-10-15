@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createUpdateServiceHomePolicy, isUpdateHomeProbe, parseUpdateHomeProbe, type UpdateServiceHomeAuthority } from "../../src/update/service-home-policy.mjs";
-import { probeUpdateServiceHome, probeUpdateLauncherHome, updateHomeProbeEnvironment } from "../../src/update/service-home-probe.mjs";
+import { probeUpdatePackageOnlyLauncher, probeUpdateServiceHome, probeUpdateLauncherHome, updateHomeProbeEnvironment } from "../../src/update/service-home-probe.mjs";
 
 const subject = "a".repeat(64);
 const other = "b".repeat(64);
@@ -93,4 +93,49 @@ test("probe pins homes, keeps authoritative SQLite/auth inputs and scrubs only i
   { codexHome: "codex", opencodexHome: "proxy" });
   expect(env).toEqual({ CODEX_HOME: "codex", OPENCODEX_HOME: "proxy", CODEX_SQLITE_HOME: "sqlite",
     ANTHROPIC_API_KEY: "fixture", OCX_USER_CHOICE: "keep" });
+});
+
+test("initial unknown permits package replacement but never grants runtime control", () => {
+  let home: UpdateServiceHomeAuthority = { kind: "unknown" };
+  const messages: string[] = [];
+  const policy = createUpdateServiceHomePolicy(() => home, message => messages.push(message));
+  expect(policy.packageOnly).toBe(true);
+  expect(policy.checkPackage()).toBe(true);
+  expect(policy.check()).toBe(false);
+  expect(policy.serviceAllowed).toBe(false);
+  for (const kind of ["same", "absent", "foreign"] as const) {
+    home = { kind, ...(kind === "foreign" ? { subject } : {}) };
+    expect(policy.checkPackage()).toBe(false);
+    expect(policy.packageOnly).toBe(true);
+    expect(policy.serviceAllowed).toBe(false);
+  }
+  const known = createUpdateServiceHomePolicy(() => ({ kind: "same" }), () => {});
+  expect(known.checkPackage({ kind: "unknown" })).toBe(false);
+});
+
+test("package-only capability rejects old declarations and malformed or failed responses", () => {
+  const declaration = (path: string) => path.endsWith("service-home-protocol.json")
+    ? '{"schemaVersion":1,"launcherProtocolVersion":1,"entry":"__update-home-probe"}'
+    : '{"schemaVersion":1,"packageOnlyProtocolVersion":1,"entry":"__update-package-only-probe"}';
+  const response = { schemaVersion: 1, packageOnlyProtocolVersion: 1 };
+  for (const value of [response, { ...response, extra: true }, { ...response, packageOnlyProtocolVersion: 2 }, null]) {
+    const result = probeUpdatePackageOnlyLauncher("/launcher", () => ({ status: 0, stdout: JSON.stringify(value) }), "/node", {}, declaration);
+    expect(result).toBe(value === response);
+  }
+  expect(probeUpdatePackageOnlyLauncher("/launcher", () => ({ status: null, error: new Error("timeout") }), "/node", {}, declaration)).toBe(false);
+  let calls = 0;
+  expect(probeUpdatePackageOnlyLauncher("/launcher", () => { calls++; return { status: 0 }; }, "/node", {}, path => {
+    if (path.endsWith("service-home-package-only-protocol.json")) throw new Error("old package");
+    return declaration(path);
+  })).toBe(false);
+  expect(calls).toBe(0);
+});
+
+test("a parent package-only restriction cannot be upgraded by a matching child probe", () => {
+  const messages: string[] = [];
+  const policy = createUpdateServiceHomePolicy(() => ({ kind: "same" }), message => messages.push(message), true);
+  expect(policy.packageOnly).toBe(true); expect(policy.serviceAllowed).toBe(false);
+  expect(policy.checkPackage()).toBe(true); expect(policy.check()).toBe(false);
+  expect(messages.join()).toContain("ownership could not be verified");
+  expect(policy.checkPackage({ kind: "foreign", subject })).toBe(false);
 });

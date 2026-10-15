@@ -53,3 +53,27 @@ export function probeUpdateServiceHome(run, bin, prefix, { requireLauncher = fal
     return parseUpdateHomeProbe(JSON.parse(result.stdout), { requireLauncher });
   } catch { return { kind: "unknown" }; }
 }
+
+/** Separate capability: keep the original home-probe declaration readable by running v1 updaters.
+ * @param {string} launcher @param {Parameters<typeof probeUpdateServiceHome>[0]} run
+ * @param {string} node @param {Record<string, string | undefined>} env
+ * @param {(path: string) => string} [read] */
+export function probeUpdatePackageOnlyLauncher(launcher, run, node, env, read = path => {
+  if (statSync(path).size > 4096) throw new Error("oversized declaration");
+  return readFileSync(path, "utf8");
+}) {
+  if (!supportsUpdateHomeProbe(launcher, read)) return false;
+  try {
+    const declaration = JSON.parse(read(join(dirname(launcher), "..", "src", "update", "service-home-package-only-protocol.json")));
+    if (declaration?.schemaVersion !== 1 || declaration?.packageOnlyProtocolVersion !== 1
+      || declaration?.entry !== "__update-package-only-probe" || Object.keys(declaration).length !== 3) return false;
+    const result = run(node, [launcher, "__update-package-only-probe"], {
+      encoding: "utf8", timeout: 8_000, maxBuffer: 4096, windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"], env,
+    });
+    if (result.status !== 0 || result.error || result.signal || typeof result.stdout !== "string"
+      || Buffer.byteLength(result.stdout, "utf8") > 4096) return false;
+    const response = JSON.parse(result.stdout);
+    return response?.schemaVersion === 1 && response?.packageOnlyProtocolVersion === 1 && Object.keys(response).length === 2;
+  } catch { return false; }
+}

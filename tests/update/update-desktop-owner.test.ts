@@ -172,7 +172,7 @@ describe("both updaters consult the shared rule", () => {
 
   test("the Bun updater gates its stop, its refresh and its restart hint", () => {
     expect(bunPath).toContain("from \"./runtime-ownership.mjs\"");
-    expect(bunPath).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(bunPath).toContain("if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
     expect(bunPath).toContain("if (!runtimePlan.mayReplacePackage)");
     expect(bunPath).toContain("if (postInstallPlan.mayRestoreService) {");
   });
@@ -344,7 +344,7 @@ describe("live Desktop update authority", () => {
 
 async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEvidence, runtimeTrusted = true, homeAllowed = true): Promise<number[]> {
   const source = readFileSync(repoPath(lane === "Bun" ? "src/update/index.ts" : "bin/ocx.mjs"), "utf8");
-  const start = source.indexOf(lane === "Bun" ? "  if (runtimePlan.mayStopRuntime &&" : "    if (stopNeeded) {");
+  const start = source.indexOf(lane === "Bun" ? "  if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime &&" : "    if (stopNeeded) {");
   const end = source.indexOf(lane === "Bun" ? '    if (stopStdio === "pipe")' : "      const stillHasRuntimeState", start);
   expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
   const counts = [0, 0, 0];
@@ -366,7 +366,7 @@ async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEviden
   try {
     await run({
       runtimePlan, serviceWasInstalled: true, readPid: () => 321, readRuntimePort: () => ({}),
-      homePolicy: { check: () => homeAllowed, serviceAllowed: true },
+      homePolicy: { check: () => homeAllowed, serviceAllowed: true, packageOnly: false },
       pendingTeardownOutstanding: () => false, stopNeeded: true,
       resolvedRuntimeOwnership: async () => owner, readOwnership: () => owner,
       planUpdateRuntimeHandling, supervisionLatch: latch, inspectDesktopSupervision: inspect,
@@ -388,7 +388,7 @@ test("Bun pre-stop uses inspector correlation when runtime identity is untrusted
   expect(await exercisePreStop("Bun", { kind: "none" }, false)).toEqual([1, 1, 1]);
 });
 
-test("Bun home uncertainty refuses before stop and package replacement", async () => {
+test("Bun newly uncertain home refuses before stop and package replacement", async () => {
   expect(await exercisePreStop("Bun", { kind: "none" }, true, false)).toEqual([0, 0, 0]);
 });
 

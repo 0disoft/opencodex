@@ -3,6 +3,7 @@
 
 export const UPDATE_HOME_SCHEMA_VERSION = 1;
 export const UPDATE_HOME_LAUNCHER_PROTOCOL = 1;
+export const UPDATE_PACKAGE_ONLY_EXIT_CODE = 75;
 
 /** Exact argv only: malformed variants must not enter the ordinary status collector.
  * @param {string[]} args */
@@ -30,21 +31,32 @@ export function parseUpdateHomeProbe(value, { requireLauncher = false } = {}) {
 }
 
 /** A foreign registration never manages this foreground runtime. A changed claim is not absence.
- * @param {() => UpdateServiceHomeAuthority} inspect @param {(message: string) => void} refuse */
-export function createUpdateServiceHomePolicy(inspect, refuse) {
+ * @param {() => UpdateServiceHomeAuthority} inspect @param {(message: string) => void} refuse
+ * @param {boolean} [packageOnly] A parent's restriction can only remove runtime authority. */
+export function createUpdateServiceHomePolicy(inspect, refuse, packageOnly = false) {
   const initial = inspect();
   let current = initial;
+  packageOnly ||= initial.kind === "unknown";
+  const checkAuthority = (home) => {
+    current = home;
+    const allowed = initial.kind === "same" ? home.kind === "same" || home.kind === "absent"
+      : initial.kind === "absent" ? home.kind === "absent"
+      : initial.kind === "foreign" && home.kind === "foreign" && initial.subject !== undefined && initial.subject === home.subject;
+    if (allowed) return true;
+    refuse(updateServiceHomeRefusal(home)
+      ?? "Automatic update restart refused: service registration authority changed. Check 'ocx service status' before restarting manually.");
+    return false;
+  };
   return {
     initial,
-    get serviceAllowed() { return current.kind === "same"; },
+    packageOnly,
+    get serviceAllowed() { return !packageOnly && current.kind === "same"; },
+    checkPackage(home = inspect()) {
+      return initial.kind === "unknown" && home.kind === "unknown" || checkAuthority(home);
+    },
     check(home = inspect()) {
-      current = home;
-      const allowed = initial.kind === "same" ? home.kind === "same" || home.kind === "absent"
-        : initial.kind === "absent" ? home.kind === "absent"
-        : initial.kind === "foreign" && home.kind === "foreign" && initial.subject !== undefined && initial.subject === home.subject;
-      if (allowed) return true;
-      refuse(updateServiceHomeRefusal(home)
-        ?? "Automatic update restart refused: service registration authority changed. Check 'ocx service status' before restarting manually.");
+      if (!packageOnly) return checkAuthority(home);
+      refuse(updateServiceHomeRefusal({ kind: "unknown" }));
       return false;
     },
   };

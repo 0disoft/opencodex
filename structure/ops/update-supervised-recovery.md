@@ -45,12 +45,27 @@ The Node launcher, Bun updater and dashboard worker use the same transition poli
 lease themselves and recheck both home authority and runtime ownership before spawning, including
 on failed-update recovery. Matching-home service refresh runs unleased; home/owner evidence is
 checked again immediately before manager recovery. A distinct refusal never permits direct fallback.
+An initially unknown service home selects a package-only transaction: no proxy/tray stop, service
+refresh, shim repair or direct start. Success prints the static refusal and manual restart guidance;
+the dashboard records success with `restarted: false`. Package replacement still requires stable
+durable ownership, no Desktop veto and a dead package runtime. Home evidence is rechecked before
+replacement; changed authority refuses the transaction. Initial uncertainty never grants recovery
+permission later, even if installing the package repairs its probe. Unresolved pending teardown
+receipts, including quarantined unreadable receipts, also block package-only replacement.
+The worker passes its restriction as `--update-package-only`; package-only-capable launchers preserve it
+in both Node and Bun update paths even when their own probe matches. A package-only Bun worker
+uses that guarded launcher instead of its ordinary raw package-manager command. Delegated launchers
+also receive `--update-worker-result`: successful package-only transactions report exit 75 instead
+of ordinary success. The worker handles this restricted-success result before any tray refresh or
+restart, even when its own probe still matches. Unmarked package-manager exit 75 is a failure.
 
-The dashboard worker's npm/pnpm delegation first checks the fixed package-local declaration
-`src/update/service-home-protocol.json` and then the exact delegated launcher's private
-`__update-home-probe` response. Missing or invalid declarations cause zero launcher executions.
-`src/update/job-update-home.ts` owns this gate. A launcher marker is a compatibility claim from
-trusted installed files, not tamper attestation. A new child alone cannot prove an old parent's support.
+The dashboard worker checks the unchanged v1 `src/update/service-home-protocol.json` plus
+`src/update/service-home-package-only-protocol.json`, then the delegated launcher's exact private
+`__update-package-only-probe` response. This separate capability probe performs no Bun resolution
+or home inspection. Missing declarations, failed calls and malformed responses refuse delegation.
+Keeping the original home-probe declaration and response at v1 lets already-running v1 updaters
+inspect and recover after installing the new package. `src/update/job-update-home.ts` owns the
+capability gate. Markers claim compatibility of trusted installed files, not tamper attestation.
 
 The new Node launcher intercepts this exact private command before Desktop handoff, boot restore
 and ordinary install-capable Bun resolution. It resolves Bun and its compatibility floor from the
