@@ -2,12 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const repo = resolve(process.argv[2] ?? '.');
-for (let run = 1; run <= 3; run++) {
+async function trial(run: number) {
   const root = mkdtempSync(join(tmpdir(), 'ocx-start-profile-'));
   const home = join(root, 'home'), ocx = join(root, 'ocx'), codex = join(root, 'codex');
   for (const dir of [home, ocx, codex]) mkdirSync(dir);
   writeFileSync(join(ocx, 'config.json'), JSON.stringify({ port: 0, hostname: '127.0.0.1', codexAutoStart: false, syncResumeHistory: false, checkForUpdates: false, clientIntegrations: { codex: false, grok: false, 'claude-desktop': false }, claudeCode: { systemEnv: false }, providers: {}, defaultProvider: 'openai' }));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex, OCX_OWNER_REGISTRY_DIR: join(root, 'registry'), NO_PROXY: '127.0.0.1,localhost' };
+  const env = { ...(process.env.PROFILE_MINIMAL_ENV === '1' ? {} : process.env), HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocx, CODEX_HOME: codex, OCX_OWNER_REGISTRY_DIR: join(root, 'registry'), NO_PROXY: '127.0.0.1,localhost' };
   const started = performance.now();
   console.log(JSON.stringify({ run, kind: 'start', platform: process.platform }));
   const child = Bun.spawn([process.execPath, '--preload', resolve('scripts/diagnostics/startup-profile-preload.cjs'), join(repo, 'src/cli/index.ts'), 'start'], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
@@ -37,3 +37,5 @@ for (let run = 1; run <= 3; run++) {
     await Promise.all(drains);
   }
 }
+
+await Promise.all(Array.from({ length: 4 }, (_, i) => trial(i + 1)));

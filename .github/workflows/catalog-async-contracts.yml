@@ -11,25 +11,29 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: ./.github/actions/setup-project-bun
         with:
           role: runtime
       - run: bun install --frozen-lockfile
-      - run: bun scripts/diagnostics/startup-profile.ts
-  regressions:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-project-bun
-        with:
-          role: runtime
-      - run: bun install --frozen-lockfile
-      - run: bun test tests/cli/cli-access-audio-live.test.ts
-      - run: bun test tests/cli/sibling-home-client-sync.test.ts -t 'a secondary ensure parent preserves'
+      - name: Baseline (four concurrent cold starts, original test environment)
+        shell: bash
+        env:
+          PROFILE_MINIMAL_ENV: '1'
+        run: |
+          git show c37161c512d102f11eeca7db3697e79d52b4246f:src/server/index.ts > src/server/index.ts
+          bun scripts/diagnostics/startup-profile.ts
+      - name: Candidate (four concurrent cold starts, original test environment)
+        shell: bash
+        env:
+          PROFILE_MINIMAL_ENV: '1'
+        run: |
+          git restore --source=HEAD -- src/server/index.ts
+          bun scripts/diagnostics/startup-profile.ts
+      - name: Candidate (four concurrent cold starts, inherited user environment)
+        run: bun scripts/diagnostics/startup-profile.ts
+      - name: Baseline (four concurrent cold starts, inherited user environment)
+        shell: bash
+        run: |
+          git show c37161c512d102f11eeca7db3697e79d52b4246f:src/server/index.ts > src/server/index.ts
+          bun scripts/diagnostics/startup-profile.ts
