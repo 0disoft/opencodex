@@ -1,3 +1,4 @@
+import { sameHomeRestartIo, absentHomeRestartIo } from "../helpers/update-home-fixtures";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -72,6 +73,7 @@ describe("pinned-start child cleanup", () => {
     };
     writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1" }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       waitForPort: async () => true,
       listListenPidsFn: () => [],
@@ -586,6 +588,7 @@ describe("GUI update execution decisions", () => {
     let restartLauncher = "";
     let now = 0;
     await runGuiUpdateWorker("pnpm-active-launcher", "latest", true, {
+      launcherSupportsUpdateHomeFn: () => true,
       checkForUpdateFn: () => ({
         currentVersion: "2.7.40",
         latestVersion: "2.7.41",
@@ -610,6 +613,7 @@ describe("GUI update execution decisions", () => {
       integrityFn: () => ({ ok: true as const, integrity: "sha512-testfixturevalue000000000" }),
       runCommandFn: () => ({ status: 0, signal: null }),
       restartIo: {
+        ...absentHomeRestartIo,
         serviceInstalledFn: () => false,
         restartAfterUpdateFn: async (_job, _captured, io) => {
           restartLauncher = io?.packageLauncherPathFn?.() ?? "";
@@ -657,6 +661,7 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(directJob.id), JSON.stringify(directJob));
     let directLauncher = "";
     await restartAfterUpdateForTests(directJob, { port: 19001, hostname: "127.0.0.1" }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       packageLauncherPathFn: () => activeLauncher,
       listListenPidsFn: () => [],
@@ -669,6 +674,7 @@ describe("GUI update execution decisions", () => {
     writeFileSync(updateJobPath(serviceJob.id), JSON.stringify(serviceJob));
     let serviceArgs: string[] = [];
     await restartAfterUpdateForTests(serviceJob, { port: 19002, hostname: "127.0.0.1" }, {
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       packageLauncherPathFn: () => activeLauncher,
       listListenPidsFn: () => [],
@@ -703,6 +709,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 19997, hostname: "127.0.0.1" }, {
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       serviceViableFn: () => true,
       waitForPort: async () => false,
@@ -754,6 +761,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 12345, hostname: "127.0.0.1" }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false, // drive the proxy-mode branch regardless of host state
       listListenPidsFn: () => [],
       waitForPort: async (port, hostname, opts) => {
@@ -797,6 +805,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 4242 }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       listListenPidsFn: () => [],
       waitForPort: async (_port, _hostname, opts) => {
@@ -829,6 +838,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 19111, hostname: "127.0.0.1", oldPid: 100 }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       // Simulate a respawned bun child that is not the pre-update PID.
       listListenPidsFn: () => [100, 200],
@@ -859,6 +869,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 100 }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       waitForPort: async () => false,
       listListenPidsFn: () => [555],
@@ -889,6 +900,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     await restartAfterUpdateForTests(job, { port: 10100, hostname: "127.0.0.1", oldPid: 100 }, {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       waitForPort: async () => false,
       listListenPidsFn: () => [100],
@@ -923,6 +935,7 @@ describe("GUI update execution decisions", () => {
     try {
       await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
         ...HOST_FREE_RECOVERY_IO,
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
         // The service-recovery gate now asks the port before skipping the direct-start
@@ -971,6 +984,7 @@ describe("GUI update execution decisions", () => {
     try {
       await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
         ...HOST_FREE_RECOVERY_IO,
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         serviceViableFn: () => false,
         waitForPort: async () => true,
@@ -1017,6 +1031,7 @@ describe("GUI update execution decisions", () => {
       await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19998, hostname: "127.0.0.1" }, {
         ...HOST_FREE_RECOVERY_IO,
         platform: "win32",
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
         waitForPort: async () => true,
@@ -1062,6 +1077,7 @@ describe("GUI update execution decisions", () => {
     await expect(withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19010, hostname: "127.0.0.1" }, {
       ...HOST_FREE_RECOVERY_IO,
       platform: "win32",
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       serviceViableFn: () => true,
       waitForPort: async () => true,
@@ -1096,6 +1112,7 @@ describe("GUI update execution decisions", () => {
     try {
       await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19100, hostname: "127.0.0.1" }, {
         ...HOST_FREE_RECOVERY_IO,
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         // Installed but stale/missing assets — the status line users see after a dead update.
         serviceViableFn: () => false,
@@ -1140,6 +1157,7 @@ describe("GUI update execution decisions", () => {
       {
         ...HOST_FREE_RECOVERY_IO,
         // No Background Service installed — interactive dashboard update must still recover.
+        ...absentHomeRestartIo,
         serviceInstalledFn: () => false,
         serviceViableFn: () => false,
         waitForPort: async () => true,
@@ -1297,6 +1315,7 @@ describe("GUI update execution decisions", () => {
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
       "npm",
       {
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         // Soft-probe path only runs when a live listen owner exists.
         listListenPidsFn: () => [222],
@@ -1345,6 +1364,7 @@ describe("GUI update execution decisions", () => {
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
       "npm",
       {
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         listListenPidsFn: () => [222],
         isAliveFn: () => true,
@@ -1385,6 +1405,7 @@ describe("GUI update execution decisions", () => {
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
       "npm",
       {
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         listListenPidsFn: () => [111],
         isAliveFn: pid => pid === 111,
@@ -1436,6 +1457,7 @@ describe("GUI update execution decisions", () => {
       { port: 10100, hostname: "127.0.0.1", oldPid: 111 },
       "npm",
       {
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         listListenPidsFn: () => [livePid],
         isAliveFn: () => true,
@@ -1482,6 +1504,7 @@ describe("GUI update execution decisions", () => {
       "npm",
       {
         // Live holder after reclaim timeout — must not spawn a second listener.
+        ...absentHomeRestartIo,
         serviceInstalledFn: () => false,
         waitForPort: async () => false,
         listListenPidsFn: () => [111],
@@ -1523,6 +1546,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "npm", {
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       probeProxy: async () => {
         // Only becomes healthy after the explicit restart (launcher printed `ocx start` only).
@@ -1566,6 +1590,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1" }, "npm", {
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       listListenPidsFn: () => [],
       // Soft probe times out (proxy down after npm update); confirm after explicit restart succeeds.
@@ -1606,6 +1631,7 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
     const ok = await finishGuiUpdateRestart(job, { port: 10100, hostname: "127.0.0.1", oldPid: 111 }, "npm", {
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       scanListenPidsFn: () => ({ ok: false, error: "lsof/netstat unavailable" }),
       probeProxy: async () => true,
@@ -1907,6 +1933,7 @@ describe("service recovery is health-gated, not viability-gated", () => {
     try {
       await withoutHostProcesses(() => restartAfterUpdateForTests(healthGateJob(id), { port: 18765, hostname: "127.0.0.1" }, {
         ...HOST_FREE_RECOVERY_IO,
+        ...sameHomeRestartIo,
         serviceInstalledFn: () => true,
         runService: () => ({ status: 0 }),
         waitForPort: async () => true,
