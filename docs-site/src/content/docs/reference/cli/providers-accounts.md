@@ -218,6 +218,13 @@ as OrcaRouter are reused until the provider revokes them); API-key login provide
 key, validate it when possible, and save the resulting provider config. The command prints the
 currently accepted OAuth and API-key provider ids when the name is missing or unknown.
 
+Failed OAuth logins exit with status 1 and print a fixed diagnostic: the HTTP status and standard
+OAuth error code (such as `invalid_grant`) when the provider returned one, `network_error` or
+`timeout` when the provider could not be reached, `configuration_error` with the reason when a
+local setting such as a Codex account namespace blocks the login, and `oauth_authentication_failed`
+otherwise. Pool 2 (`anthropic2`) also reports `configuration_error` before prompting when a custom
+provider owns that name or its config file cannot be read or parsed.
+
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).
 Codex pool accounts are not one of those OAuth or API-key providers, but `ocx login codex` reaches
