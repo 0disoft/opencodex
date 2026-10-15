@@ -133,6 +133,7 @@ import {
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import {
+  admissionMayUseMeteredComboTargets,
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
@@ -601,6 +602,7 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
   }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
+  const meteredComboTargetsAllowed = admissionMayUseMeteredComboTargets(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
@@ -624,6 +626,11 @@ export async function prepareResponsesRequest(
       providerName: candidate.providerName,
       modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
     });
+    // A combo the router collapsed to one pick here (a subagent fallback naming a combo alias)
+    // never reaches the combo loop's metered filter, so consent is enforced again and fails closed.
+    if (candidate.combo?.target.metered && !meteredComboTargetsAllowed) {
+      throw new NoAvailableComboTargetsError(candidate.combo.comboId);
+    }
     return candidate;
   };
   try {

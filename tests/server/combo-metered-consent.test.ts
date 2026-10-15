@@ -11,6 +11,10 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { handleResponses } from "../../src/server/responses";
+import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests } from "../../src/codex/subagent-model-fallback";
+import { clearComboTargetCooldowns, coolComboTarget } from "../../src/combos/failover";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const key = { id: "issued", name: "issued", key: "ocx_data_" + "a".repeat(40), createdAt: "2026-10-15T00:00:00Z" };
 const admission = { kind: "configured", keyId: key.id, source: "bearer" } as const;
@@ -70,6 +74,60 @@ test("metered metadata survives dashboard saves, explicit false clears it, malfo
   } finally {
     if (previous === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previous;
+    removeTreeWithRetry(home);
+  }
+});
+
+// A subagent fallback naming a combo alias is collapsed to one pick by the router and dispatched
+// outside the combo loop, so its metered pick must be refused there too.
+test("a subagent fallback that collapses a combo onto its metered target needs key consent", async () => {
+  const previous = { home: process.env.OPENCODEX_HOME, codex: process.env.CODEX_HOME };
+  const home = mkdtempSync(join(tmpdir(), "ocx-metered-fallback-"));
+  process.env.OPENCODEX_HOME = home;
+  process.env.CODEX_HOME = home;
+  const release = acquireOwnedSpendHome();
+  const originalFetch = globalThis.fetch;
+  const provider = (host: string) => ({ adapter: "openai-chat" as const, baseUrl: `https://${host}.test/v1`, apiKey: "k", models: ["m"] });
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    urls.push(String(input));
+    return new Response(JSON.stringify({ error: { message: "boom" } }), { status: 500, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const post = (config: OcxConfig, consented: boolean) => {
+    resetSubagentModelFallbackStateForTests();
+    noteSubagentModelFailure("primary/m", "429", config);
+    clearComboTargetCooldowns("chain");
+    coolComboTarget("chain", { provider: "subscription", model: "m" }, { cooldownMs: 600_000 });
+    urls.length = 0;
+    return handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-openai-subagent": "collab_spawn" },
+      body: JSON.stringify({ model: "primary/m", input: "hi", stream: false }),
+    }), config, { model: "", provider: "" }, consented ? { admission } : {});
+  };
+  try {
+    const config = (consent: boolean): OcxConfig => ({
+      port: 16389, defaultProvider: "primary",
+      providers: { primary: provider("primary"), subscription: provider("subscription"), paid: provider("paid") },
+      combos: { chain: { alias: "chain-model", targets: [{ provider: "subscription", model: "m" }, { provider: "paid", model: "m", metered: true }] } },
+      subagentModelFallback: ["chain-model"],
+      apiKeys: [{ ...key, allowMeteredComboTargets: consent }],
+    });
+    expect((await post(config(false), false)).status).toBe(503);
+    expect(urls).toEqual([]);
+    expect((await post(config(false), true)).status).toBe(503);
+    expect(urls).toEqual([]);
+    await post(config(true), true);
+    expect(urls).toEqual(["https://paid.test/v1/chat/completions"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetSubagentModelFallbackStateForTests();
+    clearComboTargetCooldowns("chain");
+    release();
+    for (const [name, value] of [["OPENCODEX_HOME", previous.home], ["CODEX_HOME", previous.codex]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     removeTreeWithRetry(home);
   }
 });

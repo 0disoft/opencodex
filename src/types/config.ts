@@ -351,8 +351,8 @@ export interface OcxApiKeyEntry {
   allowedModels?: string[];
   /**
    * Lets this key reach combo targets marked `metered`. Absent means no: an issued key stops
-   * at the last unmetered target. Environment-token and loopback callers must use an opted-in
-   * configured key to reach metered targets.
+   * at the last unmetered target. The environment token and unauthenticated loopback requests
+   * never qualify; a loopback bind reads no key at all.
    */
   allowMeteredComboTargets?: boolean;
 }
