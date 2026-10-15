@@ -852,10 +852,13 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         // Valid and absent routes keep the fixed key set; routesError appears only for malformed stored rules.
         // An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
-        expect(Object.keys(dto).sort()).toEqual([
+        // `inert` is optional like routesError and already optional in the CLI's pool schema: only
+        // the generic kind has a stored strategy the runtime may not consume (pool.kernel off).
+        expect(Object.keys(dto).filter(key => key !== "inert").sort()).toEqual([
           "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount", "nativeMessages",
           "provider", "quotaWindow", "routes", "stickyLimit", "strategy", "supported",
         ]);
+        expect(dto.inert).toBe(kind === "generic" ? true : undefined);
         expect(dto.kind).toBe(kind);
         expect(dto.supported).toEqual([...supported]);
         // quotaWindow belongs to anthropic alone; the others state null rather than omitting it.
@@ -879,6 +882,19 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       // cannot distinguish a disabled pool from one inheriting a global true.
       expect(dto.enabled).toBeNull();
       expect(dto.enabledEffective).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a generic pool reports its stored strategy as live once the shared kernel is on", async () => {
+    const config = loadConfig();
+    config.pool = { ...config.pool, kernel: true };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const dto = await (await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url))).json() as Record<string, unknown>;
+      expect(dto.inert).toBe(false);
     } finally {
       await server.stop(true);
     }

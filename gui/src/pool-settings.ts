@@ -26,7 +26,19 @@ export interface PoolSettings {
   supported: string[];
   enabled: boolean | null;
   enabledEffective: boolean;
+  /**
+   * True while strategy/threshold/sticky are persisted but not consumed by the
+   * selector (generic kind with `pool.kernel` off). The API computes it; the GUI
+   * only renders it, so a saved-but-inactive strategy is never presented as live.
+   */
+  inert: boolean;
   strategy: AccountPoolStrategy;
+  /**
+   * The stored strategy name as the API reported it, or null when none is stored. Differs
+   * from `strategy` for a name this dashboard does not model (Kiro's CLI-only `least-loaded`),
+   * which `strategy` normalizes to the default: a caller must not write that default back.
+   */
+  storedStrategy: string | null;
   stickyLimit: number;
   autoSwitchThreshold: number | null;
   quotaWindow: AccountPoolQuotaWindow | null;
@@ -55,10 +67,12 @@ function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): P
     supported: Array.isArray(raw.supported) ? raw.supported.filter((f): f is string => typeof f === "string") : [],
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : null,
     enabledEffective: raw.enabledEffective === true,
+    inert: raw.inert === true,
     // Fall back to what was asked for when the response omits a field. A management write may
     // answer 204, and reporting the normalizer default there would silently show the operator
     // a different value than the one they just saved.
     strategy: normalizeAccountPoolStrategy(raw.strategy ?? fallback?.strategy),
+    storedStrategy: typeof raw.strategy === "string" ? raw.strategy : fallback?.strategy ?? null,
     stickyLimit: normalizeAccountPoolStickyLimit(raw.stickyLimit ?? fallback?.stickyLimit),
     autoSwitchThreshold: typeof threshold === "number" ? threshold : null,
     quotaWindow: (raw.quotaWindow ?? fallback?.quotaWindow) === undefined || raw.quotaWindow === null

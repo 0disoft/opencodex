@@ -250,6 +250,10 @@ export default function ProviderAuthPanel({
   const [couponAccount, setCouponAccount] = useState<OAuthAccountRow | null>(null);
   // Claude usage resets ride a separate usage read, like the Grok coupons above.
   const isAnthropicPool = isAnthropicInstanceId(item.name) && anthropicInstanceRowShapeMatches(item.name, item);
+  // Every other OAuth provider is a generic pool (src/oauth/pool-settings-capability.ts): the
+  // Codex pool has its own surface, and an Anthropic-named row is either the Anthropic pool
+  // above or an unmarked custom row that receives neither pool's settings.
+  const genericPoolCard = isOauth && item.name !== "openai" && !isAnthropicInstanceId(item.name) && accounts.length > 0;
   const claudeGrantsEnabled = isOauth && isAnthropicPool && accounts.length > 0;
   const claudeAccountIds = useMemo(
     () => (claudeGrantsEnabled ? accounts.filter(account => !accountShowsReauth(account)).map(account => account.id) : []),
@@ -444,6 +448,14 @@ export default function ProviderAuthPanel({
                 provider={isAnthropicInstanceId(item.name) ? item.name : "anthropic"}
                 accountCount={accounts.length}
                 onThresholdChange={threshold => { void authHandlers?.onAccountPoolThreshold?.(item.name, threshold); }}
+              />
+            )}
+            {genericPoolCard && (
+              <AnthropicAccountPoolSettings
+                key={`${apiBase}:${item.name}`}
+                apiBase={apiBase}
+                provider={item.name}
+                accountCount={accounts.length}
               />
             )}
             {item.name === "google-antigravity" && (

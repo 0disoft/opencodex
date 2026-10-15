@@ -94,6 +94,13 @@ export interface PoolSettingsDto {
   routesError?: string;
   /** Saved state confirmed despite a post-publication failure. */
   warning?: "config_bookkeeping_failed";
+  /**
+   * Generic kind only, with the meaning documented on `GenericPoolSettingsDto.inert`: true
+   * while `strategy`, `autoSwitchThreshold` and `stickyLimit` are persisted but not consumed
+   * because `pool.kernel` is off. Without it a dashboard reading this contract cannot tell a
+   * saved strategy from a live one.
+   */
+  inert?: boolean;
 }
 
 
@@ -209,5 +216,6 @@ export function unifiedPoolSettingsDto(
     maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
     routes: null,
     nativeMessages: null,
+    inert: config.pool?.kernel !== true,
   };
 }

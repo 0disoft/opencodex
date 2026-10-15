@@ -25,6 +25,10 @@ export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
   codex?: boolean;
   threshold?: number;
+  allowResetFirst?: boolean;
+  /** A stored strategy outside this dashboard's model, shown verbatim and never rewritten. */
+  unmodeledStrategy?: string | null;
+  compact?: boolean;
   stickyDraft: string;
   disabled?: boolean;
   strategySelectId?: string;
@@ -47,6 +51,9 @@ export default function AccountPoolStrategyControls({
   strategy,
   codex = false,
   threshold,
+  allowResetFirst = false,
+  unmodeledStrategy = null,
+  compact = false,
   stickyDraft,
   disabled = false,
   strategySelectId = "account-pool-strategy",
@@ -56,10 +63,13 @@ export default function AccountPoolStrategyControls({
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
-  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || value !== "reset-first").map((value) => ({
+  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => (
+    codex || allowResetFirst || value !== "reset-first" || strategy === value
+  )).map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
   }));
+  if (unmodeledStrategy) strategyOptions.unshift({ value: unmodeledStrategy as AccountPoolStrategy, label: unmodeledStrategy });
 
   const thresholdSummary = (() => {
     if (threshold === undefined) return null;
@@ -92,18 +102,26 @@ export default function AccountPoolStrategyControls({
       <div className="setting-row">
         <div className="setting-label">
           <span className="title" id={`${strategySelectId}-label`}>{t("accountPool.strategy")}</span>
-          <span className="desc">{t("accountPool.strategyDesc")}</span>
-          <span className="desc">{t(STRATEGY_HINT_KEYS[strategy])}</span>
-          <span className="desc">{t("accountPool.unboundDefinition")}</span>
+          {compact ? (unmodeledStrategy ? null : (
+            <span className="desc">
+              {strategy === "reset-first" ? t("genericPool.visualResetFirst") : t(STRATEGY_HINT_KEYS[strategy])}
+            </span>
+          )) : (
+            <>
+              <span className="desc">{t("accountPool.strategyDesc")}</span>
+              <span className="desc">{t(STRATEGY_HINT_KEYS[strategy])}</span>
+              <span className="desc">{t("accountPool.unboundDefinition")}</span>
+            </>
+          )}
         </div>
         <div className="setting-controls">
           <Select
             id={strategySelectId}
-            value={strategy}
+            value={unmodeledStrategy ?? strategy}
             options={strategyOptions}
             disabled={disabled}
             label={t("accountPool.strategy")}
-            onChange={(next) => onStrategyChange(next as AccountPoolStrategy)}
+            onChange={(next) => { if (next !== unmodeledStrategy) onStrategyChange(next as AccountPoolStrategy); }}
           />
           {thresholdSummary && (
             <span className="badge badge-muted account-pool-threshold-badge" data-testid="account-pool-threshold-summary">
@@ -112,7 +130,7 @@ export default function AccountPoolStrategyControls({
           )}
         </div>
       </div>
-      {strategy === "round-robin" && (
+      {strategy === "round-robin" && !unmodeledStrategy && (
         <div className="setting-row">
           <label className="setting-label" htmlFor={stickyInputId}>
             <span className="title">{t("accountPool.stickyLimit")}</span>
