@@ -284,3 +284,9 @@ reasoning and tool ids before concatenation and reserves the previous string dur
 Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
 Terminal, error and cancellation paths release collector retention; the shared replay cache owns
 its own bounded text after insertion. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+
+The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
+thinking/signature buffer before concatenation, replaces signatures rather than appending, and
+releases reservations on completion, overflow and cancellation. Buffered response transformation
+charges each replacement event while its source batch remains retained; the bridge then owns
+the signed envelope and visible commentary pair through its existing output accounting.
