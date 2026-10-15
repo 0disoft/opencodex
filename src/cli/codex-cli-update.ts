@@ -1,5 +1,6 @@
 import {
   inspectCodexCliInstall,
+  observeCodexCliSelectedCommand,
   type CodexCliInstallProvenanceDeps,
   type CodexCliInstallReport,
 } from "../codex/cli-install-provenance";
@@ -18,7 +19,6 @@ import {
   type CodexCliUpdatePlanDeps,
 } from "../codex/cli-update-plan";
 import {
-  resolveCodexRuntime,
   type ResolveCodexRuntimeDeps,
   type ResolveCodexRuntimeResult,
 } from "../codex/runtime";
@@ -210,23 +210,14 @@ function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstall
   // candidate. probeVersion: false keeps this read-only — no codex --version
   // executes on a check/plan path — while still refusing attestation when the
   // resolver would settle on a different executable.
-  let selectedCommand: string | null = null;
-  try {
-    const resolve = commandDeps.resolveSelectedRuntime ?? resolveCodexRuntime;
-    selectedCommand = resolve({
-      env: {
-        CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
-        PATH: trusted.path ?? undefined,
-        PATHEXT: trusted.pathExt ?? undefined,
-      },
-      configDir: trusted.configDir,
-      discoverAlternatives: false,
-      probeVersion: false,
-    }).runtime.command ?? null;
-  } catch {
-    // A resolver failure must not attest: fail closed with no selected command.
-    selectedCommand = null;
-  }
+  const selectedCommand = observeCodexCliSelectedCommand({
+    env: {
+      CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
+      PATH: trusted.path ?? undefined,
+      PATHEXT: trusted.pathExt ?? undefined,
+    },
+    configDir: trusted.configDir,
+  }, commandDeps.resolveSelectedRuntime);
   return {
     env: {
       ...trusted.managerRoots,

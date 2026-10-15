@@ -246,6 +246,7 @@ describe("Codex CLI update CLI", () => {
 
   test("passes only proof-bound manager roots into production provenance inspection", async () => {
     const proof = "M".repeat(43);
+    const configDir = process.platform === "win32" ? "C:\\opencodex" : "/opencodex";
     const env: NodeJS.ProcessEnv = {
       [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({
         version: 1,
@@ -256,7 +257,7 @@ describe("Codex CLI update CLI", () => {
           path: "C:\\managed",
           pathExt: ".CMD",
           managerRoots: { FNM_DIR: "C:\\custom-manager" },
-          configDir: "C:\\opencodex",
+          configDir,
         },
       }),
     };
@@ -281,8 +282,8 @@ describe("Codex CLI update CLI", () => {
         PATH: "C:\\managed",
         PATHEXT: ".CMD",
       });
-      expect(received?.configDir).toBe("C:\\opencodex");
-      expect(received?.selectedCommand).toBe("C:\\managed\\codex.cmd");
+      expect(received?.configDir).toBe(configDir);
+      expect(received?.selectedCommand).toBe(process.platform === "win32" ? null : "C:\\managed\\codex.cmd");
     } finally {
       initializeNodeLauncherContext(["bun", "cli"], {});
     }

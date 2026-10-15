@@ -18,6 +18,9 @@ import { isSpawnableCodexCandidate } from "./exec-invocation";
 import {
   codexRuntimeStatePath,
   parsePersistedCodexRuntime,
+  resolveCodexRuntime,
+  type ResolveCodexRuntimeDeps,
+  type ResolveCodexRuntimeResult,
 } from "./runtime";
 import {
   inspectCodexShimBackingForCommand,
@@ -306,6 +309,38 @@ function resolveCandidateCommandPath(
     }
   }
   return null;
+}
+
+/** Resolve selection under inspection's bounded, local-only filesystem policy. */
+export function observeCodexCliSelectedCommand(
+  deps: CodexCliInstallProvenanceDeps,
+  resolve: (deps: ResolveCodexRuntimeDeps) => ResolveCodexRuntimeResult = resolveCodexRuntime,
+): string | null {
+  const platform = deps.platform ?? process.platform;
+  // Even the general resolver's existence checks can touch a remote Windows
+  // candidate. Deferred inspection must return before invoking it at all.
+  if (platform === "win32") return null;
+  const configDir = deps.configDir ?? getConfigDir();
+  if (!isSafeLocalInspectionPath(configDir, deps)) return null;
+  try {
+    return resolve({
+      platform,
+      env: deps.env,
+      configDir,
+      discoverAlternatives: false,
+      probeVersion: false,
+      // Runtime and shim state must use the same no-follow, nonblocking,
+      // size-bounded descriptor reads as provenance, including before selection.
+      readFileSync: path => {
+        const bytes = readBoundedFile(path, MAX_RUNTIME_STATE_BYTES, deps);
+        if (!bytes) throw new Error("inspection_state_unavailable");
+        return bytes.toString("utf8");
+      },
+      existsSync: path => resolveCandidateCommandPath(path, deps) !== null,
+    }).runtime.command ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function canonicalize(path: string, deps: CodexCliInstallProvenanceDeps): string | null {

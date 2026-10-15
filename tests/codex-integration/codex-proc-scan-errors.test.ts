@@ -53,12 +53,14 @@ describe("procfs process read failures", () => {
         expect(scanCodexSessionProcesses({ platform: "linux" })).toEqual({ kind: "unavailable" });
         expect(scanCodexAppServerProcesses(io)).toEqual({ kind: "unavailable" });
         expect(collectCodexAppServerCatalogState({ ...io, catalogMtimeMs: () => 1000 }).state).toBe("unknown");
-        expect(listCodexAppServerProcesses(io)).toEqual([]);
+        // Unrelated unreadable processes block complete observations, but do
+        // not suppress verified same-user restart targets.
+        expect(listCodexAppServerProcesses(io)).toEqual([APP_SERVER]);
         const signals: number[] = [];
-        restartCodexAppServers([APP_SERVER], {
+        restartCodexAppServers([APP_SERVER, { ...APP_SERVER, pid: 42 }, { ...APP_SERVER, pid: 43 }], {
           ...io, kill: pid => { signals.push(pid); }, isAlive: () => true, waitExit: () => true,
         });
-        expect(signals).toEqual([]);
+        expect(signals).toEqual([41]);
       });
     }
 

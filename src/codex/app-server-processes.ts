@@ -365,7 +365,7 @@ function parseUnixProcStatusUid(status: string): number | undefined {
   return Number.isSafeInteger(uid) ? uid : undefined;
 }
 
-function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
+function listUnixProcSnapshots(uid: number | undefined, requireComplete = true): ProcessSnapshot[] {
   // procfs missing on a Linux-shaped platform is an enumeration failure, not
   // "no processes" — the staleness collector must not read it as not_running.
   if (!existsSync("/proc")) throw new Error("procfs_unavailable");
@@ -386,9 +386,9 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
       if (!commandLine) continue;
       out.push({ pid, commandLine, executable: argv[0], uid: processUid });
     } catch (error) {
-      // Only disappearance proves a process exited mid-scan. Permission/I/O
-      // failures leave the table incomplete and must reach fail-closed callers.
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+      // Complete observations may ignore only disappearance. Restart target
+      // enumeration can skip an unreadable PID while retaining verified ones.
+      if (requireComplete && (error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
   }
   return out;
@@ -546,10 +546,10 @@ async function listWindowsSnapshotsAsync(): Promise<ProcessSnapshot[]> {
   return parseWindowsSnapshotOutput(output);
 }
 
-function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
+function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined, requireComplete = true): ProcessSnapshot[] {
   if (platform === "win32") return listWindowsSnapshots();
   if (platform === "darwin") return listDarwinSnapshots(getuid());
-  return listUnixProcSnapshots(getuid());
+  return listUnixProcSnapshots(getuid(), requireComplete);
 }
 
 export interface ListProcessSnapshotsOptions {
@@ -593,7 +593,7 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
     // Restart/kill contract (#476): enumeration failure means no targets —
     // never signal a process we could not verify.
     try {
-      snapshots = defaultListSnapshots(platform, getuid);
+      snapshots = defaultListSnapshots(platform, getuid, false);
     } catch {
       snapshots = [];
     }
