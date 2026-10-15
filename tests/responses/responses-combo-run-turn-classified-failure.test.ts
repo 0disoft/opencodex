@@ -165,6 +165,21 @@ for (const stream of [false, true]) {
     expect(response.text).toContain("fallback answered");
     expect(runTurnCalls).toBe(1);
   });
+
+  // Without an errorType the adapter infers authentication_error from the message, so that
+  // inferred type must not make the message look as if it added nothing.
+  test(`a credential verdict inferred from an untyped child still cools the provider (stream=${stream})`, async () => {
+    childFailure = {
+      type: "error", status: 502, code: "upstream_error",
+      message: `${"Agent transcript detail. ".repeat(30)}Authentication failed.`,
+    };
+    const response = await respond(config([
+      { provider: "cursor", model: MODEL }, { provider: "cursor", model: SIBLING_MODEL }, { provider: "fallback", model: MODEL },
+    ]), stream);
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("fallback answered");
+    expect(runTurnCalls).toBe(1);
+  });
 }
 
 test("a classified child failure keeps its verdict without displacing the formatter's own refusals", async () => {
