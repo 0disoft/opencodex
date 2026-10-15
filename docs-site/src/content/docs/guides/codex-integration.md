@@ -1630,6 +1630,6 @@ headers are refused. SOCKS credentials retain the shared handshake's 255-byte
 per-field limit and existing empty-field behavior; both SOCKS schemes resolve the
 target through the proxy. Credentials are used only for the chosen proxy handshake.
 
-The owned CONNECT-session library remains an internal integration seam. This change
-adds no session-launch command, persistent credential injection, OS proxy change,
-certificate installation, or original-Desktop authentication flow.
+The existing relay owns connection cancellation and shutdown. This change adds
+no listener, route-version API, configuration hot-reload mechanism, persistent
+credential injection, OS proxy change, or certificate installation.

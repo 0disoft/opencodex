@@ -4,7 +4,6 @@ import { createServer as createHttps } from "node:https";
 import { createServer as createTcp, type Socket } from "node:net";
 import { dialDesktopUpstream } from "../../src/lib/desktop-upstream-tunnel";
 import { desktopProxyFor } from "../../src/lib/desktop-proxy-route";
-import { createOwnedIngressManager } from "../../src/lib/opaque-proxy-lifecycle/managed-session";
 import { createCertificateAuthority, issueServerLeaf } from "../../src/claude/intercept/local-ca";
 import { forwardProxy, listenFixture } from "../helpers/desktop-egress-fixture";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -158,17 +157,6 @@ function fixtureRequest(socket: Socket, path: string): Promise<string> {
   });
 }
 
-function socketClosed(socket: Socket): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const closed = () => { clearTimeout(timer); resolve(); };
-    const timer = setTimeout(() => {
-      socket.off("close", closed);
-      reject(new Error(`Shutdown did not close the consumer socket (readableEnded=${socket.readableEnded}, writableEnded=${socket.writableEnded}, destroyed=${socket.destroyed}, allowHalfOpen=${socket.allowHalfOpen})`));
-    }, 2000);
-    socket.once("close", closed);
-  });
-}
-
 for (const kind of ["socks5", "socks5h"] as const) for (const credentials of [
   { username: "fixture:colon", password: "secret" },
   { username: "", password: "secret" },
@@ -189,72 +177,42 @@ for (const kind of ["socks5", "socks5h"] as const) for (const credentials of [
   } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
 }, 10000);
 
-test("desktop consumer authenticates to an owned ingress, refreshes only future connections, and closes on shutdown", async () => {
-  const ca = createCertificateAuthority({ commonName: "desktop-session-fixture", validityDays: 1 });
-  const leaf = issueServerLeaf(ca, "desktop-session-fixture", ["chatgpt.com"]);
-  const requests: { origin: string; path: string | undefined; socket: Socket; cookie: string | undefined; proxyAuth: unknown }[] = [];
-  let handshakes = 0;
-  const createOrigin = (name: string) => {
-    const server = createHttps({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
-      requests.push({ origin: name, path: req.url, socket: req.socket, cookie: req.headers.cookie, proxyAuth: req.headers["proxy-authorization"] });
-      const body = `${name}:${req.url}`; res.setHeader("Content-Length", Buffer.byteLength(body)); res.end(body);
-    });
-    server.on("secureConnection", () => { handshakes++; });
-    return listenFixture(server);
-  };
-  const firstOrigin = await createOrigin("first"), secondOrigin = await createOrigin("second");
-  const firstProxy = await forwardProxy("http", firstOrigin.port, leaf), secondProxy = await forwardProxy("http", secondOrigin.port, leaf);
-  const route = (id: string, port: number) => ({ id, kind: "http" as const, host: "127.0.0.1", port, username: "fixture", password: "secret" });
-  const owner = {}, username = "session", password = "synthetic-desktop-consumer-capability";
-  const authorization = "Basic " + Buffer.from(`${username}:${password}`).toString("base64");
-  const manager = createOwnedIngressManager({ owner, candidates: [route("first", firstProxy.port)],
-    allowTarget: authority => authority === "chatgpt.com:443",
-    ingress: { sessionMs: 30000, totalMs: 30000, idleMs: 10000, establishMs: 2000 },
-    manager: { sessionMs: 30000, startupMs: 2000, shutdownMs: 2000 } });
-  const sockets: Awaited<ReturnType<typeof dialDesktopUpstream>>[] = [];
+for (const kind of ["http", "https", "socks5", "socks5h"] as const) test(`desktop ${kind} consumer fully closes after upstream EOF without caller cleanup`, async () => {
+  const ca = createCertificateAuthority({ commonName: "desktop-eof-fixture", validityDays: 1 });
+  const leaf = issueServerLeaf(ca, "desktop-eof-fixture", ["chatgpt.com"]);
+  const proxyLeaf = issueServerLeaf(ca, "desktop-eof-fixture", ["localhost"]);
+  let peer: Socket | undefined, cookie: string | undefined, proxyAuth: string | string[] | undefined;
+  const origin = await listenFixture(createHttps({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
+    peer = req.socket; cookie = req.headers.cookie; proxyAuth = req.headers["proxy-authorization"];
+    const body = "fixture-before-eof"; res.setHeader("Content-Length", Buffer.byteLength(body)); res.end(body);
+  }));
+  const transport = kind === "socks5h" ? "socks5" : kind;
+  const proxy = await forwardProxy(transport, origin.port, proxyLeaf);
+  let socket: Awaited<ReturnType<typeof dialDesktopUpstream>> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const lease = await manager.start(owner, { authorized: true, authorization });
-    assert.equal(lease.host, "127.0.0.1");
-    const proxy = `http://${username}:${password}@${lease.host}:${lease.port}`;
-    const wrongCapability = new URL(proxy); wrongCapability.password = "wrong-fixture-capability";
-    await assert.rejects(dialDesktopUpstream({ proxy: wrongCapability.href, ca: ca.certPem, timeoutMs: 1000 }),
-      { message: "desktop_upstream_connection_failed" });
-    assert.equal(firstProxy.seen.length, 0); assert.equal(secondProxy.seen.length, 0);
-    assert.equal(handshakes, 0); assert.equal(requests.length, 0);
+    // Keep the real destination and certificate identity; only the fixture proxy redirects to loopback.
+    socket = await dialDesktopUpstream({ proxy: proxy.url.replace(/^socks5:/, `${kind}:`), ca: ca.certPem, proxyCa: ca.certPem });
+    assert.equal(socket.authorized, true);
+    assert.equal(socket.allowHalfOpen, false, "desktop consumer retains automatic writable-side closure");
+    assert.equal(await fixtureRequest(socket, "/peer-eof"), "fixture-before-eof");
+    assert.equal(cookie, "fixture=session"); assert.equal(proxyAuth, undefined);
+    assert.deepEqual(proxy.seen, [{ authority: "chatgpt.com:443",
+      auth: transport === "socks5" ? "fixture:secret" : "Basic " + Buffer.from("fixture:secret").toString("base64") }]);
+    assert.ok(peer); assert.equal(peer.destroyed, false);
+    assert.equal(socket.readableEnded, false); assert.equal(socket.writableEnded, false); assert.equal(socket.destroyed, false);
 
-    // Do not override the production target: only the upstream fixture proxy redirects it to loopback.
-    const first = await dialDesktopUpstream({ proxy, ca: ca.certPem }); sockets.push(first);
-    assert.equal(first.authorized, true);
-    assert.equal(await fixtureRequest(first, "/before-refresh"), "first:/before-refresh");
-    assert.equal(manager.updateRoutes(owner, manager.routeVersion(), [route("second", secondProxy.port)]), 1);
-    assert.equal(await manager.start(owner, { authorized: true, authorization }), lease);
-    assert.equal(await fixtureRequest(first, "/after-refresh"), "first:/after-refresh");
-
-    const second = await dialDesktopUpstream({ proxy, ca: ca.certPem }); sockets.push(second);
-    assert.equal(second.authorized, true);
-    assert.equal(await fixtureRequest(second, "/next-connection"), "second:/next-connection");
-    assert.deepEqual(requests.map(({ origin, path }) => ({ origin, path })), [
-      { origin: "first", path: "/before-refresh" }, { origin: "first", path: "/after-refresh" },
-      { origin: "second", path: "/next-connection" },
-    ]);
-    assert.equal(requests[0]!.socket, requests[1]!.socket);
-    assert.notEqual(requests[0]!.socket, requests[2]!.socket);
-    for (const request of requests) { assert.equal(request.cookie, "fixture=session"); assert.equal(request.proxyAuth, undefined); }
-    const upstreamConnect = [{ authority: "chatgpt.com:443", auth: "Basic " + Buffer.from("fixture:secret").toString("base64") }];
-    assert.deepEqual(firstProxy.seen, upstreamConnect); assert.deepEqual(secondProxy.seen, upstreamConnect);
-    assert.equal(handshakes, 2); assert.equal(first.destroyed, false); assert.equal(second.destroyed, false);
-
-    await Promise.all([socketClosed(first), socketClosed(second), manager.shutdown(owner)]);
-    assert.equal(first.destroyed, true); assert.equal(second.destroyed, true);
-    assert.deepEqual(manager.status(), { generation: null, state: "stopped", draining: true, poisoned: false });
-    await assert.rejects(dialDesktopUpstream({ proxy, ca: ca.certPem, timeoutMs: 1000 }),
-      { message: "desktop_upstream_connection_failed" });
-    assert.throws(() => manager.start(owner, { authorized: true, authorization }), /Manager unavailable/);
-    assert.equal(requests.length, 3); assert.equal(handshakes, 2);
-    assert.deepEqual(firstProxy.seen, upstreamConnect); assert.deepEqual(secondProxy.seen, upstreamConnect);
-  } finally {
-    for (const socket of sockets) socket.destroy();
-    await manager.shutdown(owner); await firstProxy.close(); await secondProxy.close();
-    await firstOrigin.close(); await secondOrigin.close();
-  }
-}, 15000);
+    let consumerError: Error | undefined;
+    socket.once("error", error => { consumerError = error; });
+    const closed = new Promise<boolean>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Consumer did not fully close after upstream EOF")), 2000);
+      socket!.once("close", hadError => { clearTimeout(timer); resolve(hadError); });
+    });
+    // Only the upstream initiates termination. No consumer end/destroy or fixture cleanup occurs before close.
+    peer.end();
+    assert.equal(await closed, false);
+    assert.equal(consumerError, undefined);
+    assert.equal(socket.readableEnded, true); assert.equal(socket.writableEnded, true); assert.equal(socket.destroyed, true);
+    assert.equal(proxy.seen.length, 1, "EOF never redials or replays the request");
+  } finally { clearTimeout(timer); socket?.destroy(); await proxy.close(); await origin.close(); }
+}, 10000);

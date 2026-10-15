@@ -85,14 +85,6 @@ function validateOptions(candidates: readonly OpaqueProxyRoute[], timeoutMs: num
   }
 }
 
-/** Validated owned snapshot; refreshing a caller's routes cannot mutate an active dial. */
-export function snapshotProxyRoutes(candidates: readonly OpaqueProxyRoute[]): readonly OpaqueProxyRoute[] {
-  validateOptions(candidates, 1000, 8192);
-  return Object.freeze(candidates.map(p => Object.freeze(p.kind === 'https'
-    ? {...p, proxyCa: Buffer.isBuffer(p.proxyCa) ? Buffer.from(p.proxyCa) : p.proxyCa}
-    : {...p})));
-}
-
 function connectOne(authority: string, proxy: OpaqueProxyRoute, { signal, timeoutMs, maxHeaderBytes, authorize }: AttemptOptions): Promise<Socket> {
   if (proxy.kind === 'socks5' || proxy.kind === 'socks5h') return connectSocks(authority, proxy, { signal, timeoutMs, maxHeaderBytes, authorize });
   return new Promise<Socket>((resolve, reject) => {

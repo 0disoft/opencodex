@@ -420,8 +420,7 @@ Only the proxy handshake carries proxy credentials. The raw upgraded socket rema
 the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
-`tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer and
-owned-session composition; `tests/clients/desktop-compatibility-relay.test.ts`
+`tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
 preserves the real relay’s fixed-target and opaque upgrade contracts.
 
 ## Explicit opaque proxy candidates
@@ -456,44 +455,7 @@ replayed. Bounded SOCKS frame reads preserve early opaque bytes after CONNECT.
 `tests/lib/opaque-proxy-tunnel.test.ts` and
 `tests/lib/opaque-proxy-tunnel-protocol.test.ts` cover these local transport contracts.
 
-## Owned opaque proxy sessions
-
-`src/lib/opaque-proxy-lifecycle/managed-ingress.ts` provides a loopback-only CONNECT
-ingress using raw TCP accept so Bun counts even clients that send no HTTP bytes,
-with an ephemeral capability, an authority predicate, connection limits,
-header/establishment/idle/session deadlines and owned socket cleanup. It consumes
-client proxy authorization locally rather than forwarding it. Its diagnostic state
-contains bounded counts and lifecycle labels, not target bodies or credentials.
-`src/lib/opaque-proxy-lifecycle/connect-request.ts` requires an exact Host/authority
-match and rejects ambiguous authentication, request bodies, folded headers and
-control bytes before dispatch. `tests/lib/opaque-proxy-lifecycle-parser.test.ts`
-covers this narrow strict CONNECT-only parser.
-`src/lib/opaque-proxy-lifecycle/owner-manager.ts` serializes start ownership by
-generation, reuses healthy workers, retires stale starts and gives intentional stop
-precedence over restart. `src/lib/opaque-proxy-lifecycle/managed-session.ts` composes
-the manager, ingress and explicitly authorized dial without installing a service.
-`tests/lib/opaque-proxy-lifecycle.test.ts` and
-`tests/lib/opaque-proxy-lifecycle-transport.test.ts` bind these lifecycle and real
-loopback composition contracts. These modules have no production registration,
-Desktop launch/configuration writes, OS proxy changes, CA installation, or account
-integration; successful local composition is not original-Desktop compatibility.
-
-`tests/lib/opaque-proxy-session-protocol.test.ts` exercises the complete managed
-session through all four proxy schemes with independently verified target TLS,
-including a coalesced CONNECT/ClientHello, large half-closed streams, capability
-rejection before dial, stop/session expiry and certificate refusals. These are
-loopback composition tests; they do not establish original-Desktop integration.
-
-The owned manager's explicit `updateRoutes` operation uses owner identity and a
-compare-and-swap revision, monotonic start epoch and observed session generation. It validates and snapshots routes before changing them,
-including copies of mutable HTTPS trust bytes. The existing listener and capability
-remain fixed; a successfully authenticated CONNECT captures its route list before
-queueing. Established and queued connections never migrate or replay during refresh.
-Stopped managers can stage a next route, but shutdown, failed disposal and stale
-revisions refuse updates. This is a process-local seam, not OS proxy discovery or
-a Desktop attachment API. `tests/lib/opaque-proxy-route-refresh.test.ts` verifies
-real CONNECT connections across a refresh, queue pinning and rejected updates.
-Unauthenticated CONNECT receives a standard Basic proxy challenge with a fixed
-realm; it never reveals the session capability. A challenge-aware client must
-still obtain that capability through a separately authorized integration. This
-does not establish that the original Desktop implements proxy authentication.
+The existing Desktop relay owns connection cancellation and shutdown. Each new
+dial selects its configured proxy; established connections keep their original
+transport. This module adds no listener, session manager, route revision API or
+configuration hot-reload mechanism.
