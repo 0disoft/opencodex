@@ -52,6 +52,8 @@ multi-call pairing, overlap and lifecycle release.
   Counters are shared with empty-completion retries. Usage includes the terminal rejected leg.
   `tests/advisor/advisor-continuation-limit.test.ts` covers a worker that never stops calling;
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
+  Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
+  final worker output is checked against current client declarations, including direct encoders.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
