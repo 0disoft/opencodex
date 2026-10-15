@@ -26,6 +26,7 @@ export type AccountReadinessStatus =
   | "claude_only"      // Gemini is exhausted (100%), Claude is available
   | "gemini_only"      // Claude is exhausted (100%), Gemini is available
   | "fully_exhausted"  // Both models (or all available windows) are exhausted (>= 100%)
+  | "unknown"
   | "ready"            // Generic non-Antigravity ready
   | "exhausted";       // Generic non-Antigravity exhausted
 
@@ -209,7 +210,8 @@ export function analyzeAccountQuota(account: OAuthAccountRow, providerName = "go
   }
 
   const overallUsedMax = allPercents.length > 0 ? roundPercent(Math.max(...allPercents)) : 0;
-  const freeHeadroom = roundPercent(Math.max(0, 100 - overallUsedMax));
+  const hasReading = allPercents.length > 0;
+  const freeHeadroom = hasReading ? roundPercent(Math.max(0, 100 - overallUsedMax)) : 0;
 
   // Model-specific exhaustion
   const hasGemini = gemVals.length > 0;
@@ -220,7 +222,10 @@ export function analyzeAccountQuota(account: OAuthAccountRow, providerName = "go
   let fullyExhausted: boolean;
   let readinessStatus: AccountReadinessStatus;
 
-  if (isAntigravity && (hasGemini || hasClaude)) {
+  if (!hasReading) {
+    fullyExhausted = false;
+    readinessStatus = "unknown";
+  } else if (isAntigravity && (hasGemini || hasClaude)) {
     if (hasGemini && hasClaude) {
       if (geminiExhausted && claudeExhausted) {
         fullyExhausted = true;
@@ -314,11 +319,11 @@ export function filterAccounts(
     // 2. Status filter
     switch (filter) {
       case "with_limits":
-        return !item.account.quota || item.hasAnyLimitsLeft;
+        return item.hasAnyLimitsLeft;
       case "with_limits_gemini":
-        return !item.account.quota || (Boolean(item.gemini5h || item.geminiWeekly) && !item.geminiExhausted);
+        return (Boolean(item.gemini5h || item.geminiWeekly) && !item.geminiExhausted);
       case "with_limits_claude":
-        return !item.account.quota || (Boolean(item.claude5h || item.claudeWeekly) && !item.claudeExhausted);
+        return (Boolean(item.claude5h || item.claudeWeekly) && !item.claudeExhausted);
       case "gemini_exhausted":
         return item.geminiExhausted;
       case "claude_exhausted":

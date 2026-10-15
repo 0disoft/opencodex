@@ -217,7 +217,7 @@ export function useProviderAccountPools(deps: {
     }
   }, []);
 
-  const fetchAccountSets = useCallback(async (providers: string[], refresh = false, targetAccountId?: string): Promise<boolean> => {
+  const fetchAccountSets = useCallback(async (providers: string[], refresh = false, targetAccountId?: string, awaitQuota = false): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
     const uniqueProviders = [...new Set(providers)];
     setAccountLoadStates(current => {
@@ -285,7 +285,7 @@ export function useProviderAccountPools(deps: {
             return false;
           }
         };
-        if (refresh) return await enrich();
+        if (refresh || awaitQuota) return await enrich();
         void enrich();
         return true;
       } catch {
@@ -304,7 +304,7 @@ export function useProviderAccountPools(deps: {
     return results.every(Boolean);
   }, [aliveRef, apiBase, readRoster, supersededByFresher]);
 
-  const fetchKeyPools = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
+  const fetchKeyPools = useCallback(async (providers: string[], refresh = false, awaitQuota = false): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
     const results = await Promise.all([...new Set(providers)].map(async name => {
       const key = `key:${name}`;
@@ -347,7 +347,7 @@ export function useProviderAccountPools(deps: {
             return false;
           }
         };
-        if (refresh) return await enrich();
+        if (refresh || awaitQuota) return await enrich();
         void enrich();
         return true;
       } catch { return failed(); }

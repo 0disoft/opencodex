@@ -219,7 +219,7 @@ export default function ProviderAuthPanel({
       const valid = ["with_limits", "with_limits_gemini", "with_limits_claude", "all", "gemini_exhausted", "claude_exhausted", "fully_exhausted"];
       if (saved && valid.includes(saved)) return saved as AccountFilterKey;
     } catch { /* localStorage unavailable */ }
-    return "with_limits";
+    return "all";
   });
 
   const [accountSort, setAccountSort] = useState<AccountSortKey>(() => {
@@ -269,7 +269,6 @@ export default function ProviderAuthPanel({
     try { localStorage.setItem("ocx_account_view_mode", next); } catch { /* ignore */ }
   };
   const [accountSearch, setAccountSearch] = useState("");
-  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
 
   const showModelFamilies = item.name === "google-antigravity";
 
@@ -379,14 +378,6 @@ export default function ProviderAuthPanel({
 
   return (
     <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
-      {/*
-        The refresh control is in the section HEAD, not only at the foot of the list.
-        Every account renders a stack of 5-hour/weekly/Fable bars, so with two accounts
-        the footer copy sits well below the fold: an operator looking straight at stale
-        bars had to scroll past all of them to find the button that re-reads them. The
-        header keeps it beside the numbers it refreshes; the footer copy stays where it
-        is, next to "Add account", because that is the account-management cluster.
-      */}
       <div className="pwi-auth-head">
         <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
         {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && (
@@ -436,13 +427,12 @@ export default function ProviderAuthPanel({
               />
             )}
 
-            {/* Only show initial login row when no accounts exist yet */}
-            {accounts.length === 0 && (
+            {(
               <div className="pwi-auth-status-row">
                 <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                 <span className="pwi-auth-status-text">
                   {loggedIn
-                    ? (oauth?.email ?? t("pws.loggedInTitle"))
+                    ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
                     : (oauth?.error || t("pws.notLoggedInTitle"))}
                 </span>
                 <span className="pwi-auth-actions">
@@ -511,8 +501,6 @@ export default function ProviderAuthPanel({
             {accounts.length > 0 && (
               <>
                 <ProviderAccountsToolbar
-                  apiBase={apiBase}
-                  providerName={item.name}
                   analyzedList={analyzedAccounts}
                   showModelFamilies={showModelFamilies}
                   filter={effectiveAccountFilter}
@@ -525,10 +513,6 @@ export default function ProviderAuthPanel({
                   onViewModeChange={handleViewModeChange}
                   searchQuery={accountSearch}
                   onSearchQueryChange={setAccountSearch}
-                  refreshingAll={refreshingQuota}
-                  onRefreshAll={canRefreshQuota ? () => { void refreshQuota(); } : undefined}
-                  quotaRefreshResultText={quotaRefreshResult?.text}
-                  quotaRefreshResultOk={quotaRefreshResult?.ok}
                 />
 
                 {filteredAndSortedAccounts.length > 0 ? (
@@ -554,13 +538,7 @@ export default function ProviderAuthPanel({
                             onChange={threshold => authHandlers.onAccountThreshold!(item.name, analyzed.account, threshold)}
                           />
                         ) : undefined}
-                        refreshing={refreshingQuota && (refreshingAccountId === analyzed.account.id || !refreshingAccountId)}
-                        refreshBusy={refreshingQuota}
                         onSwitch={acc => void authHandlers.onSwitchAccount(item.name, acc)}
-                        onRefreshSingle={canRefreshQuota ? acc => {
-                          setRefreshingAccountId(acc.id);
-                          void refreshQuota(acc.id).finally(() => setRefreshingAccountId(null));
-                        } : undefined}
                         onEditAlias={acc => void authHandlers.onEditAlias(item.name, "oauth", acc.id, acc.alias)}
                         onRemove={acc => setAccountToRemove(acc)}
                         onReauth={acc => void authHandlers.onReauth(item.name, acc.id)}
@@ -634,23 +612,6 @@ export default function ProviderAuthPanel({
                   onClick={() => openLogin(true)} disabled={busy || Boolean(switchingAccountId) || (item.name === "kiro" && Boolean(kiroChooser))}>
                   {t("pws.addAccount")}
                 </button>
-                {canRefreshQuota && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    disabled={refreshingQuota || busy || Boolean(switchingAccountId)}
-                    onClick={() => { void refreshQuota(); }}
-                  >
-                    <IconRefresh width={14} height={14} aria-hidden="true" />
-                    {" "}
-                    {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-                  </button>
-                )}
-                {/*
-                  The result line lives in the section head only. Rendering it in both
-                  places would announce one refresh twice to a screen reader, since both
-                  spans carry role="status".
-                */}
               </div>
             )}
           </>

@@ -118,7 +118,7 @@ export interface ProviderAuthHandlers {
    * Force a fresh quota read for this provider, resolving with whether it succeeded.
    *
    * Optional: the Codex account pool owns its own refresh control, and a caller that
-   * cannot force a read simply renders no button rather than one that does nothing.
+   * cannot read quota simply renders no button rather than one that does nothing.
    */
   onRefreshQuota?: (provider: string, accountId?: string) => Promise<boolean>;
 }

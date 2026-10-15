@@ -1,4 +1,3 @@
-import { usePoolTokensEstimate } from "./account-tokens-estimate";
 /**
  * ProviderAccountsToolbar.tsx — Top statistics summary, global quota refresh,
  * unified single dropdown filter button, email/alias/masked toggle, card/compact
@@ -6,7 +5,7 @@ import { usePoolTokensEstimate } from "./account-tokens-estimate";
  */
 import { useState, useRef, useEffect } from "react";
 import { useT } from "../../i18n/shared";
-import { IconRefresh, IconSearch, IconX } from "../../icons";
+import { IconSearch, IconX } from "../../icons";
 import type {
   AccountDisplayKey,
   AccountFilterKey,
@@ -14,14 +13,7 @@ import type {
   AccountViewModeKey,
   AnalyzedAccountQuota,
 } from "./account-quota-analysis";
-import type { Page } from "../../app-routing";
-
-/** The estimate's source link is a hash route to the Logs page, not an in-page anchor. */
-const LOGS_PAGE: Page = "logs";
-
 export interface ProviderAccountsToolbarProps {
-  apiBase?: string;
-  providerName?: string;
   analyzedList: AnalyzedAccountQuota[];
   showModelFamilies?: boolean;
   filter: AccountFilterKey;
@@ -34,15 +26,9 @@ export interface ProviderAccountsToolbarProps {
   onViewModeChange: (next: AccountViewModeKey) => void;
   searchQuery: string;
   onSearchQueryChange: (next: string) => void;
-  refreshingAll: boolean;
-  onRefreshAll?: () => void;
-  quotaRefreshResultText?: string | null;
-  quotaRefreshResultOk?: boolean;
 }
 
 export default function ProviderAccountsToolbar({
-  apiBase = "",
-  providerName = "google-antigravity",
   analyzedList,
   showModelFamilies = false,
   filter,
@@ -55,20 +41,8 @@ export default function ProviderAccountsToolbar({
   onViewModeChange,
   searchQuery,
   onSearchQueryChange,
-  refreshingAll,
-  onRefreshAll,
-  quotaRefreshResultText,
-  quotaRefreshResultOk,
 }: ProviderAccountsToolbarProps) {
   const t = useT();
-
-  const tokensEstimate = usePoolTokensEstimate({
-    apiBase,
-    providerName,
-    analyzedList,
-    showModelFamilies,
-    refreshingAll,
-  });
 
   const [limitsMenuOpen, setLimitsMenuOpen] = useState(false);
   const limitsMenuRef = useRef<HTMLDivElement>(null);
@@ -144,19 +118,20 @@ export default function ProviderAccountsToolbar({
   const claudeExhaustedCount = analyzedList.filter(a => a.claudeExhausted).length;
 
   // Detailed 5h and Weekly counts for Claude & Gemini
-  const claude5hAvailable = analyzedList.filter(a => (a.claude5h?.percent ?? 0) < 99.5 && !a.account.needsReauth).length;
+  const claude5hAvailable = analyzedList.filter(a => a.claude5h !== undefined && a.claude5h.percent < 99.5 && !a.account.needsReauth && !a.account.paused).length;
   const claude5hExhausted = analyzedList.filter(a => (a.claude5h?.percent ?? 0) >= 99.5).length;
-  const claudeWeeklyAvailable = analyzedList.filter(a => (a.claudeWeekly?.percent ?? 0) < 99.5 && !a.account.needsReauth).length;
+  const claudeWeeklyAvailable = analyzedList.filter(a => a.claudeWeekly !== undefined && a.claudeWeekly.percent < 99.5 && !a.account.needsReauth && !a.account.paused).length;
   const claudeWeeklyExhausted = analyzedList.filter(a => (a.claudeWeekly?.percent ?? 0) >= 99.5).length;
 
-  const gemini5hAvailable = analyzedList.filter(a => (a.gemini5h?.percent ?? 0) < 99.5 && !a.account.needsReauth).length;
+  const gemini5hAvailable = analyzedList.filter(a => a.gemini5h !== undefined && a.gemini5h.percent < 99.5 && !a.account.needsReauth && !a.account.paused).length;
   const gemini5hExhausted = analyzedList.filter(a => (a.gemini5h?.percent ?? 0) >= 99.5).length;
-  const geminiWeeklyAvailable = analyzedList.filter(a => (a.geminiWeekly?.percent ?? 0) < 99.5 && !a.account.needsReauth).length;
+  const geminiWeeklyAvailable = analyzedList.filter(a => a.geminiWeekly !== undefined && a.geminiWeekly.percent < 99.5 && !a.account.needsReauth && !a.account.paused).length;
   const geminiWeeklyExhausted = analyzedList.filter(a => (a.geminiWeekly?.percent ?? 0) >= 99.5).length;
 
-  const fullyExhaustedCount = analyzedList.filter(a => a.fullyExhausted || (!a.hasAnyLimitsLeft && !a.account.needsReauth)).length;
+  const fullyExhaustedCount = analyzedList.filter(a => a.fullyExhausted).length;
   const needsReauthCount = analyzedList.filter(a => Boolean(a.account.needsReauth) || a.account.health?.status === "reauth_required").length;
-  const readyCount = analyzedList.filter(a => a.hasAnyLimitsLeft && !a.account.needsReauth).length;
+  const unknownCount = analyzedList.filter(a => a.readinessStatus === "unknown").length;
+  const readyCount = analyzedList.filter(a => a.hasAnyLimitsLeft && !a.account.needsReauth && !a.account.paused).length;
 
   let activeFilterLabel: string;
   let activeFilterIcon: string;
@@ -213,30 +188,12 @@ export default function ProviderAccountsToolbar({
               <strong style={{ fontSize: "14px", fontWeight: 700 }}>{totalCount}</strong>
               <span className="pwi-stat-subtag">{t("pws.statsInPool")}</span>
               <span className="pwi-stat-tag-green">✓ {readyCount} {t("pws.statsInService")}</span>
+              {unknownCount > 0 && <span className="pwi-stat-subtag">{unknownCount} {t("pws.quotaUnknown")}</span>}
               {needsReauthCount > 0 && (
                 <span className="pwi-stat-tag-warn">⚠️ {needsReauthCount} {t("pws.reauthNeededShort")}</span>
               )}
             </div>
 
-            {onRefreshAll && (
-              <div className="pwi-global-refresh-box">
-                {quotaRefreshResultText && (
-                  <span className={quotaRefreshResultOk ? "pws-status-ok" : "pws-status-warn"}>
-                    {quotaRefreshResultText}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm pwi-btn-refresh-all"
-                  disabled={refreshingAll}
-                  onClick={onRefreshAll}
-                >
-                  <IconRefresh width={13} height={13} className={refreshingAll ? "pwi-spin-inline" : ""} aria-hidden="true" />
-                  {" "}
-                  {refreshingAll ? t("codexAuth.refreshingQuota") : t("pws.refreshAllQuotas")}
-                </button>
-              </div>
-            )}
           </div>
 
           <div className={showModelFamilies ? "pwi-tokens-grid" : "pwi-tokens-grid pwi-tokens-grid--dual"}>
@@ -258,7 +215,7 @@ export default function ProviderAccountsToolbar({
                       {claude5hExhausted > 0 ? (
                         <span className="pwi-stat-tag-warn">{claude5hExhausted} {t("pws.statsExhaustShort")}</span>
                       ) : (
-                        <span className="pwi-stat-tag-orange">✓ {t("pws.statsReady")}</span>
+                        <span className="pwi-stat-tag-orange">{t(claude5hAvailable > 0 ? "pws.statsReady" : "pws.quotaUnknown")}</span>
                       )}
                     </div>
                     <div className="pwi-tokens-metric-row">
@@ -267,7 +224,7 @@ export default function ProviderAccountsToolbar({
                       {claudeWeeklyExhausted > 0 ? (
                         <span className="pwi-stat-tag-warn">{claudeWeeklyExhausted} {t("pws.statsExhaustShort")}</span>
                       ) : (
-                        <span className="pwi-stat-tag-orange">✓ {t("pws.statsReady")}</span>
+                        <span className="pwi-stat-tag-orange">{t(claudeWeeklyAvailable > 0 ? "pws.statsReady" : "pws.quotaUnknown")}</span>
                       )}
                     </div>
                   </div>
@@ -289,7 +246,7 @@ export default function ProviderAccountsToolbar({
                       {gemini5hExhausted > 0 ? (
                         <span className="pwi-stat-tag-warn">{gemini5hExhausted} {t("pws.statsExhaustShort")}</span>
                       ) : (
-                        <span className="pwi-stat-tag-blue">✓ {t("pws.statsReady")}</span>
+                        <span className="pwi-stat-tag-blue">{t(gemini5hAvailable > 0 ? "pws.statsReady" : "pws.quotaUnknown")}</span>
                       )}
                     </div>
                     <div className="pwi-tokens-metric-row">
@@ -298,7 +255,7 @@ export default function ProviderAccountsToolbar({
                       {geminiWeeklyExhausted > 0 ? (
                         <span className="pwi-stat-tag-warn">{geminiWeeklyExhausted} {t("pws.statsExhaustShort")}</span>
                       ) : (
-                        <span className="pwi-stat-tag-blue">✓ {t("pws.statsReady")}</span>
+                        <span className="pwi-stat-tag-blue">{t(geminiWeeklyAvailable > 0 ? "pws.statsReady" : "pws.quotaUnknown")}</span>
                       )}
                     </div>
                   </div>
@@ -345,7 +302,7 @@ export default function ProviderAccountsToolbar({
                   <div className="pwi-tokens-card-metrics">
                     <div className="pwi-tokens-metric-row">
                       <span className="pwi-tokens-metric-value pwi-text-orange">{withLimitsCount} {t("pws.statsAvailShort")}</span>
-                      <span className="pwi-stat-tag-orange">✓ {t("pws.statsReady")}</span>
+                      <span className="pwi-stat-tag-orange">{t(withLimitsCount > 0 ? "pws.statsReady" : "pws.quotaUnknown")}</span>
                     </div>
                   </div>
                 </div>
@@ -367,109 +324,6 @@ export default function ProviderAccountsToolbar({
           </div>
         </div>
 
-        {/* 1b. Remaining Tokens 3-Column Grid. Hidden until some account has a quota
-            reading: with none, every figure would be 0 and read as an exhausted pool. */}
-        {tokensEstimate.hasReadings && (<>
-        <div className="pwi-stats-divider" />
-        <div className="pwi-tokens-section">
-          <div className="pwi-tokens-header-bar">
-            <span className="pwi-stat-lbl">{t("pws.tokensEstimateTitle")}</span>
-            <a
-              href={`#${LOGS_PAGE}`}
-              className="pwi-stat-hint-link"
-              title={t("pws.tokensCalibratedTooltip")}
-            >
-              ⚡ {t(tokensEstimate.isCalibratedFromLogs ? "pws.tokensCalibratedFromLogs" : "pws.tokensEstimatedBaseline")}
-            </a>
-          </div>
-
-          <div className={showModelFamilies ? "pwi-tokens-grid" : "pwi-tokens-grid pwi-tokens-grid--dual"}>
-            {showModelFamilies ? (
-              <>
-                {/* Column 1: Claude */}
-                <div className="pwi-tokens-card pwi-tokens-card--claude">
-                  <div className="pwi-tokens-card-head">
-                    <span className="pwi-tokens-dot pwi-tokens-dot--orange">●</span>
-                    <span className="pwi-tokens-card-title">{t("pws.tokensColClaude")}</span>
-                  </div>
-                  <div className="pwi-tokens-card-metrics">
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel5h")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-orange">{tokensEstimate.claude5h?.smart ?? "0M"}</span>
-                    </div>
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel7d")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-orange">{tokensEstimate.claudeWeekly?.smart ?? "0M"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Column 2: Gemini */}
-                <div className="pwi-tokens-card pwi-tokens-card--gemini">
-                  <div className="pwi-tokens-card-head">
-                    <span className="pwi-tokens-dot pwi-tokens-dot--blue">●</span>
-                    <span className="pwi-tokens-card-title">{t("pws.tokensColGemini")}</span>
-                  </div>
-                  <div className="pwi-tokens-card-metrics">
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel5h")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-blue">{tokensEstimate.gemini5h?.smart ?? "0M"}</span>
-                    </div>
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel7d")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-blue">{tokensEstimate.geminiWeekly?.smart ?? "0M"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Column 3: Total */}
-                <div className="pwi-tokens-card pwi-tokens-card--total">
-                  <div className="pwi-tokens-card-head">
-                    <span className="pwi-tokens-dot pwi-tokens-dot--green">●</span>
-                    <span className="pwi-tokens-card-title">{t("pws.tokensColTotal")}</span>
-                  </div>
-                  <div className="pwi-tokens-card-metrics">
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel5h")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-green">{tokensEstimate.total5h.smart}</span>
-                    </div>
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-label">{t("pws.tokensLabel7d")}:</span>
-                      <span className="pwi-tokens-metric-value pwi-text-green">{tokensEstimate.totalWeekly.smart}</span>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="pwi-tokens-card pwi-tokens-card--claude">
-                  <div className="pwi-tokens-card-head">
-                    <span className="pwi-tokens-dot pwi-tokens-dot--orange">●</span>
-                    <span className="pwi-tokens-card-title">{t("pws.tokensGeneric5h")}</span>
-                  </div>
-                  <div className="pwi-tokens-card-metrics">
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-value pwi-text-orange">{tokensEstimate.total5h.smart}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pwi-tokens-card pwi-tokens-card--total">
-                  <div className="pwi-tokens-card-head">
-                    <span className="pwi-tokens-dot pwi-tokens-dot--green">●</span>
-                    <span className="pwi-tokens-card-title">{t("pws.tokensGenericWeekly")}</span>
-                  </div>
-                  <div className="pwi-tokens-card-metrics">
-                    <div className="pwi-tokens-metric-row">
-                      <span className="pwi-tokens-metric-value pwi-text-green">{tokensEstimate.totalWeekly.smart}</span>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-        </>)}
       </div>
 
       {/* 2. Balanced 2-Row Controls Panel */}

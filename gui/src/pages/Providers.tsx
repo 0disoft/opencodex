@@ -65,9 +65,9 @@ export function useQuotaRefreshCoordinator(apiBase: string) {
     }
   }, []);
   const settleQuotaRefresh = useCallback((ok: boolean, epoch: number) => finish(epoch, "report", ok), [finish]);
-  const beginQuotaRefresh = useCallback((readAccounts?: () => Promise<boolean>): Promise<boolean> => {
+  const beginQuotaRefresh = useCallback((readAccounts?: () => Promise<boolean>, force = true): Promise<boolean> => {
     if (!mountedRef.current) return Promise.resolve(false);
-    const epoch = invalidateProviderQuotas(true);
+    const epoch = invalidateProviderQuotas(force);
     const settled = new Promise<boolean>(resolve => {
       ticketsRef.current.set(epoch, { resolve, accounts: readAccounts ? undefined : true });
     });
@@ -438,12 +438,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   } = jsonEditor;
 
   /**
-   * Force a fresh quota read for one provider and resolve with what actually happened.
+   * Read cached quota for one provider and resolve after both displayed reads settle.
    *
    * Declared here because it needs `fetchAccountSets` from the account-pool hook above.
    * Per-account bars come from a different read (`&quota=1` inside `fetchAccountSets`),
    * so both must fire or the rows beside each account keep their old numbers. That read's
-   * forced enrichment must settle as well as the matching provider-report epoch.
+   * cached enrichment must settle as well as the matching provider-report epoch.
    */
   const refreshProviderQuota = useCallback((provider: string, accountId?: string): Promise<boolean> => {
     const configured = config?.providers[provider];
@@ -451,11 +451,11 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const readAccounts = configured && isAccountProvider(provider, configured)
       ? () => codexPool.load(true, { validatePending: true })
       : mode === "oauth"
-        ? () => fetchAccountSets([provider], true, accountId)
+        ? () => fetchAccountSets([provider], false, accountId, true)
         : mode === "forward" || mode === "local"
           ? undefined
-          : () => fetchKeyPools([provider], true);
-    return beginQuotaRefresh(readAccounts);
+          : () => fetchKeyPools([provider], false, true);
+    return beginQuotaRefresh(readAccounts, false);
   }, [config, codexPool, fetchAccountSets, fetchKeyPools, beginQuotaRefresh]);
 
   /**

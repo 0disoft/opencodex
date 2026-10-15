@@ -619,3 +619,27 @@ test.each([true, false])("late quota failure=%s preserves newer selection and ma
     expect(row.quotaUnavailable).toBe(failure);
   }
 });
+
+for (const kind of ["oauth", "api-key"] as const) {
+  test(`${kind} cached tab refresh awaits quota without forcing upstream`, async () => {
+    const quota = deferred<Response>();
+    const started = deferred<void>();
+    const row = { id: "cached", masked: "masked", active: true, quotaMode: "probe" };
+    respond = async url => {
+      if (url.includes("quota=1")) { started.resolve(); return quota.promise; }
+      return Response.json({ accounts: [row], keys: [row] });
+    };
+    let result!: Promise<boolean>;
+    let settled = false;
+    await act(async () => {
+      result = kind === "oauth" ? pools.fetchAccountSets(["fixture"], false, undefined, true)
+        : pools.fetchKeyPools(["fixture"], false, true);
+      void result.then(() => { settled = true; });
+      await started.promise;
+    });
+    expect(settled).toBe(false);
+    expect(requests[1].url).toContain("quota=1");
+    expect(requests.some(request => request.url.includes("refresh=1"))).toBe(false);
+    await act(async () => { quota.resolve(new Response(null, { status: 503 })); expect(await result).toBe(false); });
+  });
+}

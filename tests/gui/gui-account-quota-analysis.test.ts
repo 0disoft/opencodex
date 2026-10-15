@@ -7,7 +7,6 @@ import {
   sortAccounts,
   type AccountFilterKey,
 } from "../../gui/src/components/provider-workspace/account-quota-analysis";
-import { calculatePoolTokensEstimate } from "../../gui/src/components/provider-workspace/account-tokens-estimate";
 import type { OAuthAccountRow } from "../../gui/src/components/provider-workspace/types";
 
 describe("account-quota-analysis", () => {
@@ -230,13 +229,16 @@ describe("account-quota-analysis", () => {
     expect(analyzed.readinessStatus).toBe("ready");
     expect(analyzed.hasAnyLimitsLeft).toBe(true);
   });
-  test("the token estimate reports no readings while every account's quota is unknown", () => {
-    const unknown = ["a", "b"].map(id => analyzeAccountQuota({ id, email: id + "@example.com", active: id === "a", quotaMode: "probe", quotaUnavailable: true }, "google-antigravity"));
-    expect(calculatePoolTokensEstimate(unknown, "google-antigravity").hasReadings).toBe(false);
-    const measured = analyzeAccountQuota({
-      id: "c", email: "c@example.com", active: false, quotaMode: "probe",
-      quota: { weeklyPercent: 10, weeklyResetAt: 1_800_000_000 },
-    }, "xai");
-    expect(calculatePoolTokensEstimate([measured], "xai").hasReadings).toBe(true);
+  test("unmeasured quota is unknown and excluded from available filters", () => {
+    for (const provider of ["google-antigravity", "xai"]) {
+      const unknown = analyzeAccountQuota({ id: "unknown", active: true, quotaMode: "probe" }, provider);
+      expect(unknown.readinessStatus).toBe("unknown");
+      expect(unknown.hasAnyLimitsLeft).toBe(false);
+      expect(unknown.fullyExhausted).toBe(false);
+      expect(filterAccounts([unknown], "with_limits", "")).toEqual([]);
+      expect(filterAccounts([unknown], "with_limits_gemini", "")).toEqual([]);
+      expect(filterAccounts([unknown], "with_limits_claude", "")).toEqual([]);
+      expect(filterAccounts([unknown], "all", "")).toEqual([unknown]);
+    }
   });
 });

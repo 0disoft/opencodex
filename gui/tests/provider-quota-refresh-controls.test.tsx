@@ -300,3 +300,16 @@ test.each([
   await act(async () => { confirm!.click(); await Promise.resolve(); });
   expect(removed).toEqual(["provider-a:shared"]);
 });
+
+test("signed-in accounts keep logout and one tab refresh, with unknown quota excluded from availability", async () => {
+  const loggedOut: string[] = [];
+  await render(<ProviderAuthPanel item={oauthItem} apiBase="" accounts={[account]}
+    authHandlers={authHandlers({ onRefreshQuota: async () => true, onLogout: provider => { loggedOut.push(provider); } })} />);
+  expect(Array.from(host.querySelectorAll("button")).filter(button => button.textContent?.includes("Refresh quotas"))).toHaveLength(1);
+  expect(host.querySelector('[title="Refresh account quota"]')).toBeNull();
+  expect(host.textContent).toContain("Quota unknown");
+  expect(host.textContent).toContain("0 avail");
+  expect(host.textContent).not.toContain("Estimated remaining tokens");
+  await act(async () => { findButton(en["prov.logout"])!.click(); });
+  expect(loggedOut).toEqual([oauthItem.name]);
+});

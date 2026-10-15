@@ -287,15 +287,15 @@ export default function ProviderWorkspaceShell({
           // That is a FAILED refresh, and it must be reported: returning silently here
           // would leave an operator's button spinning until the component unmounted.
           if (!data) {
-            if (quotaForceRefresh) onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
+            onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
             return;
           }
           // A successful endpoint response is authoritative, including an empty report list.
           const next = freshQuotaReportsFromResponse(data.reports);
           setQuotaReports(next);
           writeSessionListCache(quotasCacheKey, next);
-          // Report only for a forced read: an ordinary revalidation has no operator waiting on it.
-          if (quotaForceRefresh) onQuotaRefreshSettled?.(true, quotaRefreshEpoch);
+          // Settle cached tab reads too; the coordinator ignores epochs without an operator ticket.
+          onQuotaRefreshSettled?.(true, quotaRefreshEpoch);
         })
         .catch(() => {
           if (cancelled) return;
@@ -305,7 +305,7 @@ export default function ProviderWorkspaceShell({
             writeSessionListCache(quotasCacheKey, next);
             return next;
           });
-          if (quotaForceRefresh) onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
+          onQuotaRefreshSettled?.(false, quotaRefreshEpoch);
         })
         .finally(() => { bounded.clear(); if (!cancelled) setQuotasLoading(false); });
     }, 0);

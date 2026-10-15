@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { copyTextToClipboard } from "../../oauth-health-display";
 import { useT, useI18n } from "../../i18n/shared";
 import type { TKey } from "../../i18n/en";
-import { IconPencil, IconRefresh, IconTrash } from "../../icons";
+import { IconPencil, IconTrash } from "../../icons";
 import { formatResetFuture } from "../QuotaBars";
 import type {
   AnalyzedAccountQuota,
@@ -28,11 +28,7 @@ export interface ProviderAccountCardProps {
   titleMode: AccountDisplayKey;
   switching: boolean;
   disabled: boolean;
-  refreshing: boolean;
-  /** A quota read is running somewhere in this roster, so no card may start another. */
-  refreshBusy?: boolean;
   onSwitch: (account: OAuthAccountRow) => void;
-  onRefreshSingle?: (account: OAuthAccountRow) => void;
   onEditAlias: (account: OAuthAccountRow) => void;
   onRemove: (account: OAuthAccountRow) => void;
   onReauth?: (account: OAuthAccountRow) => void;
@@ -56,10 +52,7 @@ export default function ProviderAccountCard({
   titleMode,
   switching,
   disabled,
-  refreshing,
-  refreshBusy = false,
   onSwitch,
-  onRefreshSingle,
   onEditAlias,
   onRemove,
   onReauth,
@@ -161,7 +154,7 @@ export default function ProviderAccountCard({
 
   const skipBadge = skipReasonKey && <span className="badge badge-amber">{t(skipReasonKey)}</span>;
   const pausedBadge = paused && <span className="badge badge-muted" title={t("pws.accountPausedHint")}>{t("codexAuth.paused")}</span>;
-  const stateBadges = <>{skipBadge}{pausedBadge}</>;
+  const stateBadges = <>{skipBadge}{pausedBadge}{analyzed.readinessStatus === "unknown" && <span className="badge badge-muted">{t("pws.quotaUnknown")}</span>}</>;
   const pauseButton = (size: "btn-xs" | "btn-sm") => typeof account.paused === "boolean" && onPause ? (
     <button
       type="button"
@@ -267,17 +260,6 @@ export default function ProviderAccountCard({
             )}
             {!showReauth && onGrantClick && (
               <AnthropicGrantBadge entry={grantEntry} t={t} onClick={() => onGrantClick(account)} />
-            )}
-            {onRefreshSingle && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs pwi-icon-btn"
-                title={t("pws.refreshAccountQuota")}
-                disabled={refreshing || refreshBusy || disabled}
-                onClick={() => onRefreshSingle(account)}
-              >
-                <IconRefresh width={12} height={12} className={refreshing ? "pwi-spin-inline" : ""} aria-hidden="true" />
-              </button>
             )}
             <button
               type="button"
@@ -441,17 +423,6 @@ export default function ProviderAccountCard({
           )}
           {!showReauth && onGrantClick && (
             <AnthropicGrantBadge entry={grantEntry} t={t} onClick={() => onGrantClick(account)} />
-          )}
-          {onRefreshSingle && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm pwi-icon-btn"
-              title={t("pws.refreshAccountQuota")}
-              disabled={refreshing || refreshBusy || disabled || switching}
-              onClick={() => onRefreshSingle(account)}
-            >
-              <IconRefresh width={13} height={13} className={refreshing ? "pwi-spin-inline" : ""} aria-hidden="true" />
-            </button>
           )}
           <button
             type="button"

@@ -307,9 +307,7 @@ test("UX-05: an unmarked custom anthropic2 row receives neither pool's settings 
   await tick();
   expect(poolToggle()).toBeNull();
   expect(grantBadges()).toEqual([]);
-  // The accounts toolbar calibrates its token estimate from the request log for every
-  // OAuth roster; that read names no pool. Nothing else may leave this panel.
-  expect(requests.map(request => request.path)).toEqual(["/api/logs"]);
+  expect(requests).toEqual([]);
 });
 
 function PoolsHarness({ onPools }: { onPools: (pools: ReturnType<typeof useProviderAccountPools>) => void }) {

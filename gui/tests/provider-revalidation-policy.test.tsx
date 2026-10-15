@@ -162,6 +162,7 @@ for (const kind of ["oauth", "key", "codex"] as const) {
   test(`the real Providers page refresh selects ${kind} and awaits account plus report`, async () => {
     const name = kind === "codex" ? "openai" : `${kind}-fixture`;
     const seen: string[] = [];
+    let refreshing = false;
     const methods = new Map<string, string>();
     let finishReport!: (response: Response) => void;
     let finishAccounts!: (response: Response) => void;
@@ -184,14 +185,14 @@ for (const kind of ["oauth", "key", "codex"] as const) {
       if (url.pathname === "/api/oauth/providers") return Response.json({ providers: kind === "oauth" ? [name] : [] });
       if (url.pathname === "/api/oauth/status") return Response.json({ loggedIn: true });
       if (url.pathname === "/api/provider-quotas") {
-        if (!url.searchParams.has("refresh")) return Response.json({ reports: [] });
+        if (!refreshing) return Response.json({ reports: [] });
         const result = new Promise<Response>(resolve => { finishReport = resolve; });
         reportStarted();
         return result;
       }
       if (url.pathname === "/api/oauth/accounts" || url.pathname === "/api/providers/keys"
         || (kind === "codex" && (url.pathname === "/api/codex-auth/accounts" || url.pathname === "/api/codex-auth/accounts/refresh"))) {
-        return url.searchParams.has("refresh") || url.pathname.endsWith("/accounts/refresh")
+        return refreshing && (url.searchParams.has("quota") || url.searchParams.has("refresh") || url.pathname.endsWith("/accounts/refresh"))
           ? new Promise<Response>(resolve => { finishAccounts = resolve; }) : Response.json(accountBody);
       }
       if (url.pathname === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
@@ -209,12 +210,15 @@ for (const kind of ["oauth", "key", "codex"] as const) {
       .find(button => button.textContent?.includes("Refresh quotas"));
     expect(refresh).toBeDefined();
     seen.length = 0;
+    refreshing = true;
     await act(async () => { refresh!.click(); });
     await act(async () => { await reportReady; });
     const expected = kind === "codex" ? "/api/codex-auth/accounts/refresh"
-      : kind === "oauth" ? `/api/oauth/accounts?provider=${name}&quota=1&refresh=1`
-        : `/api/providers/keys?name=${name}&quota=1&refresh=1`;
+      : kind === "oauth" ? `/api/oauth/accounts?provider=${name}&quota=1`
+        : `/api/providers/keys?name=${name}&quota=1`;
     expect(seen).toContain(expected);
+    expect(seen).toContain("/api/provider-quotas");
+    expect(seen.some(path => path.includes("refresh=1"))).toBe(false);
     expect(methods.get(expected)).toBe(kind === "codex" ? "POST" : "GET");
     if (kind !== "oauth") expect(seen.some(path => path.startsWith("/api/oauth/accounts"))).toBe(false);
     if (kind === "oauth") expect(seen.some(path => path.startsWith("/api/providers/keys"))).toBe(false);
