@@ -311,7 +311,9 @@ accounts by the soonest future reset of the requested family's weekly window, fa
 the 5-hour window, then by headroom; exhausted accounts go last. A passive provider with
 evidence for only part of the ring keeps headroom order. The first-attempt pick uses the same
 eligible set as round-robin, including per-account model listings, and needs headroom evidence.
-The Anthropic kind refuses the strategy. Coverage: `tests/oauth/oauth-account-quota-rank.test.ts`
+Kiro passes account-bound quota evidence through both selection paths, preserving headroom
+ordering and explicit exhaustion when reset times are unknown. The Anthropic kind refuses
+the strategy. Coverage: `tests/oauth/oauth-account-quota-rank.test.ts`
 and `tests/server/account-pool-management-api.test.ts`.
 
 The unified `/api/pool/settings` DTO (`unifiedPoolSettingsDto` in `src/oauth/pool-settings-capability.ts`) carries `inert` for the generic kind only: true while `pool.kernel` is off and the stored strategy, threshold and sticky limit are persisted but not consumed. `gui/src/components/provider-workspace/AnthropicAccountPoolSettings.tsx` renders the same card for the Anthropic pool and, from `ProviderAuthPanel`, for every other OAuth provider with an account; for generic pools it disables the strategy select while `inert` and shows a stored strategy the dashboard does not model verbatim, omitting `strategy` from writes that do not change it. Coverage: `tests/server/account-pool-management-api.test.ts` and `gui/tests/generic-oauth-pool-settings.test.tsx`.
