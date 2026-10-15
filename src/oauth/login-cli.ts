@@ -123,6 +123,12 @@ export function loginUsageMessage(): string {
 
 export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
+  try {
+    // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
+    if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
+  } catch (error) {
+    reportOAuthLoginError(error);
+  }
   // A removed provider id reached through its alias still logs in — the merged
   // successor owns the flow. Warn rather than silently reroute so scripts and
   // docs that still say `devin-cli` surface the rename to whoever runs them.
@@ -138,12 +144,7 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): P
 }
 
 export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
-  try {
-    // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
-    if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
-  } catch (error) {
-    reportOAuthLoginError(error);
-  }
+  if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);
