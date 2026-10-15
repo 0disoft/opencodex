@@ -8,6 +8,7 @@ and explicit Windows observation follows its [separate read-only contract](runti
 Explicit Codex CLI installation observation does not discover a Codex home or read/write its state. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 The read-only CLI update plan binds npm executable selection to the inspected launcher PATH.
+Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 and the `LD_*`/`DYLD_*` loader families; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
 Distinct npm config files, cache and logs stay under the owned temporary root with best-effort

@@ -19,6 +19,8 @@ import {
   type CodexCliUpdateTarget,
 } from "../../src/codex/cli-update-plan";
 
+const REGISTRY_INTEGRITY = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
+
 /**
  * Phase 2 of the Codex CLI update manager.
  *
@@ -270,10 +272,10 @@ describe("registry target resolution", () => {
   test("an exact version with a sha512 token resolves", () => {
     const target = resolveCodexCliUpdateTarget("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
-      { status: 0, stdout: "'sha512-abc/DEF+123=' sha1-old\n" },
+      { status: 0, stdout: `'${REGISTRY_INTEGRITY}' sha1-old\n` },
       { status: 0, stdout: "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n" },
     ]));
-    expect(target).toEqual({ kind: "resolved", version: "1.4.2", integrity: "sha512-abc/DEF+123=" });
+    expect(target).toEqual({ kind: "resolved", version: "1.4.2", integrity: REGISTRY_INTEGRITY });
   });
 
   test("a missing integrity token refuses instead of proceeding best-effort", () => {
@@ -299,7 +301,7 @@ describe("registry target resolution", () => {
   test("a tarball outside the pinned registry origin is refused even with a valid digest", () => {
     const target = resolveCodexCliUpdateTarget("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
-      { status: 0, stdout: "sha512-abc/DEF+123=\n" },
+      { status: 0, stdout: `${REGISTRY_INTEGRITY}\n` },
       { status: 0, stdout: "https://evil.invalid/@openai/codex/-/codex-1.4.2.tgz\n" },
     ]));
     expect(target.kind).toBe("unresolved");
@@ -308,7 +310,7 @@ describe("registry target resolution", () => {
   test("a tarball answer that is not a URL at all is refused", () => {
     const target = resolveCodexCliUpdateTarget("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
-      { status: 0, stdout: "sha512-abc/DEF+123=\n" },
+      { status: 0, stdout: `${REGISTRY_INTEGRITY}\n` },
       { status: 0, stdout: "not-a-url\n" },
     ]));
     expect(target.kind).toBe("unresolved");
@@ -382,7 +384,7 @@ describe("registry configuration isolation", () => {
 
   const RESOLVE_OUTPUTS = {
     version: "1.4.2\n",
-    "dist.integrity": "sha512-abc/DEF+123=\n",
+    "dist.integrity": `${REGISTRY_INTEGRITY}\n`,
     "dist.tarball": "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n",
   };
 

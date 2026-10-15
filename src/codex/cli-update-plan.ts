@@ -119,7 +119,16 @@ export interface CodexCliUpdatePlanDeps {
 const PLAN_ID_LENGTH = 32;
 const PLAN_ID_RE = /^[0-9a-f]{32}$/;
 const REGISTRY_TIMEOUT_MS = 12_000;
-const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/=]+$/;
+const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+function isSha512Integrity(token: string): boolean {
+  if (!SHA512_INTEGRITY_RE.test(token)) return false;
+  const encoded = token.slice("sha512-".length);
+  // Base64 decoders accept truncated input and nonzero unused padding bits.
+  // Require exactly 64 bytes and the canonical encoding of those same bytes.
+  const digest = Buffer.from(encoded, "base64");
+  return digest.byteLength === 64 && digest.toString("base64") === encoded;
+}
 
 /** The install argv this plan quotes for the operator to read, in argv form. */
 export function codexCliUpdateCommand(version: string): readonly string[] {
@@ -376,7 +385,7 @@ export function resolveCodexCliUpdateTarget(
     }
     // `dist.integrity` may arrive quoted or as a space-separated multi-hash list.
     const tokens = (integrityRun.stdout ?? "").replace(/["']/g, "").trim().split(/\s+/).filter(Boolean);
-    const integrity = tokens.find(token => SHA512_INTEGRITY_RE.test(token));
+    const integrity = tokens.find(isSha512Integrity);
     if (!integrity) {
       return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no sha512 integrity token" });
     }
