@@ -10,3 +10,6 @@ export declare function probeUpdateServiceHome(
   run: (bin: string, args: string[], options: SpawnSyncOptionsWithStringEncoding) => { status: number | null; stdout?: unknown; error?: unknown; signal?: unknown },
   bin: string, prefix: string[], options?: { requireLauncher?: boolean; env?: Record<string, string | undefined> },
 ): UpdateServiceHomeAuthority;
+
+export declare function probeUpdatePackageOnlyLauncher(launcher: string, run: Parameters<typeof probeUpdateServiceHome>[0],
+  node: string, env: Record<string, string | undefined>, read?: (path: string) => string): boolean;

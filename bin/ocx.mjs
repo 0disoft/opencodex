@@ -15,7 +15,7 @@ import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
-import { createUpdateServiceHomePolicy, isUpdateHomeProbe } from "../src/update/service-home-policy.mjs";
+import { createUpdateServiceHomePolicy, isUpdateHomeProbe, UPDATE_HOME_LAUNCHER_PROTOCOL, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "../src/update/service-home-policy.mjs";
 import { probeUpdateServiceHome, supportsUpdateHomeProbe, updateHomeProbeEnvironment } from "../src/update/service-home-probe.mjs";
 import {
   inspectPackageRuntimeLiveness,
@@ -334,8 +334,8 @@ function runPackageManagerSelfUpdate(manager) {
     ? allServiceStatePaths.slice(0, 1)
     : allServiceStatePaths;
   let authorityLauncher = fileURLToPath(import.meta.url);
-  const homePolicy = createUpdateServiceHomePolicy(() => readNodeUpdateHome(authorityLauncher), message => console.warn(message));
-  if (!homePolicy.check()) process.exit(1);
+  const homePolicy = createUpdateServiceHomePolicy(() => readNodeUpdateHome(authorityLauncher), message => console.warn(message), process.argv.includes("--update-package-only"));
+  if (!homePolicy.checkPackage()) process.exit(1);
   const serviceWasInstalled = homePolicy.serviceAllowed && serviceStatePaths.some(path => existsSync(path));
   // What this update may do to the runtime. The same rule the Bun updater applies, from the
   // same module: a desktop takeover vetoes both the stop and the service refresh below.
@@ -372,7 +372,7 @@ function runPackageManagerSelfUpdate(manager) {
     process.exit(1);
   }
   const trayBeforeUpdate = planWindowsTrayUpdate(
-    process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
+    !homePolicy.packageOnly && process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
   /**
    * Refresh the existing service in place. `service repair` discovers the installed backend;
@@ -715,7 +715,7 @@ function runPackageManagerSelfUpdate(manager) {
     // earlier preflight and this boundary therefore blocks stop before it is sent.
     const lockedOwnership = readOwnership();
     const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
-    if (!homePolicy.check() || lockedOwnership.subjectToken !== initialOwnership.subjectToken || !lockedPlan.mayReplacePackage) {
+    if (!homePolicy.checkPackage() || lockedOwnership.subjectToken !== initialOwnership.subjectToken || !lockedPlan.mayReplacePackage) {
       releaseUpdateLease();
       console.error(lockedPlan.notice
         ?? "opencodex: update stopped because runtime ownership changed before stop authorization; rerun from the beginning.");
@@ -728,7 +728,7 @@ function runPackageManagerSelfUpdate(manager) {
     // semantics: graceful drain, service stop, native Codex restore). Gate on the service
     // and the runtime-port record too: a service-managed or orphaned proxy can be live
     // while ocx.pid is stale/missing.
-    if (trayBeforeUpdate.stopBeforeReplacement) {
+    if (!homePolicy.packageOnly && trayBeforeUpdate.stopBeforeReplacement) {
       console.log("⏹  Handing off the Windows tray before updating...");
       try {
         handoffWindowsTrayForUpdate(trayBeforeUpdate, {
@@ -803,7 +803,12 @@ function runPackageManagerSelfUpdate(manager) {
     // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
     // whether the obligation is safe to finish.
     const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
-    const stopNeeded = serviceWasInstalled || hasRuntimeState || hasPendingTeardown;
+    if (homePolicy.packageOnly && hasPendingTeardown) {
+      releaseUpdateLease();
+      console.error("opencodex: pending teardown requires manual recovery before package replacement; run 'ocx stop' from the owning installation.");
+      process.exit(1);
+    }
+    const stopNeeded = !homePolicy.packageOnly && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown);
     if (stopNeeded && !runtimePlan.mayStopRuntime) {
       releaseUpdateLease();
       console.error(runtimePlan.notice
@@ -878,7 +883,7 @@ function runPackageManagerSelfUpdate(manager) {
     const replacementOwnership = readOwnership();
     const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
     const replacementLiveness = currentPackageRuntimeLiveness();
-    if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+    if (!homePolicy.checkPackage() || replacementOwnership.subjectToken !== initialOwnership.subjectToken
       || !replacementPlan.mayReplacePackage
       || replacementLiveness !== "dead") {
       recoverStoppedRuntimeAfterFailure("replacement was refused");
@@ -986,6 +991,12 @@ function runPackageManagerSelfUpdate(manager) {
   const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled, supervision: observeSupervision() });
   if (res.status === 0) {
     authorityLauncher = postUpdateLauncher;
+    if (homePolicy.packageOnly) {
+      console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
+      homePolicy.check(homePolicy.initial);
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
+      process.exit(process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : 0);
+    }
     if (!homePolicy.check()) process.exit(1);
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
@@ -1143,9 +1154,15 @@ if (updateHelpRequested) {
 }
 
 // This intercept precedes Desktop handoff, boot restore and install-capable Bun resolution.
+// Capability only: no Bun lookup, home inspection, dotenv or ordinary bootstrap.
+if (process.argv[2] === "__update-package-only-probe") {
+  if (process.argv.length !== 3) process.exit(2);
+  console.log(JSON.stringify({ schemaVersion: 1, packageOnlyProtocolVersion: 1 }));
+  process.exit(0);
+}
 if (process.argv[2] === "__update-home-probe") {
   if (!isUpdateHomeProbe(process.argv.slice(2))) process.exit(1);
-  console.log(JSON.stringify({ schemaVersion: 1, ...readNodeUpdateHome(fileURLToPath(import.meta.url)), launcherProtocolVersion: 1 }));
+  console.log(JSON.stringify({ schemaVersion: 1, ...readNodeUpdateHome(fileURLToPath(import.meta.url)), launcherProtocolVersion: UPDATE_HOME_LAUNCHER_PROTOCOL }));
   process.exit(0);
 }
 

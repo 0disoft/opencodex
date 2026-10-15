@@ -208,3 +208,68 @@ test("the installed test Bun honors --no-env-file while the control loads the fi
     }
   } finally { box.remove(); }
 });
+
+for (const delegated of [false, true]) test(`Node package-only success reports a ${delegated ? "restricted worker" : "CLI"} result before recovery`, () => {
+  const start = source.indexOf("    if (homePolicy.packageOnly) {", source.indexOf("  const postInstallPlan"));
+  const end = source.indexOf("    if (!homePolicy.check()) process.exit(1);", start);
+  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+  const run = new Function("deps", `with (deps) { ${source.slice(start, end)} }`);
+  const events: string[] = [];
+  const terminal = new Error("exit");
+  const homePolicy = createUpdateServiceHomePolicy(() => ({ kind: "unknown" }), text => events.push(text));
+  expect(() => run({ homePolicy, latest: "2", postUpdateLauncher: "new", bakePort: 42,
+    launcherStartHint: () => "manual start", console: { log: (text: string) => events.push(text) },
+    UPDATE_PACKAGE_ONLY_EXIT_CODE: 75,
+    process: { argv: delegated ? ["--update-worker-result"] : [], exit(code: number) { expect(code).toBe(delegated ? 75 : 0); throw terminal; } },
+  })).toThrow("exit");
+  expect(events).toHaveLength(3);
+  expect(events[0]).toContain("Updated"); expect(events[1]).toContain("ownership could not be verified");
+  expect(events[2]).toContain("Restart the proxy:");
+});
+
+test("Node package-only refuses an unresolved teardown before package replacement and releases its lease", () => {
+  const start = source.indexOf("    if (homePolicy.packageOnly && hasPendingTeardown) {");
+  const end = source.indexOf("    const stopNeeded =", start);
+  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+  const run = new Function("deps", `with (deps) { ${source.slice(start, end)} }`);
+  const events: string[] = [];
+  const terminal = new Error("exit");
+  expect(() => run({ homePolicy: { packageOnly: true }, hasPendingTeardown: true,
+    releaseUpdateLease: () => events.push("release"), console: { error: (text: string) => events.push(text) },
+    process: { exit(code: number) { expect(code).toBe(1); events.push("exit"); throw terminal; } },
+  })).toThrow("exit");
+  expect(events[0]).toBe("release"); expect(events[1]).toContain("pending teardown"); expect(events[2]).toBe("exit");
+});
+
+test("the new package remains inspectable by an already-running v1 updater", () => {
+  const declaration = JSON.parse(readFileSync(repoPath("src/update/service-home-protocol.json"), "utf8"));
+  // This is the frozen predicate in the old Node process, which package replacement cannot update.
+  const legacyAccepts = (value: typeof declaration) => value?.schemaVersion === 1 && value?.launcherProtocolVersion === 1
+    && value?.entry === "__update-home-probe" && Object.keys(value).length === 3;
+  expect(legacyAccepts(declaration)).toBe(true);
+  const start = source.indexOf('if (process.argv[2] === "__update-home-probe")');
+  const end = source.indexOf("const desktopPlan =", start);
+  const run = new Function("deps", `with (deps) { ${source.slice(start, end).replace("import.meta.url", "\"fixture\"")} }`);
+  let response = "";
+  const terminal = new Error("exit");
+  expect(() => run({ process: { argv: ["node", "ocx", "__update-home-probe"], exit(code: number) { expect(code).toBe(0); throw terminal; } },
+    isUpdateHomeProbe: () => true, readNodeUpdateHome: () => ({ kind: "same" }), fileURLToPath: () => "launcher",
+    UPDATE_HOME_LAUNCHER_PROTOCOL: declaration.launcherProtocolVersion, console: { log: (text: string) => { response = text; } },
+  })).toThrow("exit");
+  expect(JSON.parse(response)).toEqual({ schemaVersion: 1, launcherProtocolVersion: 1, kind: "same" });
+});
+
+test("package-only capability interception is exact and precedes install-capable bootstrap", () => {
+  const start = source.indexOf('if (process.argv[2] === "__update-package-only-probe")');
+  const end = source.indexOf('if (process.argv[2] === "__update-home-probe")', start);
+  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+  const run = new Function("deps", `with (deps) { ${source.slice(start, end)} }`);
+  for (const extra of [false, true]) {
+    const events: unknown[] = [];
+    const terminal = new Error("exit");
+    expect(() => run({ process: { argv: ["node", "ocx", "__update-package-only-probe", ...(extra ? ["extra"] : [])],
+      exit(code: number) { events.push(code); throw terminal; } }, console: { log: (text: string) => events.push(JSON.parse(text)) },
+    })).toThrow("exit");
+    expect(events).toEqual(extra ? [2] : [{ schemaVersion: 1, packageOnlyProtocolVersion: 1 }, 0]);
+  }
+});

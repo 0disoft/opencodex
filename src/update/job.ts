@@ -52,7 +52,7 @@ import {
   type NpmCachePreflightReason,
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
-import { automaticUpdateLauncherSupported } from "./job-update-home";
+import { prepareWorkerUpdateHome, packageOnlyUpdateSucceeded } from "./job-update-home";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import type { WorkerLaunchContext } from "./worker-launch";
 
@@ -1791,8 +1791,8 @@ export interface GuiUpdateWorkerIo {
   resolvePnpmActiveLauncherFn?: (owner: PnpmGlobalOwner) => string | null;
   /** Restart seams used by focused worker tests; the verified launcher is always injected. */
   restartIo?: RestartIo;
-  /** Resolves who owns the runtime; defaults to the shared service install state. */
-  resolveOwnershipFn?: () => ServiceOwnershipResolution;
+  resolveOwnershipFn?: () => ServiceOwnershipResolution; // Defaults to the shared service install state.
+  serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   launcherSupportsUpdateHomeFn?: (launcher: string, node: string) => boolean;
   runCommandFn?: (
     job: UpdateJobState,
@@ -1893,12 +1893,12 @@ export async function runGuiUpdateWorker(
       }
     }
 
-    if ((check.installer === "npm" || check.installer === "pnpm")
-      && !(io.launcherSupportsUpdateHomeFn ?? automaticUpdateLauncherSupported)(cmd.args[0]!, cmd.bin)) {
-      updateJob(job, { status: "failed", error: "Automatic update refused: guarded recovery protocol unavailable. Check 'ocx service status' and update this CLI manually before retrying." });
-      return;
-    }
-    if (process.platform === "win32") {
+    let homeRefusal: string | undefined;
+    const homePolicy = prepareWorkerUpdateHome(cmd, check.installer, activeLauncher, nodeBin(), channel,
+      message => { homeRefusal = message; job = updateJob(job!, {}, message); }, io.serviceHomeAuthorityFn, io.launcherSupportsUpdateHomeFn);
+    if (!homePolicy) { updateJob(job, { status: "failed", restarted: false, error: homeRefusal }); return; }
+    job = updateJob(job, { command: cmd.display });
+    if (!homePolicy.packageOnly && process.platform === "win32") {
       try {
         const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
         const tray = getWindowsTrayStatus();
@@ -1926,6 +1926,11 @@ export async function runGuiUpdateWorker(
     - 선택 근거: 현재 CLI의 package-manager self-update 우회를 재사용하면서도 GUI 서버 요청 생명주기와 설치 작업을 분리할 수 있어 가장 안정적이다.
     */
     const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
+    if (packageOnlyUpdateSucceeded(cmd, result.status, homePolicy.packageOnly)) {
+      homePolicy.check({ kind: "unknown" }); updateJob(job, { status: "succeeded", restarted: false },
+        "Update installed. Restart the proxy manually after checking 'ocx service status'.");
+      return;
+    }
     if (result.status !== 0) {
       if (check.installer === "pnpm") {
         const verifiedLauncher = pnpmOwner
@@ -1960,7 +1965,7 @@ export async function runGuiUpdateWorker(
         if (trayWasRunning) runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
       }
     }
-
+    if (!homePolicy.check()) { updateJob(job, { status: "failed", restarted: false }); return; }
     if (restart) {
       const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async lease => {
         job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
