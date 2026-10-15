@@ -9,6 +9,7 @@ import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
+import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -138,6 +139,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   warnings.push(...degradedListenerWarnings(rawParsed, normalized));
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
+  if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -698,6 +700,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
     ?? nativeReasoningRetentionConfigError(value)
+    ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? (rawSubagentModelForce(value) !== undefined && !isSubagentModelEntry(rawSubagentModelForce(value)) ? "schema_invalid: claudeCode.subagentModelForce: expected a safe roster-style model id" : null)
