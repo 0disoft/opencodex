@@ -23,7 +23,7 @@ afterEach(() => {
   if (home) removeTreeWithRetry(home);
 });
 
-test("a refused iteration with an image_gen call neither fulfills nor re-asks", async () => {
+test.each([true, false, undefined])("a refused image_gen iteration stops with terminalRefusalAsFailed=%s", async terminalRefusalAsFailed => {
   home = mkdtempSync(join(tmpdir(), "ocx-image-refusal-"));
   process.env.OPENCODEX_HOME = home;
   let mediaFetches = 0;
@@ -60,14 +60,15 @@ test("a refused iteration with an image_gen call neither fulfills nor re-asks", 
     adapter,
     plan,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
-    terminalRefusalAsFailed: true,
+    terminalRefusalAsFailed,
   });
   const text = await response.text();
 
   expect(routedRequests).toBe(1);
   expect(mediaFetches).toBe(0);
-  expect(text).toContain("event: response.failed");
-  expect(text).toContain('"code":"invalid_prompt"');
+  expect(text).toContain(`event: response.${terminalRefusalAsFailed ? "failed" : "incomplete"}`);
+  if (terminalRefusalAsFailed) expect(text).toContain('"code":"invalid_prompt"');
+  else expect(text).toContain('"reason":"content_filter"');
   expect(text).not.toContain("event: response.completed");
 });
 

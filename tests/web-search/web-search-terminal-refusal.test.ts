@@ -13,7 +13,7 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test("a refused iteration with a web_search call neither searches nor re-asks", async () => {
+test.each([true, false, undefined])("a refused web_search iteration stops with terminalRefusalAsFailed=%s", async terminalRefusalAsFailed => {
   let searchFetches = 0;
   globalThis.fetch = (async () => {
     searchFetches++;
@@ -47,14 +47,15 @@ test("a refused iteration with a web_search call neither searches nor re-asks", 
     selectedForwardHeaders: new Headers(),
     settings: { model: "exa-fixture-model", reasoning: "low", timeoutMs: 30_000 },
     maxSearches: 2,
-    terminalRefusalAsFailed: true,
+    terminalRefusalAsFailed,
   });
   const text = await response.text();
 
   expect(routedSends).toBe(1);
   expect(searchFetches).toBe(0);
-  expect(text).toContain("event: response.failed");
-  expect(text).toContain('"code":"invalid_prompt"');
+  expect(text).toContain(`event: response.${terminalRefusalAsFailed ? "failed" : "incomplete"}`);
+  if (terminalRefusalAsFailed) expect(text).toContain('"code":"invalid_prompt"');
+  else expect(text).toContain('"reason":"content_filter"');
   expect(text).not.toContain("event: response.completed");
 });
 
