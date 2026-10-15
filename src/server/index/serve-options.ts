@@ -1270,7 +1270,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 knownModelIdsForProvider(m.provider, provider, config),
               ).get(m.id)
             : undefined;
-          const effectiveId = !isCombo && effective
+          const effectiveId = !isCombo && !fastModelId && effective
             ? preferredModelAliasId(config, m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
             : publicId;
           const row = {

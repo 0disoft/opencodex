@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { parseFastRowId, fastRowBases } from "../../src/server/fast-row";
 import { knownEffortRowIds } from "../../src/server/effort-row";
+import { collectDefaultModelExposure } from "../../src/cli/doctor";
+import { configSchema } from "../../src/config/schema/config-schema";
 import { routeModel } from "../../src/router";
 import { gatherRoutedModels } from "../../src/codex/catalog/provider-fetch";
 import { startServer } from "../../src/server";
@@ -208,4 +210,37 @@ test("Codex and Anthropic discovery retain one unchanged identity per model", as
     } finally { server.stop(true); }
   }
   expect(snapshots[1]).toEqual(snapshots[0]);
+});
+
+
+test("Cursor Fast listing keeps the advertised Fast identity", async () => {
+  const config = aliasConfig(true);
+  config.fastMode = true;
+  config.defaultProvider = "cursor";
+  config.providers = { cursor: { adapter: "openai-chat", baseUrl: "https://cursor.example/v1", liveModels: false, models: ["claude-opus-5"], modelAliases: { "claude-opus-5": "opus-pick" } } };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string; native_id?: string }[] };
+    expect(body.data.map(row => row.id)).toContain("cursor/claude-opus-5-thinking-fast");
+    expect(body.data.map(row => row.id)).not.toContain("opus-pick");
+  } finally { server.stop(true); }
+});
+
+test("the config schema validates the alias-ID opt-in independently", () => {
+  const config = { ...aliasConfig(true), port: 18276 };
+  expect(configSchema.parse(config).preferModelAliasIds).toBe(true);
+  expect(configSchema.parse({ ...config, preferModelAliasIds: false }).preferModelAliasIds).toBe(false);
+  expect(configSchema.parse({ ...config, preferModelAliasIds: "true" }).preferModelAliasIds).toBe(false);
+});
+
+test("doctor recognizes the native ID retained on an alias row", async () => {
+  const result = await collectDefaultModelExposure({
+    readConfiguredModelFn: () => "seek/glm-4.7-flash",
+    readCatalogModelsFn: () => null,
+    live: { pid: 4321, port: 18277, source: "config" },
+    fetchFn: async () => new Response(JSON.stringify({ data: [{ id: "SEK-glm-4.7-flash", native_id: "seek/glm-4.7-flash" }] })),
+  });
+  expect(result.status).toBe("exposed");
+  expect(result.source).toBe("proxy");
 });
