@@ -260,6 +260,7 @@
     "bridge-reasoning-replay-batch.test.ts": "adapters",
     "bridge-stall.test.ts": "adapters",
     "bridge-terminal-refusal.test.ts": "adapters", "bridge-terminal-singleness.test.ts": "adapters",
+    "loop-terminal-refusal.test.ts": "images", "web-search-terminal-refusal.test.ts": "web-search",
     "bridge.test.ts": "adapters",
     "buffered-response-shape-guards.test.ts": "adapters",
     "build-desktop-icon-set.test.ts": "ci-workflows",

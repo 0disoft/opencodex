@@ -26,6 +26,16 @@ function terminalRefusalMessage(detail: string | undefined): string {
 }
 
 /**
+ * An adapter `incomplete` that is a non-retryable upstream refusal: a content filter carrying an
+ * explicit `retryable: false` verdict. A filter without the verdict, an output cap, a stall and an
+ * adapter EOF do not qualify. The sidecar loops read this too: a refused iteration ends the turn,
+ * so a sidecar call it carried is neither run nor answered with another model request.
+ */
+export function isTerminalRefusalIncomplete(event: AdapterEvent | undefined): boolean {
+  return event?.type === "incomplete" && event.reason === "content_filter" && event.retryable === false;
+}
+
+/**
  * `response.failed` fields for an adapter `incomplete` that is a non-retryable upstream refusal
  * (#4312), or `undefined` when the event is anything else. The Anthropic and Kiro adapters are
  * the ones that emit it today.
@@ -39,7 +49,7 @@ function terminalRefusalMessage(detail: string | undefined): string {
 export function terminalRefusalFailure(
   event: Extract<AdapterEvent, { type: "incomplete" }>,
 ): TerminalRefusalFailure | undefined {
-  if (event.reason !== "content_filter" || event.retryable !== false) return undefined;
+  if (!isTerminalRefusalIncomplete(event)) return undefined;
   const error: OcxErrorPayload = {
     type: "invalid_request_error",
     code: TERMINAL_REFUSAL_FAILED_CODE,

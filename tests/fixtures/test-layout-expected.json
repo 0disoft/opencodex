@@ -224,6 +224,7 @@
   "bridge-live-delivery.test.ts": "server", "bridge-nonstreaming-terminal.test.ts": "adapters",
   "bridge-raw-reasoning-hidden.test.ts": "adapters", "bridge-reasoning-replay-batch.test.ts": "adapters",
   "bridge-stall.test.ts": "adapters", "bridge-terminal-refusal.test.ts": "adapters", "bridge-terminal-singleness.test.ts": "adapters",
+  "loop-terminal-refusal.test.ts": "images", "web-search-terminal-refusal.test.ts": "web-search",
   "bridge.test.ts": "adapters", "buffered-response-shape-guards.test.ts": "adapters",
   "build-desktop-icon-set.test.ts": "ci-workflows", "build-release-changelog.test.ts": "ci-workflows", "ci-gui-typecheck-gate.test.ts": "ci-workflows",
   "bump-dev-version.test.ts": "ci-workflows", "bun-runtime.test.ts": "ci-workflows",
