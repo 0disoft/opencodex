@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 /**
@@ -10,8 +10,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
  * baseline lists every module that is still on a cycle, and the test beside it fails when a module
  * outside that list joins one, or when a listed module leaves without the list shrinking with it.
  *
- * Edges are load-time value imports only, matched the same way as
- * tests/lab/core-lab-boundary.test.ts: static imports, side-effect imports, and runtime re-exports.
+ * Edges are load-time value imports parsed by Bun: static imports, side-effect imports,
+ * and runtime re-exports. Resolution follows Bun's local module precedence.
  * \`import type\` is erased and a dynamic \`import()\` is a deferred edge that only loads when its
  * branch runs, which is the sanctioned way to break a cycle, so neither forms an edge here.
  *
@@ -22,8 +22,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 export const BASELINE_REL = "tests/fixtures/import-cycle-baseline.json";
 export const SOURCE_ROOT = "src";
 
-const STATIC_IMPORT_RE =
-  /^\s*import\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|^\s*export\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']/gm;
+const importScanner = new Bun.Transpiler({ loader: "ts" });
+const tsxImportScanner = new Bun.Transpiler({ loader: "tsx" });
 
 export type ImportGraph = Map<string, string[]>;
 
@@ -48,38 +48,36 @@ function listSources(dir: string): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listSources(abs));
-    else if (/\.(ts|tsx|mts)$/.test(entry.name) && !entry.name.endsWith(".d.ts")) out.push(abs);
+    else if (/\.(ts|tsx|mts)$/.test(entry.name) && !/\.d\.(ts|mts)$/.test(entry.name)) out.push(abs);
   }
   return out;
 }
 
 function resolveSpecifier(spec: string, fromFile: string): string | null {
   if (!spec.startsWith(".")) return null;
-  const base = resolve(dirname(fromFile), spec);
-  const stem = base.replace(/\.(js|mjs)$/, "");
-  for (const candidate of [base, stem + ".ts", stem + ".tsx", stem + ".mts", join(base, "index.ts")]) {
-    if (/\.(ts|tsx|mts)$/.test(candidate) && existsSync(candidate)) return candidate;
+  try {
+    const candidate = Bun.resolveSync(spec, dirname(fromFile));
+    return /\.(ts|tsx|mts)$/.test(candidate) ? candidate : null;
+  } catch {
+    // Unresolved edges and non-TypeScript modules are outside this source graph.
+    return null;
   }
-  return null;
 }
 
 /** Static value-import edges between source files in \`importer -> imported\` form. */
-export function staticImports(source: string): string[] {
-  const specs: string[] = [];
-  STATIC_IMPORT_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = STATIC_IMPORT_RE.exec(source)) !== null) {
-    const spec = match[1] ?? match[2] ?? match[3];
-    if (spec) specs.push(spec);
-  }
-  return specs;
+export function staticImports(source: string, tsx = false): string[] {
+  // scanImports does not accept executable entrypoint hashbangs; they are not module syntax.
+  const moduleSource = source.replace(/^#![^\r\n]*/, "");
+  return (tsx ? tsxImportScanner : importScanner).scanImports(moduleSource)
+    .filter(edge => edge.kind === "import-statement")
+    .map(edge => edge.path);
 }
 
 export function scanGraph(root: string, sourceRoot = SOURCE_ROOT): ImportGraph {
   const graph: ImportGraph = new Map();
   for (const abs of listSources(join(root, sourceRoot)).sort()) {
     const targets = new Set<string>();
-    for (const spec of staticImports(readFileSync(abs, "utf8"))) {
+    for (const spec of staticImports(readFileSync(abs, "utf8"), abs.endsWith(".tsx"))) {
       const hit = resolveSpecifier(spec, abs);
       if (hit) targets.add(toRepoPath(root, hit));
     }

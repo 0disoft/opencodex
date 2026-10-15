@@ -42,7 +42,7 @@ afterEach(() => {
  * also proves the old generic fallback selects the foreign unit, so restoring it in
  * either caller makes the regression fail. Manager calls use the existing seams.
  */
-function withArtifacts(plist: string | null, body: () => void): void {
+function withArtifacts(plist: string | null, body: () => void, parsedPort: number | null): void {
   const launchdPath = plistPath();
   const systemdPath = unitPath();
   const original = fs.readFileSync;
@@ -57,17 +57,36 @@ function withArtifacts(plist: string | null, body: () => void): void {
   try {
     expect(systemdListenPort()).toBe(foreignPort);
     expect(resolveServiceListenPort()).toBe(configuredPort);
-    expect(launchdListenPort()).toBe(plist === null ? null : plistPort);
-    expect(installedServiceListenPort()).toBe(plist === null ? foreignPort : plistPort);
+    expect(launchdListenPort()).toBe(parsedPort);
+    expect(installedServiceListenPort()).toBe(parsedPort ?? foreignPort);
     body();
   } finally {
     read.mockRestore();
   }
 }
 
+test("an unreadable plist cannot be accepted by a matching live job", () => {
+  let reads = 0;
+  const commands: string[] = [];
+  expect(() => startLaunchd({
+    launchctl: () => ({ ok: false, stdout: "", stderr: "Load failed: 5", status: 5 }),
+    readPlist: () => {
+      reads += 1;
+      throw Object.assign(new Error("unreadable fixture plist"), { code: "EACCES" });
+    },
+    matches: command => {
+      commands.push(command);
+      return { loaded: true, matchesPlist: true };
+    },
+  })).toThrow(/missing or unreadable.*service repair/);
+  expect(reads).toBe(1);
+  expect(commands).toEqual([expectedLaunchdCommand(configuredPort)]);
+});
+
 for (const fixture of [
-  { name: "missing plist ignores the foreign systemd port", plist: null, expectedPort: configuredPort },
-  { name: "installed plist takes precedence over config and foreign systemd", plist: `<string>exec '/fixture/ocx' start --port ${plistPort}</string>`, expectedPort: plistPort },
+  { name: "missing plist ignores the foreign systemd port", plist: null, parsedPort: null, expectedPort: configuredPort },
+  { name: "readable plist without a parseable port ignores the foreign systemd port", plist: "<string>exec '/fixture/ocx' start --port invalid</string>", parsedPort: null, expectedPort: configuredPort },
+  { name: "installed plist takes precedence over config and foreign systemd", plist: `<string>exec '/fixture/ocx' start --port ${plistPort}</string>`, parsedPort: plistPort, expectedPort: plistPort },
 ]) {
   describe(fixture.name, () => {
     test("the default load-state probe expects the launchd port", () => {
@@ -84,14 +103,14 @@ for (const fixture of [
         });
         expect(verdict).toEqual({ state: "loaded-current", domain: "gui/501" });
         expect(calls).toEqual([["print", "gui/501/com.opencodex.proxy"]]);
-      });
+      }, fixture.parsedPort);
     });
 
-    test("an already-loaded start checks the launchd port", () => {
+    test("an already-loaded start requires a readable plist and checks the launchd port", () => {
       withArtifacts(fixture.plist, () => {
         const commands: string[] = [];
         const calls: string[][] = [];
-        startLaunchd({
+        const start = () => startLaunchd({
           launchctl: args => {
             calls.push(args);
             return { ok: false, stdout: "", stderr: "Load failed: 5", status: 5 };
@@ -101,10 +120,12 @@ for (const fixture of [
             return { loaded: true, matchesPlist: true };
           },
         });
+        if (fixture.plist === null) expect(start).toThrow(/service repair/);
+        else expect(start).not.toThrow();
         expect(commands).toEqual([expectedLaunchdCommand(fixture.expectedPort)]);
         expect(commands[0]).toEndWith(`start --port ${fixture.expectedPort}`);
         expect(calls).toEqual([["load", "-w", plistPath()]]);
-      });
+      }, fixture.parsedPort);
     });
   });
 }
