@@ -746,7 +746,7 @@ export async function preparePassthroughExchange(
     };
     let upstreamResponse: Response, lastDistributedResponse: Response | undefined;
     const adoptObservedResponse = <T extends Response>(response: T): T => {
-      lastDistributedResponse = response.status === 401 || response.status === 429 ? response : undefined;
+      if (!isNonReplayableResponse(response)) lastDistributedResponse = response.status === 401 || response.status === 429 ? response : undefined;
       settleObservedHostResponse();
       adoptCodexWsStage(response);
       return response;
@@ -1621,7 +1621,7 @@ export async function preparePassthroughExchange(
         status: response.status,
       });
     };
-    recordDistributedResponseFailure(upstreamResponse, config, route.providerName, options.abortSignal);
+    recordDistributedResponseFailure(lastDistributedResponse ?? upstreamResponse, config, route.providerName, options.abortSignal);
     captureAffinityResponse(upstreamResponse);
     if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;

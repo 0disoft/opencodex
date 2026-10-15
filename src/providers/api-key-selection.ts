@@ -18,13 +18,13 @@ function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeyS
     && current.revision === expected.revision;
 }
 
-function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection): OcxProviderConfig | null {
+function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection, allowCooling = false): OcxProviderConfig | null {
   const configured = config.providers[name];
   if (!configured || configured.disabled) return null;
   let row = configured;
   if (selection?.distributed) {
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
-    if (!entry || isKeyInCooldown(name, entry.id) || configured.apiKeySelectionRevision !== selection.revision
+    if (!entry || (!allowCooling && isKeyInCooldown(name, entry.id)) || configured.apiKeySelectionRevision !== selection.revision
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
   }
@@ -40,8 +40,21 @@ export function providerApiKeySelectionIsCurrent(
   name: string,
   routedProvider: OcxProviderConfig,
 ): boolean {
+  return matchesConfiguredSelection(config, name, routedProvider, false);
+}
+
+/** An already sent failure can extend cooldown, but cannot authorize another dispatch. */
+export function providerApiKeySelectionOwnsFailure(
+  config: OcxConfig, name: string, routedProvider: OcxProviderConfig,
+): boolean {
+  return matchesConfiguredSelection(config, name, routedProvider, true);
+}
+
+function matchesConfiguredSelection(
+  config: OcxConfig, name: string, routedProvider: OcxProviderConfig, allowCooling: boolean,
+): boolean {
   const expected = routedProvider._apiKeyAttempt;
-  const current = currentKeyProvider(config, name, expected);
+  const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
     && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey

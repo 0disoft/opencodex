@@ -191,3 +191,37 @@ test("native Responses cools a terminal 429 after the configured same-key retry"
   expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
   unchanged(config);
 });
+test("an in-flight 401 extends the same key's earlier short 429 cooldown", async () => {
+  const config = fixture(); config.providers[NAME]!.requestPacing!.keys!.maxConcurrentRequests = 2;
+  let rejectFirst: ((response: Response) => void) | undefined;
+  let firstKeySends = 0;
+  intercept(headers => {
+    if (headers.get("authorization") !== `Bearer ${KEYS[0]}`) return completed();
+    if (++firstKeySends === 1) return new Promise<Response>(resolve => { rejectFirst = resolve; });
+    return Response.json({ error: { message: "fixture capacity" } }, { status: 429, headers: { "retry-after": "1" } });
+  });
+  const pending = start(config);
+  while (!rejectFirst) await Bun.sleep(5);
+  try {
+    expect((await start(config)).response.status).toBe(200);
+    expect((await start(config)).response.status).toBe(429);
+    expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
+  } finally { rejectFirst(Response.json({ error: { message: "fixture rejection" } }, { status: 401 })); }
+  expect((await pending).response.status).toBe(401);
+  expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThanOrEqual(Date.now() + 599_000);
+  unchanged(config);
+});
+test("a synthetic replay refusal retains the preceding genuine key rejection", async () => {
+  const config = fixture();
+  config.providers[NAME]!.retryOn429 = { attempts: 1, intervalMs: 1, respectRetryAfter: false };
+  intercept(() => {
+    const response = Response.json({ error: { message: "fixture capacity" } }, {
+      status: seen.length === 1 ? 429 : 502, headers: { "retry-after": "45" },
+    });
+    if (seen.length > 1) markResponseNonReplayable(response);
+    return response;
+  });
+  expect((await start(config)).response.status).toBe(502);
+  expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
+  unchanged(config);
+});

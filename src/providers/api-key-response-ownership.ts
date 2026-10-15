@@ -1,7 +1,7 @@
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
-import { providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { providerApiKeySelectionOwnsFailure } from "./api-key-selection";
 import { recordDistributedKeyFailure } from "./key-failover";
 import { registerProviderResponseProvenance } from "./request-pacing";
 
@@ -39,7 +39,7 @@ export function recordDistributedResponseFailure(
   if (signal?.aborted || isNonReplayableResponse(response) || (response.status !== 401 && response.status !== 429)) return;
   const owner = owners.get(response);
   if (!owner || owner.providerName !== providerName
-    || !providerApiKeySelectionIsCurrent(config, providerName, owner.provider)) return;
+    || !providerApiKeySelectionOwnsFailure(config, providerName, owner.provider)) return;
   recordDistributedKeyFailure(config, providerName, owner.provider._apiKeyAttempt,
     response.status, Date.now(), response.headers.get("retry-after"));
 }
