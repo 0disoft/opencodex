@@ -1,5 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
-import { preferredModelAliasId } from "./model-alias-id";
+import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
 import {
@@ -1253,6 +1253,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
+        const promoteAliasId = modelAliasIdPromoter(config);
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
           .map(async m => {
@@ -1271,7 +1272,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               ).get(m.id)
             : undefined;
           const effectiveId = !isCombo && !fastModelId && effective
-            ? preferredModelAliasId(config, m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
+            ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
             : publicId;
           const row = {
             id: effectiveId,
