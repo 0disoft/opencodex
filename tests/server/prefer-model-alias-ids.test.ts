@@ -1,0 +1,126 @@
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
+import { startServer } from "../../src/server";
+import type { OcxConfig } from "../../src/types";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+/**
+ * `preferModelAliasIds` changes the `/v1/models` row `id` from `provider/nativeId` to the
+ * effective model alias when one exists.  This lets every downstream harness (Codex CLI,
+ * Command Code, Claude Code, Hermes) discover operator-chosen short names directly from the
+ * API, eliminating per-harness synchronization scripts.
+ *
+ * Each case starts a real server with `startServer(0)`, hits `GET /v1/models`, and inspects
+ * the JSON output — the same integration style used by Cursor local-models and Grok discovery.
+ */
+setDefaultTimeout(SERVER_BUDGET_MS);
+
+const previousHome = process.env.OPENCODEX_HOME;
+let testHome = "";
+
+function aliasConfig(prefer: boolean): OcxConfig {
+  return {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "seek",
+    ...(prefer ? { preferModelAliasIds: true } : {}),
+    providers: {
+      seek: {
+        adapter: "openai-chat",
+        baseUrl: "https://seek.example/v1",
+        alias: "SEK",
+        liveModels: false,
+        models: ["glm-4.7-flash"],
+        modelAliases: {
+          "glm-4.7-flash": "SEK-glm-4.7-flash",
+        },
+      },
+    },
+  };
+}
+
+beforeEach(() => {
+  testHome = mkdtempSync(join(tmpdir(), "ocx-prefer-alias-"));
+  process.env.OPENCODEX_HOME = testHome;
+});
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  if (testHome) removeTreeWithRetry(testHome);
+  testHome = "";
+});
+
+describe("preferModelAliasIds on /v1/models", () => {
+  test("default (off): row id is provider/nativeId, no native_id field", async () => {
+    saveConfig(aliasConfig(false));
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/models", server.url));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { id: string; alias_of?: string; native_id?: string }[] };
+      const seekRow = body.data.find(m => m.id.includes("glm") || m.id.includes("SEK"));
+      expect(seekRow).toBeDefined();
+      // Without the flag, id is the traditional provider/nativeId form
+      expect(seekRow!.id).toContain("/");
+      // native_id is only added when alias is promoted
+      expect(seekRow!.native_id).toBeUndefined();
+      // alias_of is present because we have modelAliases
+      expect(seekRow!.alias_of).toBeDefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("on: row id becomes the effective alias, native_id preserves original", async () => {
+    saveConfig(aliasConfig(true));
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/models", server.url));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { id: string; alias_of?: string; native_id?: string }[] };
+      const seekRow = body.data.find(m => m.id === "SEK-glm-4.7-flash");
+      expect(seekRow).toBeDefined();
+      // alias is now the id
+      expect(seekRow!.id).toBe("SEK-glm-4.7-flash");
+      // native_id preserves the old form
+      expect(seekRow!.native_id).toBeDefined();
+      expect(seekRow!.native_id).toContain("glm-4.7-flash");
+      expect(seekRow!.native_id).toContain("/");
+      // alias_of still present for backward compatibility
+      expect(seekRow!.alias_of).toBeDefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("on: models without modelAliases keep their provider/nativeId as id", async () => {
+    const config = aliasConfig(true);
+    // Add a second provider without modelAliases
+    config.providers.plain = {
+      adapter: "openai-chat",
+      baseUrl: "https://plain.example/v1",
+      liveModels: false,
+      models: ["test-model"],
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/models", server.url));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { id: string; alias_of?: string; native_id?: string }[] };
+      const plainRow = body.data.find(m => m.id.includes("test-model"));
+      expect(plainRow).toBeDefined();
+      // No alias → id stays as provider/nativeId
+      expect(plainRow!.id).toBe("plain/test-model");
+      // No native_id added when no alias swap happened
+      expect(plainRow!.native_id).toBeUndefined();
+    } finally {
+      server.stop(true);
+    }
+  });
+});

@@ -570,6 +570,22 @@ export interface OcxConfig {
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;
   /**
+   * When `true`, `/v1/models` publishes the effective model alias (e.g.
+   * `SEK-glm-4.7-flash`) as the row `id` instead of `provider/nativeId`
+   * (e.g. `Seek/glm-4.7-flash`).  The original `provider/nativeId` moves to a
+   * new `native_id` field so clients that need it can still read it.
+   *
+   * **Default: `false`** — the historical `provider/nativeId` form remains the
+   * published `id`, and the alias is in the informational `alias_of` field.
+   *
+   * When enabled, every downstream harness (Codex CLI, Command Code, Claude
+   * Code, Hermes, custom integrations) that reads `/v1/models` discovers the
+   * short alias directly, without per-harness synchronization scripts.  The
+   * alias is already accepted for routing, so existing requests using
+   * `provider/nativeId` continue to work unchanged.
+   */
+  preferModelAliasIds?: boolean;
+  /**
    * Opt-in Cursor Private Inference compatibility rows. When true, `/v1/models`
    * adds `<base-id>--<effort>` selectors for reasoning-capable model ids absent
    * from Cursor's built-in effort table. Omitted/false preserves discovery output.

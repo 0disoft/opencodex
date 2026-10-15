@@ -1269,8 +1269,16 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 knownModelIdsForProvider(m.provider, provider, config),
               ).get(m.id)
             : undefined;
+          // preferModelAliasIds: when on, the effective alias becomes the row `id` so
+          // every downstream harness (Codex CLI, Command Code, Claude Code, Hermes)
+          // discovers the operator-chosen short name without per-harness scripts.
+          // The original `provider/nativeId` is retained in `native_id` and still routes.
+          const preferAlias = config.preferModelAliasIds === true;
+          const effectiveId = (preferAlias && effective && !isCombo)
+            ? effective.alias
+            : publicId;
           const row = {
-            id: publicId,
+            id: effectiveId,
             object: "model",
             created: 0,
             // This endpoint is an OpenAI-compatible inbound contract. Some clients use
@@ -1279,6 +1287,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
             ...(isCombo ? { is_combo: true } : {}),
             ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+            // When preferModelAliasIds promotes the alias to `id`, retain the original
+            // provider/nativeId so clients that need the upstream identity can read it.
+            ...(preferAlias && effective && !isCombo ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
               reasoningEfforts: m.reasoningEfforts,
