@@ -77,8 +77,8 @@ import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../prov
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
 import { probeJevDecisionProvider } from "../../combos/jev";
 import { comboDependsOnProviderRoute } from "./decision-model-validation";
-import { clearKeyCooldowns, forgetApiKeyRotationCursor, getKeyCooldownUntil } from "../../providers/key-failover";
-import { providerRequestPacingStatus } from "../../providers/request-pacing";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
+import { handleProviderKeyPacingRoutes } from "./provider-key-pacing-routes";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -895,26 +895,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
   }
 
-  if (url.pathname === "/api/provider-request-pacing" && req.method === "GET") {
-    const statusFor = (name: string, provider: OcxProviderConfig) => {
-      const status = providerRequestPacingStatus(name, provider);
-      if (status.keys) status.keys = status.keys.map(row => ({ ...row, cooldownUntil: getKeyCooldownUntil(name, row.id) }));
-      return status;
-    };
-    const name = url.searchParams.get("name")?.trim();
-    if (name) {
-      if (!isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
-        return jsonResponse({ error: "unknown provider" }, 404);
-      }
-      return jsonResponse(statusFor(name, config.providers[name]!));
-    }
-    return jsonResponse(Object.fromEntries(
-      Object.entries(config.providers).map(([providerName, provider]) => [
-        providerName,
-        statusFor(providerName, provider),
-      ]),
-    ));
-  }
+  const keyPacingResponse = handleProviderKeyPacingRoutes(ctx);
+  if (keyPacingResponse) return keyPacingResponse;
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
