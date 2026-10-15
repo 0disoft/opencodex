@@ -112,3 +112,42 @@ test("a Codex account namespace collision is reported as configuration before an
   expect(stdout).not.toContain("login started");
   expect(code).toBe(1);
 });
+
+for (const scenario of [
+  {
+    label: "an existing custom anthropic2 row",
+    setup: `writeFileSync(configPath, JSON.stringify({ providers: { anthropic2: { adapter: "openai", baseUrl: "https://example.invalid/v1", apiKey: ${JSON.stringify(marker)} } } }));`,
+    message: "anthropic2 is already configured as a custom provider; rename the custom provider before logging in to Pool 2.",
+  },
+  {
+    label: "malformed config",
+    setup: `writeFileSync(configPath, ${JSON.stringify(`{ "providers": ${marker}`)});`,
+    message: publicMessage,
+  },
+  {
+    label: "unreadable config",
+    setup: "mkdirSync(configPath);",
+    message: publicMessage,
+  },
+]) {
+  test(`anthropic2 preflight reports configuration_error for ${scenario.label} before prompting`, async () => {
+    const { stdout, stderr, code } = await runLoginChild(`
+      import { mkdirSync, writeFileSync } from "node:fs";
+      import { dirname } from "node:path";
+      import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
+      import { getConfigPath } from ${moduleUrl("config", "paths.ts")};
+      const configPath = getConfigPath();
+      mkdirSync(dirname(configPath), { recursive: true });
+      ${scenario.setup}
+      await handleLogin("anthropic2", {
+        ask: async () => { console.log("prompt started"); return ""; },
+        runLogin: async () => { console.log("login started"); throw new Error(${JSON.stringify(marker)}); },
+        openUrl: async () => { console.log("browser started"); return { status: "started" }; },
+      });
+    `);
+    expect(code).toBe(1);
+    expect(stderr.trim()).toBe(`❌ OAuth login failed (configuration_error): ${scenario.message}`);
+    expect(stdout.trim()).toBe("");
+    expect(stderr).not.toContain(marker);
+  });
+}

@@ -1,6 +1,7 @@
 import { AnthropicTokenError } from "./anthropic";
 import { OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, publicOAuthAuthenticationErrorMessage } from "./index";
 import { XaiTokenRequestError } from "./xai";
+import { AnthropicInstanceCollisionError, AnthropicInstanceConfigReadError } from "./store-anthropic-instance";
 
 // Standard RFC 6749 / RFC 6750 / RFC 8628 error codes. A provider's `error` field is printed only
 // when it is one of these, so a body that echoes request parameters there still prints nothing.
@@ -13,7 +14,8 @@ const STANDARD_OAUTH_ERROR_CODES = new Set([
 
 /** Fixed, machine-readable reason for a failed login; never derived from free-form text. */
 export function oauthLoginFailureDiagnostic(error: unknown): string {
-  if (error instanceof OAuthProviderNamespaceCollisionError || error instanceof OAuthProviderPublicationError) {
+  if (error instanceof OAuthProviderNamespaceCollisionError || error instanceof OAuthProviderPublicationError
+    || error instanceof AnthropicInstanceCollisionError || error instanceof AnthropicInstanceConfigReadError) {
     return "configuration_error";
   }
   const status = error instanceof AnthropicTokenError ? error.httpStatus

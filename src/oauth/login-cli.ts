@@ -138,7 +138,12 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): P
 }
 
 export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
-  if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
+  try {
+    // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
+    if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
+  } catch (error) {
+    reportOAuthLoginError(error);
+  }
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);
