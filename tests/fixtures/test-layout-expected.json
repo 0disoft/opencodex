@@ -1263,6 +1263,13 @@
   "management-desktop-compatibility-runtime-routes.test.ts": "server",
   "management-desktop-compatibility-settings.test.ts": "server",
   "optional-desktop-upstream.test.ts": "lib",
+  "opaque-proxy-tunnel.test.ts": "lib",
+  "opaque-proxy-tunnel-protocol.test.ts": "lib",
+  "opaque-proxy-lifecycle.test.ts": "lib",
+  "opaque-proxy-lifecycle-transport.test.ts": "lib",
+  "opaque-proxy-lifecycle-parser.test.ts": "lib",
+  "opaque-proxy-session-protocol.test.ts": "lib",
+    "opaque-proxy-route-refresh.test.ts": "lib",
   "server-desktop-compatibility-startup.test.ts": "server",
   "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration",
   "advisor-settings.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor", "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server", "advisor-internal-authority.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor", "advisor-authority-transport.test.ts": "advisor"
