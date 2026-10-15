@@ -189,3 +189,23 @@ test("built-in aliases preserve routable Fast siblings", async () => {
     }
   } finally { server.stop(true); }
 });
+
+
+test("Codex and Anthropic discovery retain one unchanged identity per model", async () => {
+  const snapshots: string[][][] = [];
+  for (const prefer of [false, true]) {
+    saveConfig(aliasConfig(prefer));
+    const server = startServer(0);
+    try {
+      const codex = await (await fetch(new URL("/v1/models?client_version=0.130.0", server.url))).json() as { models: { slug: string }[] };
+      const anthropic = await (await fetch(new URL("/v1/models", server.url), { headers: { "anthropic-version": "2023-06-01", "user-agent": "claude-code/2.1.207" } })).json() as { data: { id: string }[] };
+      const ids = [codex.models.map(row => row.slug), anthropic.data.map(row => row.id)];
+      for (const list of ids) {
+        expect(list.length).toBeGreaterThan(0);
+        expect(new Set(list).size).toBe(list.length);
+      }
+      snapshots.push(ids.map(list => list.toSorted()));
+    } finally { server.stop(true); }
+  }
+  expect(snapshots[1]).toEqual(snapshots[0]);
+});
