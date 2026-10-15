@@ -78,6 +78,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { distributedKeyPhysicalFetch } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
 import { releaseCodexAuthContextProbeLease, stripCodexRuntimeProviderFields } from "../../codex/auth-context";
@@ -598,8 +599,8 @@ export async function prepareResponsesTransport(
       }
     } else {
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
-      if (!current && route.provider.requestPacing?.enabled
-        && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")) {
+      if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
+        && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
@@ -630,7 +631,9 @@ export async function prepareResponsesTransport(
       ? (options.sendBudget as import("../../lib/request-execution-budget").RequestExecutionBudget).beginSpendProducer?.() : undefined;
     try {
     for (let attempt = 0; attempt < 3; attempt++) {
+      incoming.abortSignal?.throwIfAborted();
       const selectionRefreshed = !selectionIsCurrent(adapterBindings.get(selectedAdapter));
+      if (attempt === 0 && selectionRefreshed) releaseProviderRequestSlot(incoming.pacingSlot);
       if (selectionRefreshed) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
       const binding = adapterBindings.get(selectedAdapter);
       const run = rawRunTurns.get(selectedAdapter);
@@ -642,29 +645,38 @@ export async function prepareResponsesTransport(
       // Subsequent physical messages retain this adapter/credential and are paced normally.
       try {
         // A pre-acquired lease belongs to the original selection, never its replacement.
-        if (attempt === 0 && selectionRefreshed) releaseProviderRequestSlot(incoming.pacingSlot);
         attemptSlot = attempt === 0 && !selectionRefreshed && incoming.pacingSlot
           ? incoming.pacingSlot
           : await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal);
+        incoming.abortSignal?.throwIfAborted();
+        // Every admission can queue, including a replacement's. Never enter an
+        // adapter on a lease whose credential changed while it waited.
+        if (!selectionIsCurrent(binding)) {
+          refused = true;
+          throw new Error("Account selection changed before turn admission");
+        }
+        const beforePhysicalSend = (): void => {
+          incoming.abortSignal?.throwIfAborted();
+          if (sent) {
+            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+              && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
+            return;
+          }
+          if (!selectionIsCurrent(binding)) {
+            refused = true;
+            throw new Error("Account selection changed before the first turn dispatch");
+          }
+          incoming.beforePhysicalSend?.();
+          commitKeyAttemptSend();
+          sent = true;
+        };
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
           pacingSlot: attemptSlot,
           turnScopedPacing: true,
-          beforeDispatch: () => {
-            if (sent) {
-              if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
-                && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
-              return;
-            }
-            if (!selectionIsCurrent(binding)) {
-              refused = true;
-              throw new Error("Account selection changed before the first turn dispatch");
-            }
-            commitKeyAttemptSend();
-            sent = true;
-          },
+          beforeDispatch: beforePhysicalSend,
         });
-        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -673,7 +685,7 @@ export async function prepareResponsesTransport(
       if (!refused) return;
       // The adapter may map the guard's exception to an error event. Neither that
       // event nor a refused send may escape before retrying the newly selected account.
-      selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      if (attempt < 2) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
     }
     throw new Error("Account selection changed repeatedly before turn dispatch");
     } finally { producer?.close(); }
@@ -731,7 +743,7 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
-              anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider),
+              distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual" },
               { providerName: route.providerName, provider: route.provider },

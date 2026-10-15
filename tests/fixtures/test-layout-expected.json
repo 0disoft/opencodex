@@ -1,4 +1,5 @@
 {
+  "responses-native-key-cooldown.test.ts": "responses", "responses-run-turn-key-readmission.test.ts": "responses", "qoder-spawn-readmission.test.ts": "adapters",
   "api-key-selection-cooldown.test.ts": "providers", "server-chat-native-key-selection.test.ts": "server", "compact-key-selection.test.ts": "responses",
   "messages-native-key-selection.test.ts": "claude-integration",
   "codex-history-pending-wal.test.ts": "codex-integration",
