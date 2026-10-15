@@ -65,6 +65,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | --- | --- |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
+| [`providers/meta-muse.md`](providers/meta-muse.md) | CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics. |
 | [`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md) | Operator limits and per-model declarations across startup reconciliation and OAuth upsert. |
 | [`providers/claude-cli-replay.md`](providers/claude-cli-replay.md) | Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission. |
 | [`providers-and-adapters.md`](providers-and-adapters.md) | Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge. |
@@ -191,6 +192,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/messaging/` | [`local-messaging.md`](local-messaging.md) |
 | `src/oauth/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
+| `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
+| `src/oauth/meta-muse-keychain.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
+| `src/oauth/meta-muse.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
