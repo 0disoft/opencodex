@@ -121,6 +121,7 @@ export async function deliverAdapterResponse(
     const advisorStream = parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: eventStream,
           continuation: fetchTerminalGuardContinuation,
         })
@@ -257,6 +258,7 @@ export async function deliverAdapterResponse(
         const advisorEvents: AdapterEvent[] = [];
         for await (const event of parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchTerminalGuardContinuation,
         })) advisorEvents.push(event);
