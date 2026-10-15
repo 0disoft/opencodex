@@ -5,6 +5,7 @@ import { cachedProviderQuotaIsExhausted } from "../../src/combos/resolve";
 import { getCachedProviderAccountQuota, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
 import { sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
 import { ACCOUNT_QUOTA_TTL_MS } from "../../src/providers/quota-wire";
+import { providerWindowObservations } from "../../src/quota/window-mapping";
 import {
   probeAntigravityUsageQuota,
   setAntigravityAccountQuotaTransportForTests,
@@ -150,5 +151,19 @@ describe("Antigravity model quota evidence", () => {
       updatedAt: Date.now(),
       customWindows: [{ label: "gemini-3.8-flash-high", modelId: "gemini-3.8-flash-high", percent: 100 }],
     }, Date.now(), "gemini-3.8-flash-high")).toBe(false);
+  });
+
+  test("model-specific diagnostic rows are not observed as quota-reset windows", async () => {
+    const resetTime = "2026-11-01T12:00:00Z";
+    setModelsResponse(Object.fromEntries([
+      ["gemini-3.8-flash-high", { quotaInfo: { remainingFraction: 0.5, resetTime } }],
+      ...Array.from({ length: 300 }, (_, i) => [`gemini-aux-${i}`, { quotaInfo: { remainingFraction: 0.5, resetTime } }]),
+    ]));
+    const result = await probeAntigravityUsageQuota("synthetic-token", "synthetic-project");
+    expect(result.kind).toBe("available");
+    if (result.kind !== "available") return;
+    expect(result.quota.customWindows?.filter(window => window.modelId !== undefined)).toHaveLength(256);
+    // One pool reset must notify once for its family, not once per diagnostic model row.
+    expect(providerWindowObservations(result.quota).map(observation => observation.window)).toEqual(["custom:Gem"]);
   });
 });
