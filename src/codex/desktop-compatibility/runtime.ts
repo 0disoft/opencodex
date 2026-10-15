@@ -54,6 +54,7 @@ export function createDesktopCompatibilityRuntime(io: DesktopRuntimeIo = {}) {
   let pendingCleanup: (() => Promise<void>) | null = null;
   let releaseOwner: (() => void) | null = null;
   const status = () => ({ phase, supported: platform === "win32", running: owned !== null, contextFailure,
+    ...(buildProbe ? { buildAssessment: buildProbe.lastResult() } : {}),
     ...(owned ? { fingerprint: owned.fingerprint, safetyDeadline: owned.deadline, usage: owned.controller.snapshot() } : {}) });
   async function stop(): Promise<ReturnType<typeof status>> {
     if (phase === "starting") throw new Error("desktop_compatibility_busy");
