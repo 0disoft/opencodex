@@ -48,17 +48,13 @@ export async function dialDesktopUpstream(options: DesktopTunnelOptions = {}): P
       const credentials = url.username || url.password
         ? { username: decodeURIComponent(url.username), password: decodeURIComponent(url.password) }
         : {};
-      const endpoint = { id: "desktop-explicit", host, port, ...credentials };
+      const endpoint = { host, port, ...credentials };
       const route: OpaqueProxyRoute = protocol === "https:"
         ? { ...endpoint, kind: "https", proxyCa: options.proxyCa }
         : { ...endpoint, kind: protocol.slice(0, -1) as "http" | "socks5" | "socks5h" };
       const authority = `${target.host.includes(":") ? `[${target.host}]` : target.host}:${target.port}`;
-      // The route resolver remains authoritative. One explicit candidate cannot
-      // introduce failover or turn a proxy refusal into a direct connection.
-      raw = own((await dialTunnel(authority, [route], {
-        allowTarget: value => value === authority, signal,
-        timeoutMs: timeout, totalTimeoutMs: timeout, maxHeaderBytes: 65536,
-      })).socket);
+      // The route resolver remains authoritative; a failed proxy never becomes DIRECT.
+      raw = own(await dialTunnel(authority, route, { signal, timeoutMs: timeout, maxHeaderBytes: 65536 }));
     }
     if (signal.aborted || raw.destroyed) throw fail();
     // This consumer historically closes its writable side after peer EOF. The

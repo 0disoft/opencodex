@@ -412,7 +412,7 @@ HTTP path, while provider inference retains its separate existing provider-egres
 
 `src/lib/desktop-upstream-tunnel.ts` dials fixed chatgpt.com TLS through HTTP/HTTPS CONNECT
 or authenticated SOCKS5. Its selected-proxy branch delegates handshake framing to
-`src/lib/opaque-proxy-tunnel.ts` with one explicit candidate and exact target policy;
+`src/lib/opaque-proxy-tunnel.ts` with one explicit route;
 its direct branch and final target TLS handshake remain locally owned. It bounds
 the whole connection setup, rejects proxy EOF, abort and
 oversized handshake heads, and verifies both proxy and upstream certificate identities.
@@ -423,39 +423,27 @@ injected test socket options, never the user's OS trust store.
 `tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
 preserves the real relay’s fixed-target and opaque upgrade contracts.
 
-## Explicit opaque proxy candidates
+## Single-route opaque proxy transport
 
-`src/lib/opaque-proxy-tunnel.ts` exposes an authorized, paused target socket through
-an explicit ordered HTTP, HTTPS CONNECT, SOCKS5 or SOCKS5h candidate list. It has no
-implicit activation. The desktop upstream dialer is a production consumer of a
-single explicit candidate; this changes neither desktop proxy discovery nor the
-fixed-destination TLS contract above. Each call requires a synchronous target
-predicate; it is rechecked before every physical attempt and handshake write.
-A completed proxy handshake is rechecked before the socket is handed to the caller.
-A caller owns target/network authorization, including whether a proxy may resolve
-that target. No implicit DIRECT path, environment inheritance or provider reroute
-exists. Candidate credentials are request-local, isolated to that proxy's handshake,
-and absent from error messages; the module stores no credentials and emits no logs.
+`src/lib/opaque-proxy-tunnel.ts` establishes one HTTP/HTTPS CONNECT or SOCKS5/SOCKS5h
+route selected by `src/lib/desktop-upstream-tunnel.ts`. It returns a paused socket;
+the caller owns target selection and TLS, cancellation after establishment,
+backpressure, half-close and final destruction. The dialer has no proxy discovery,
+alternate-route list, direct fallback, listener, route version or session manager.
+The existing relay retains connection lifecycle ownership.
 
-The existing `src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS
-scheme spellings retain its ATYP DOMAIN remote-DNS behavior; they are not distinct
-local/remote DNS modes. Credentials offer both NO-AUTH and USER-PASS as that shared
-contract specifies; SOCKS usernames may contain colons and decoded fields retain
-the existing helper’s zero-to-255-byte compatibility bounds. HTTP Basic usernames
-with colons are rejected rather than emitting an ambiguous identity. HTTPS proxy identity and trust are always verified. Target TLS
-belongs to the client and target, not the opaque tunnel.
+The handshake is bounded by a timeout and optional caller signal. Proxy credentials
+are request-local and excluded from diagnostics. HTTPS proxy identity is verified
+against its configured host. HTTP Basic usernames with colons and malformed CONNECT
+response headers are rejected. Header size remains bounded even when a delimiter
+and early target bytes arrive together; remaining bytes are handed to the caller.
 
-Per-candidate and total deadlines bound establishment. A transport failure before
-any proxy response may advance only through the caller's explicit candidate list.
-Authentication, policy and certificate refusals, malformed/partial responses,
-cancellation and the total deadline are terminal. After return, the caller owns
-all cancellation, backpressure, half-close and socket destruction. The returned
-socket is paused; no established connection is migrated and no target bytes are
-replayed. Bounded SOCKS frame reads preserve early opaque bytes after CONNECT.
+`src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS spellings use its
+remote-DNS behavior and existing zero-to-255-byte credential-field limits, including
+colon usernames. Bounded reads preserve coalesced opaque bytes after CONNECT.
+There is no retry or replay before or after establishment. The caller retains the
+fixed target, explicit DIRECT selection and whole-connection deadline described above.
 `tests/lib/opaque-proxy-tunnel.test.ts` and
-`tests/lib/opaque-proxy-tunnel-protocol.test.ts` cover these local transport contracts.
-
-The existing Desktop relay owns connection cancellation and shutdown. Each new
-dial selects its configured proxy; established connections keep their original
-transport. This module adds no listener, session manager, route revision API or
-configuration hot-reload mechanism.
+`tests/lib/opaque-proxy-tunnel-protocol.test.ts` cover framing, TLS, authentication,
+timeout, cancellation and half-close; `tests/lib/optional-desktop-upstream.test.ts`
+checks all four proxy schemes close cleanly when the production consumer sees EOF.

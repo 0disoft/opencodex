@@ -12,7 +12,8 @@ const commonName = "opaque tunnel fixture CA";
 const authority = createCertificateAuthority({ commonName, validityDays: 1 });
 export const ca = authority.certPem;
 const originIdentity = issueServerLeaf(authority, commonName, ["origin.fixture.invalid"]);
-const proxyIdentity = issueServerLeaf(authority, commonName, ["proxy.fixture.invalid"]);
+const wrongProxyIdentity = issueServerLeaf(authority, commonName, ["wrong.fixture.invalid"]);
+const proxyIdentity = issueServerLeaf(authority, commonName, ["127.0.0.1"]);
 export const credentials = { username: "fixture-user", password: "fixture-páss" };
 const basic = "Basic " + Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
 export type ProxyKind = "http" | "https" | "socks5" | "socks5h";
@@ -53,12 +54,11 @@ type ProxyOptions = {
   destination?: Awaited<ReturnType<typeof origin>>;
   requireAuth?: boolean;
   fragmented?: boolean;
-  onAccepted?: () => void;
-  beforeEstablishedReply?: () => void;
+  wrongIdentity?: boolean;
 };
 
 export async function protocolProxy(scope: TunnelFixtureScope, kind: ProxyKind, {
-  mode = "ok", destination, requireAuth = true, fragmented = false, onAccepted, beforeEstablishedReply,
+  mode = "ok", destination, requireAuth = true, fragmented = false, wrongIdentity = false,
 }: ProxyOptions = {}) {
   const sockets = new Set<Socket>();
   const seen = { connections: 0, handshakes: 0, auth: 0, targets: [] as Array<{ host: string; port: number }>, opaque: [] as Buffer[], applicationBytes: 0, clientEnds: 0 };
@@ -100,7 +100,6 @@ export async function protocolProxy(scope: TunnelFixtureScope, kind: ProxyKind, 
         const connected = kind.startsWith("socks")
           ? Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
           : Buffer.from("HTTP/1.1 200 Established\r\n\r\n");
-        beforeEstablishedReply?.();
         send(connected);
         scope.later(() => {
           if (socket.destroyed || upstream.destroyed) return;
@@ -182,15 +181,15 @@ export async function protocolProxy(scope: TunnelFixtureScope, kind: ProxyKind, 
   };
   // Pre-handshake TLS peers auto-close; half-close is enabled only after secureConnect.
   const server = kind === "https"
-    ? tls.createServer({ key: proxyIdentity.keyPem, cert: proxyIdentity.certPem }, handle)
+    ? tls.createServer({ key: (wrongIdentity ? wrongProxyIdentity : proxyIdentity).keyPem, cert: (wrongIdentity ? wrongProxyIdentity : proxyIdentity).certPem }, handle)
     : net.createServer({ allowHalfOpen: true }, handle);
-  server.on("connection", () => { seen.connections++; onAccepted?.(); });
+  server.on("connection", () => { seen.connections++;  });
   server.on("tlsClientError", (_error, socket) => socket.destroy());
   const port = await listen(scope, server, sockets);
-  const base = { id: `${kind}-${port}`, host: "127.0.0.1", port };
+  const base = { host: "127.0.0.1", port };
   let route: OpaqueProxyRoute;
   switch (kind) {
-    case "https": route = { ...base, kind, proxyCa: ca, proxyServername: "proxy.fixture.invalid" }; break;
+    case "https": route = { ...base, kind, proxyCa: ca }; break;
     case "http": route = { ...base, kind }; break;
     default: route = { ...base, kind }; break;
   }

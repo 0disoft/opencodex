@@ -1615,21 +1615,13 @@ Choosing an account-qualified model does not enable credit spending. Stored acco
 
 Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.
 
-## Native Desktop relay proxy connections
+## Native Desktop relay CONNECT validation
 
-When the existing native Desktop compatibility relay is enabled, its upgraded
-connections to `chatgpt.com:443` use the selected HTTP/HTTPS CONNECT or
-SOCKS5/SOCKS5h proxy. This is the relay's outbound transport, not a new proxy setting
-or a claim that the original Desktop accepts local proxy credentials. Existing
-`NO_PROXY` and explicit direct-route decisions remain unchanged; a selected proxy
-failure never retries directly.
+The Desktop relay's existing HTTP/HTTPS CONNECT transport now rejects malformed
+proxy response headers and ambiguous HTTP Basic usernames containing colons.
+Decoded credential pairs are limited to 4096 UTF-8 bytes. If your selected proxy
+is rejected, correct its configuration or response; the relay does not silently
+switch to a direct connection.
 
-Proxy and target TLS identities remain verified. HTTP Basic usernames containing
-colons, credential pairs exceeding 4096 UTF-8 bytes, and malformed CONNECT response
-headers are refused. SOCKS credentials retain the shared handshake's 255-byte
-per-field limit and existing empty-field behavior; both SOCKS schemes resolve the
-target through the proxy. Credentials are used only for the chosen proxy handshake.
-
-The existing relay owns connection cancellation and shutdown. This change adds
-no listener, route-version API, configuration hot-reload mechanism, persistent
-credential injection, OS proxy change, or certificate installation.
+Proxy selection, SOCKS5/SOCKS5h support, certificate verification, and connection
+lifecycle are unchanged. Both SOCKS spellings retain remote target DNS resolution.

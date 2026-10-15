@@ -27,7 +27,6 @@ export class TunnelFixtureScope {
 }
 
 export const target = "fixture.invalid:443";
-export const allowTarget = (authority: string) => authority === target;
 export const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 export const digest = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
@@ -59,7 +58,7 @@ export async function deadProxy(kind: OpaqueProxyRoute["kind"] = "http"): Promis
   await once(server, "listening");
   const port = (server.address() as AddressInfo).port;
   await new Promise<void>(resolve => server.close(() => resolve()));
-  return { id: `dead-${port}`, kind, host: "127.0.0.1", port } as OpaqueProxyRoute;
+  return { kind, host: "127.0.0.1", port } as OpaqueProxyRoute;
 }
 
 export async function readBytes(socket: Socket, count: number): Promise<Buffer> {
@@ -149,5 +148,5 @@ export async function httpProxy(scope: TunnelFixtureScope, mode: HttpFixtureMode
     socket.on("data", handshake);
   });
   const port = await listen(scope, server, sockets);
-  return { candidate: { id: `${mode}-${port}`, host: "127.0.0.1", port } satisfies OpaqueProxyRoute, seen, sockets };
+  return { candidate: { host: "127.0.0.1", port } satisfies OpaqueProxyRoute, seen, sockets };
 }
