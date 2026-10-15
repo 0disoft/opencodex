@@ -1,4 +1,5 @@
 {
+  "codex-provider-routing.test.ts": "codex-integration",
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
