@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as authContextModule from "../../src/codex/auth-context";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import { handleResponses } from "../../src/server/responses/core";
@@ -161,5 +162,30 @@ describe("retained native reasoning rejected inside a stream", () => {
     expect(outbound).toHaveLength(3);
     expect(outbound[1]).toContain(BLOB);
     expect(outbound[2]).not.toContain(BLOB);
+  });
+
+  test("an already spent ambiguous replacement leaves the refusal stream untouched", async () => {
+    const outbound: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(String(init?.body));
+      return outbound.length === 1 ? completed("resp-1") : frames["response.failed terminal"]();
+    }) as typeof fetch;
+    const authSpy = poolAccount();
+    const sendBudget = createRequestExecutionBudget();
+    expect(sendBudget.claimAmbiguousResend(1)).toBe(true);
+    try {
+      await (await handleResponses(turn("gpt-5.6-sol"), retentionConfig(), { model: "", provider: "" })).text();
+      const second = await handleResponses(turn("gpt-6-astra"), retentionConfig(), { model: "", provider: "" }, { sendBudget });
+      // No rebuild is allowed, so the preflight must not consume the stream into a synthetic 400:
+      // the client receives the upstream frames, including the response id a projection drops.
+      expect(second.status).toBe(200);
+      const body = await second.text();
+      expect(body).toContain("response.created");
+      expect(body).toContain("resp-failed");
+      expect(body).toContain("invalid_encrypted_content");
+    } finally {
+      authSpy.mockRestore();
+    }
+    expect(outbound).toHaveLength(2);
   });
 });

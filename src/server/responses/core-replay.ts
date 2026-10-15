@@ -170,7 +170,7 @@ export function bindRouteReasoningReplayScope(args: {
       && (!identityChange.modelChanged || retention?.modelSwitch === true)
       && (!identityChange.credentialChanged || retention?.accountSwitch === true);
     if (!mayRetainReasoning) parsed._stripReasoningEncryptedContent = true;
-    else parsed._nativeReasoningRetainedAcrossRoute = true;
+    else if (parsed._stripReasoningEncryptedContent !== true) parsed._nativeReasoningRetainedAcrossRoute = true;
     // Only a different destination or credential makes the replayed item ids unresolvable; a
     // model change on the same store keeps them.
     if (reasoningReplayItemStoreChanged(parsed._reasoningReplayScope)) {
@@ -182,6 +182,8 @@ export function bindRouteReasoningReplayScope(args: {
     parsed._stripNativeCompactionEncryptedContent = true;
     parsed._dropForeignReasoningItemIds = true;
   }
+  // Stripping is authoritative: nothing retained remains to be refused.
+  if (parsed._stripReasoningEncryptedContent === true) delete parsed._nativeReasoningRetainedAcrossRoute;
   bindProviderContinuationForRoute(parsed, continuationOwner);
 }
 

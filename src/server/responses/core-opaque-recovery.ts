@@ -444,6 +444,7 @@ export async function consoleGoUploadRejectionBody(
 
 export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
+  delete parsed._nativeReasoningRetainedAcrossRoute;
   parsed._stripNativeCompactionEncryptedContent = true;
   // The destination rejected state another serving identity minted. A reasoning item's id names
   // an item in that identity's store, so it goes with the blob.
