@@ -2,12 +2,20 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyMainHardLockFallbackOverride } from "../../src/server/responses/main-hard-lock-routing";
+import {
+  applyMainHardLockFallbackOverride,
+  resolveMainHardLockFallbackOverride,
+} from "../../src/server/responses/main-hard-lock-routing";
 import { resolveMainAccountHardLockFallback } from "../../src/codex/main-account-hard-lock";
-import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
+import {
+  captureMainQuotaWriter,
+  clearMainAccountInfoCache,
+  observeMainQuotaCredential,
+  observeMainQuotaIdentity,
+} from "../../src/codex/main-account-cache";
 import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
+import { NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
 import { deleteAllScopedHealth, setScopedHealth } from "../../src/codex/routing/health-store";
 import { handleResponses } from "../../src/server/responses";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
@@ -35,6 +43,7 @@ beforeEach(() => {
   deleteAllScopedHealth("pool-a");
   clearComboRecallForTests();
   observeMainQuotaIdentity("fallback-account-a");
+  observeMainQuotaCredential("token-main-a", "fallback-account-a");
 });
 
 afterEach(() => {
@@ -179,6 +188,128 @@ describe("applyMainHardLockFallbackOverride", () => {
       .toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
   });
 
+  test("Direct mode only rewrites when the caller credential is the locked main account", async () => {
+    observe({ weeklyPercent: 100 });
+    const directCfg = config({
+      defaultProvider: "gateway",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          codexAccountMode: "direct",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        gateway: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: "https://gateway.example/v1",
+          apiKey: "gw-key",
+        },
+      },
+      codexMainAccountHardLockFallback: { model: "gateway/fallback-model", reasoningEffort: "low" },
+    } as Partial<OcxConfig>);
+
+    const otherHeaders = new Headers({
+      authorization: "Bearer token-other-healthy",
+      "chatgpt-account-id": "other-account-b",
+    });
+    const lockedMainHeaders = new Headers({
+      authorization: "Bearer token-main-a",
+      "chatgpt-account-id": "fallback-account-a",
+    });
+
+    const otherBody: Record<string, unknown> = { model: "gpt-5.3" };
+    expect(applyMainHardLockFallbackOverride(otherBody, directCfg, { now, headers: otherHeaders })).toBeNull();
+    expect(otherBody.model).toBe("gpt-5.3");
+
+    const lockedBody: Record<string, unknown> = { model: "gpt-5.3" };
+    expect(applyMainHardLockFallbackOverride(lockedBody, directCfg, { now, headers: lockedMainHeaders }))
+      .toEqual({ sourceModel: "gpt-5.3", targetModel: "gateway/fallback-model" });
+    expect(lockedBody.model).toBe("gateway/fallback-model");
+
+    const seenUrls: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const parsedBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      seenUrls.push(`${String(input)}|${String(parsedBody.model)}`);
+      return Response.json({
+        id: "resp_direct_identity",
+        status: "completed",
+        model: String(parsedBody.model ?? "gpt-5.3"),
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+        usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 },
+      });
+    }) as typeof fetch;
+
+    // Healthy non-main caller credential in Direct mode stays on canonical OpenAI.
+    const otherRes = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: new Headers({
+        "content-type": "application/json",
+        authorization: "Bearer token-other-healthy",
+        "chatgpt-account-id": "other-account-b",
+      }),
+      body: JSON.stringify({
+        model: "gpt-5.3",
+        stream: false,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      }),
+    }), directCfg, { model: "", provider: "" });
+    expect(otherRes.status).toBe(200);
+    await otherRes.text();
+
+    // Locked main caller credential in Direct mode reroutes to the fallback model.
+    const lockedRes = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: new Headers({
+        "content-type": "application/json",
+        authorization: "Bearer token-main-a",
+        "chatgpt-account-id": "fallback-account-a",
+      }),
+      body: JSON.stringify({
+        model: "gpt-5.3",
+        stream: false,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      }),
+    }), directCfg, { model: "", provider: "" });
+    expect(lockedRes.status).toBe(200);
+    await lockedRes.text();
+
+    expect(seenUrls).toEqual([
+      "https://chatgpt.com/backend-api/codex/responses|gpt-5.3",
+      "https://gateway.example/v1/responses|fallback-model",
+    ]);
+  });
+
+  test("account-gated models filter pool availability by model entitlement before deciding fallback", async () => {
+    observe({ weeklyPercent: 100 });
+    const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
+
+    // Healthy pool sibling NOT entitled to the gated model => falls back.
+    const unentitledBody: Record<string, unknown> = { model: NATIVE_DAYBREAK_BLUE_MODEL };
+    expect(await resolveMainHardLockFallbackOverride(unentitledBody, cfg, {
+      now,
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map([["pool-a", new Set(["gpt-5.3"])]]),
+        confirmedAccountIds: new Set(["pool-a"]),
+      }),
+    })).toEqual({
+      sourceModel: NATIVE_DAYBREAK_BLUE_MODEL,
+      targetModel: "deepseek/deepseek-chat",
+    });
+    expect(unentitledBody.model).toBe("deepseek/deepseek-chat");
+
+    // Healthy pool sibling entitled to the gated model => stays on Codex (no fallback).
+    const entitledBody: Record<string, unknown> = { model: NATIVE_DAYBREAK_BLUE_MODEL };
+    expect(await resolveMainHardLockFallbackOverride(entitledBody, cfg, {
+      now,
+      resolveCodexModelEntitlements: async () => ({
+        modelsByAccount: new Map([["pool-a", new Set([NATIVE_DAYBREAK_BLUE_MODEL])]]),
+        confirmedAccountIds: new Set(["pool-a"]),
+      }),
+    })).toBeNull();
+    expect(entitledBody.model).toBe(NATIVE_DAYBREAK_BLUE_MODEL);
+  });
+
   test("only bare Codex-native selectors qualify", () => {
     observe({ weeklyPercent: 100 });
     const cfg = config({
@@ -283,8 +414,8 @@ describe("applyMainHardLockFallbackOverride", () => {
     const headers = new Headers({
       "content-type": "application/json",
       "session_id": "lane-hard-lock-fallback",
-      "authorization": "Bearer caller-chatgpt-token",
-      "chatgpt-account-id": "acct-caller",
+      "authorization": "Bearer token-main-a",
+      "chatgpt-account-id": "fallback-account-a",
     });
     const lane = sessionLaneIdFromRequest(headers);
     rememberComboForLane(lane, "prior", { provider: "gateway", model: "prior-model" }, "prior-model", captureConfigGeneration());

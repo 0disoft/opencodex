@@ -83,10 +83,11 @@ dispatch reads `model`. The rewrite is bounded on every side so it can never wid
 protects:
 
 - `getEligiblePoolAccounts` is consulted under the request model's quota scope whenever canonical
-  `openai` is in Pool mode, so "the Pool can serve it" shares the dispatch's own eligibility and
-  scoped-cooldown rules. An empty eligible list (or Direct mode, which never consults stored Pool
-  accounts) is what makes the fallback the request's only way through; the lock excludes the main
-  account there itself.
+  `openai` is in Pool mode (with `modelEligibleAccountIds` resolved for account-gated native
+  models), so "the Pool can serve it" shares the dispatch's own eligibility, entitlement, and
+  scoped-cooldown rules. An empty eligible list — or Direct mode when the request authenticates as
+  the locked main account — is what makes the fallback the request's only way through; a caller
+  presenting a different healthy ChatGPT credential keeps its own admission.
 - Only bare Codex-native selectors qualify. Provider-qualified rows, combos, account namespaces
   (including `nativeAlias` combos), compaction triggers, shadow-intercepted helper calls and policy
   routes name their own destination on purpose, and Luna Reserve keeps its own admission. A

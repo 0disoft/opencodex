@@ -113,14 +113,19 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
 
   const ensureModelsLoaded = useCallback(() => {
     if (modelsLoadedRef.current || modelsAbortRef.current) return;
-    const controller = new AbortController();
-    modelsAbortRef.current = controller;
+    const bounded = createBoundedFetch(15_000);
+    modelsAbortRef.current = bounded.controller;
+    const releaseIfCurrent = () => {
+      if (modelsAbortRef.current === bounded.controller) modelsAbortRef.current = null;
+    };
+    bounded.signal.addEventListener("abort", releaseIfCurrent, { once: true });
     void (async () => {
       try {
-        const response = await fetch(`${apiBase}/api/models`, { signal: controller.signal });
+        const response = await fetch(`${apiBase}/api/models`, { signal: bounded.signal });
         if (!response.ok) throw new Error("models");
         const rows: unknown = await response.json();
         if (!Array.isArray(rows)) throw new Error("models");
+        if (bounded.signal.aborted) return;
         modelsLoadedRef.current = true;
         if (mountedRef.current) {
           setModels(rows.filter(row => row !== null && typeof row === "object"
@@ -130,7 +135,9 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         }
       } catch { /* saved value stays selectable */ }
       finally {
-        if (modelsAbortRef.current === controller) modelsAbortRef.current = null;
+        bounded.clear();
+        bounded.signal.removeEventListener("abort", releaseIfCurrent);
+        releaseIfCurrent();
       }
     })();
   }, [apiBase]);

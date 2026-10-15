@@ -798,7 +798,7 @@ function assertMainAccountPolicy(
 }
 
 /** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */
-function callerMatchesObservedMain(headers: Headers): boolean {
+export function callerMatchesObservedMain(headers: Headers): boolean {
   const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!bearer) return false;
   const effectiveAccountId = headers.get("chatgpt-account-id")

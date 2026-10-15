@@ -1,15 +1,19 @@
 import type { OcxConfig } from "../../types";
 import { resolveComboId } from "../../combos";
 import { isBareOpenAiFamilyModel } from "../../router";
-import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
+import { callerMatchesObservedMain } from "../../codex/auth-context";
+import { MAIN_CODEX_ACCOUNT_ID, type NativeMainRefreshDependencies } from "../../codex/main-account";
 import {
   getMainAccountHardLockStatus,
   resolveMainAccountHardLockFallback,
 } from "../../codex/main-account-hard-lock";
+import { entitledCodexAccountIdsForModel, resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
+import { hasForwardableCodexBearer, type DataPlaneAdmission } from "../auth-cors";
 
 function isConfiguredComboSelector(config: OcxConfig, modelId: string): boolean {
   const comboId = resolveComboId(config, modelId);
@@ -40,12 +44,53 @@ export interface MainHardLockFallbackOverride {
   targetModel: string;
 }
 
+export interface MainHardLockFallbackOptions {
+  now?: number;
+  headers?: Headers;
+  admission?: Pick<DataPlaneAdmission, "source">;
+  /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
+  modelEligibleAccountIds?: ReadonlySet<string>;
+  signal?: AbortSignal;
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
+}
+
 function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: string } | undefined {
   if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
   const raw = body as Record<string, unknown>;
   return typeof raw.model === "string" && raw.model.trim().length > 0
     ? { raw, model: raw.model }
     : undefined;
+}
+
+function normalizeOptions(nowOrOptions?: number | MainHardLockFallbackOptions): MainHardLockFallbackOptions {
+  if (typeof nowOrOptions === "number") return { now: nowOrOptions };
+  return nowOrOptions ?? {};
+}
+
+/**
+ * Does the caller carry a credential that `resolveCallerOwnedMainContext` would admit without
+ * consulting the main-account hard lock?
+ *
+ * - In Direct mode, only an admission bearer (which substitutes stored main) or a caller bearer
+ *   matching the observed main identity reaches `assertMainAccountPolicy`. A different healthy
+ *   ChatGPT account is admitted on its own token, and a missing bearer fails with 401.
+ * - In Pool mode, when no stored Pool account is eligible, a request carrying a forwardable
+ *   non-main caller bearer falls through to `resolveCallerOwnedMainContext` and is served by
+ *   that caller credential rather than failing on the locked main account.
+ */
+function callerCredentialBypassesHardLock(
+  config: OcxConfig,
+  accountMode: "pool" | "direct" | undefined,
+  options: MainHardLockFallbackOptions,
+): boolean {
+  const { headers, admission } = options;
+  if (!headers) return false;
+  if (admission?.source === "bearer") return false;
+  if (accountMode === "direct") {
+    return !callerMatchesObservedMain(headers);
+  }
+  return hasForwardableCodexBearer(headers, config) && !callerMatchesObservedMain(headers);
 }
 
 /**
@@ -75,8 +120,10 @@ function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: strin
 export function applyMainHardLockFallbackOverride(
   body: unknown,
   config: OcxConfig,
-  now = Date.now(),
+  nowOrOptions?: number | MainHardLockFallbackOptions,
 ): MainHardLockFallbackOverride | null {
+  const options = normalizeOptions(nowOrOptions);
+  const now = options.now ?? Date.now();
   const parsed = rawModelOf(body);
   if (!parsed) return null;
   const fallback = resolveMainAccountHardLockFallback(config);
@@ -90,8 +137,18 @@ export function applyMainHardLockFallbackOverride(
     OPENAI_CODEX_PROVIDER_ID,
     config.providers?.[OPENAI_CODEX_PROVIDER_ID],
   );
+  if (callerCredentialBypassesHardLock(config, accountMode, options)) return null;
+  const selectionOptions = options.modelEligibleAccountIds !== undefined
+    ? { modelEligibleAccountIds: options.modelEligibleAccountIds }
+    : undefined;
   if (accountMode !== "direct"
-    && getEligiblePoolAccounts(config, undefined, now, codexQuotaScopeForModel(parsed.model)).length > 0) {
+    && getEligiblePoolAccounts(
+      config,
+      undefined,
+      now,
+      codexQuotaScopeForModel(parsed.model),
+      selectionOptions,
+    ).length > 0) {
     return null;
   }
 
@@ -106,4 +163,46 @@ export function applyMainHardLockFallbackOverride(
     };
   }
   return { sourceModel: parsed.model, targetModel: fallback.model };
+}
+
+/**
+ * Async request-prepare entry point: resolves `modelEligibleAccountIds` for account-gated
+ * native models before checking Pool eligibility so a healthy Pool sibling that is not
+ * entitled to the requested model cannot suppress the fallback.
+ */
+export async function resolveMainHardLockFallbackOverride(
+  body: unknown,
+  config: OcxConfig,
+  options: MainHardLockFallbackOptions = {},
+): Promise<MainHardLockFallbackOverride | null> {
+  const now = options.now ?? Date.now();
+  const parsed = rawModelOf(body);
+  if (!parsed) return null;
+  let modelEligibleAccountIds = options.modelEligibleAccountIds;
+  if (
+    modelEligibleAccountIds === undefined
+    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(parsed.model)
+    && resolveMainAccountHardLockFallback(config) !== undefined
+    && getMainAccountHardLockStatus(config, now).state === "blocked"
+    && providerCodexAccountMode(
+      OPENAI_CODEX_PROVIDER_ID,
+      config.providers?.[OPENAI_CODEX_PROVIDER_ID],
+    ) !== "direct"
+  ) {
+    const excludeAccountIds = new Set([MAIN_CODEX_ACCOUNT_ID]);
+    const snapshot = await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, {
+      excludeAccountIds,
+      signal: options.signal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+    });
+    const entitled = entitledCodexAccountIdsForModel(snapshot, parsed.model);
+    modelEligibleAccountIds = entitled
+      ? new Set([...entitled].filter(candidate => !excludeAccountIds.has(candidate)))
+      : undefined;
+  }
+  return applyMainHardLockFallbackOverride(body, config, {
+    ...options,
+    now,
+    ...(modelEligibleAccountIds !== undefined ? { modelEligibleAccountIds } : {}),
+  });
 }

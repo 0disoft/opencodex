@@ -563,4 +563,37 @@ describe("main account hard-lock fallback setting", () => {
     // The draft-free row shows the last acknowledged state until the retry lands.
     expect(fallbackSwitch(host).getAttribute("aria-pressed")).toBe("true");
   });
+
+  test("a timed-out lazy /api/models fetch releases its in-flight guard so a later interaction retries", async () => {
+    let modelReads = 0;
+    let capturedSignal: AbortSignal | null | undefined;
+    const host = await mount((async (input, init) => {
+      if (String(input).endsWith("/api/models")) {
+        modelReads += 1;
+        capturedSignal = init?.signal;
+        if (modelReads === 1) {
+          // Simulate a hung request whose bounded signal aborts on timeout.
+          return await new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new DOMException("Timed out", "TimeoutError")), { once: true });
+          });
+        }
+        return response([{ id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" }]);
+      }
+      return response(settingsWithFallback({ model: "combo/x" }));
+    }) as typeof fetch);
+
+    await act(async () => { selectTriggers(host)[0]!.click(); await flush(); });
+    expect(modelReads).toBe(1);
+    expect(capturedSignal).toBeDefined();
+    // Trigger the bounded abort signal (as createBoundedFetch(15_000) does on timeout) and close the menu.
+    await act(async () => {
+      capturedSignal?.dispatchEvent(new Event("abort"));
+      selectTriggers(host)[0]!.click();
+      await flush();
+    });
+    // Next interaction retries /api/models and populates the option list.
+    await act(async () => { selectTriggers(host)[0]!.click(); await flush(); });
+    expect(modelReads).toBe(2);
+    expect(optionButtons().map(button => button.textContent)).toContain("deepseek/deepseek-chat");
+  });
 });

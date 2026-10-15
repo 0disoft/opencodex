@@ -156,7 +156,7 @@ import {
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
-import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
+import { resolveMainHardLockFallbackOverride } from "./main-hard-lock-routing";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -362,7 +362,13 @@ export async function prepareResponsesRequest(
   // must run before comboIdFromRawBody reads `model`.
   if (!concreteSelection && !options.compactionRoutingOverride && !isCompactionTrigger && !options.internalDecisionCall
     && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
-    options.mainHardLockFallbackOverride = applyMainHardLockFallbackOverride(body, config);
+    options.mainHardLockFallbackOverride = await resolveMainHardLockFallbackOverride(body, config, {
+      headers: req.headers,
+      admission: options.admission,
+      signal: options.abortSignal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+      resolveCodexModelEntitlements: options.resolveCodexModelEntitlements,
+    });
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
   // A decision model may be a plain model or a non-JEV combo. A JEV combo here would recurse
