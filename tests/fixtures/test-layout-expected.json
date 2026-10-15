@@ -82,6 +82,7 @@
   "codex-shim-overlay-candidates.test.ts": "codex-integration",
   "droid-normalized-reasoning-defaults.test.ts": "clients",
   "responses-combo-exhausted-error.test.ts": "responses",
+  "responses-combo-run-turn-classified-failure.test.ts": "responses",
   "cli-config-default-show.test.ts": "cli",
   "ollama-native-tool-continuations.test.ts": "providers/ollama",
   "gui-pair-delivery.test.ts": "gui",

@@ -789,7 +789,7 @@ export async function executeResponsesRunTurn(
           const storageRefusal = preflight.error?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code });
+            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
@@ -992,7 +992,7 @@ export async function executeResponsesRunTurn(
           const storageRefusal = firstMeaningful?.type === "error" && firstMeaningful.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
           const failure = formatErrorResponse(storageRefusal ? 503 : classified.httpStatus,
             storageRefusal ? SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE : classified.error.type,
-            redactSecretString(classified.error.message), { code: classified.error.code });
+            redactSecretString(classified.error.message), { code: classified.error.code, classified: true });
           if (replayUnsafe) markResponseNonReplayable(failure);
           return failure;
         }
