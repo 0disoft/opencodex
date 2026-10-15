@@ -1,5 +1,6 @@
 # Claude Desktop Integration
 
+The separate [CLI tier-default apply](../gui-and-management-api.md) writes the shared Claude Code user settings through `src/claude/model-default-settings.ts`. It pairs selected aliases with labels derived by `claudeTierDisplayName` in `src/claude/context-windows.ts`; preview includes the label edits, with an empty replacement indicating removal. Existing labels are managed only when they exactly match the generated name for their current alias; all other labels remain user-owned, including empty or non-string values. A matching generated label is removed only when its explicitly selected tier is replaced by a non-alias. An unset tier retains both its settings model ID and display label. Identical manually entered labels cannot be distinguished from generated ones. Code processes started by other applications can inherit those explicitly applied defaults; Desktop family profile assignments are not edited by this operation. `tests/claude-integration/claude-model-default-labels.test.ts` covers this ownership and preview/apply contract.
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation does not launch or reconfigure a desktop client. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
 
@@ -92,7 +93,7 @@ traffic through a local interception proxy, which Anthropic may treat as a terms
 owned settings are still observed; otherwise the field is `null`.
 `/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
 first-party; both re-resolve after model discovery before writing.
-Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged.
+Background refresh preserves the selected owned gateway profile's mode, refuses symlinked library, metadata, profile or backup paths and non-regular profiles, and rechecks admission, the selected owned metadata entry and its applied fingerprint in the no-follow writer's pre-rename hook; it leaves metadata and backup bytes unchanged. Desktop library configuration reads follow [`clients/claude-desktop-config-reads.md`](claude-desktop-config-reads.md).
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves

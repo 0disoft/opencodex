@@ -75,6 +75,40 @@ describe("finalizeAutoReviewModelOverride with the global override", () => {
     for (const row of models) expect(row.auto_review_model_override).toBe(ROOT);
   });
 
+  test("an enabled blank selector keeps the root fallback", () => {
+    home = codexHomeWith(ROOT);
+    process.env.CODEX_HOME = home;
+    const models = rows();
+    finalizeAutoReviewModelOverride(models, [], configWith({ enabled: true, model: "   " }));
+    for (const row of models) expect(row.auto_review_model_override).toBe(ROOT);
+  });
+
+  test("disabling a global override replaces its previous catalog stamps", () => {
+    home = codexHomeWith(ROOT);
+    process.env.CODEX_HOME = home;
+    const models = rows();
+    finalizeAutoReviewModelOverride(models, [], configWith({ enabled: true, model: OVERRIDE }));
+    finalizeAutoReviewModelOverride(models, [], configWith({ enabled: false, model: OVERRIDE }));
+    for (const row of models) expect(row.auto_review_model_override).toBe(ROOT);
+  });
+
+  test("per-model, provider, global and root choices retain their precedence", () => {
+    home = codexHomeWith(ROOT);
+    process.env.CODEX_HOME = home;
+    const models = rows();
+    finalizeAutoReviewModelOverride(models, [], configWith(
+      { enabled: true, model: OVERRIDE },
+      { "9router": {
+        adapter: "openai-responses", baseUrl: "https://router.example.test/v1",
+        autoReviewModel: "gpt-5.6-sol",
+        autoReviewModelOverrides: { "ocg-deepseek-v4.1-flash": OVERRIDE },
+      } } as unknown as OcxConfig["providers"],
+    ));
+    expect(models.find(row => row.slug === ROOT)?.auto_review_model_override).toBe(OVERRIDE);
+    expect(models.find(row => row.slug === OVERRIDE)?.auto_review_model_override).toBe("gpt-5.6-sol");
+    expect(models.find(row => row.slug === "gpt-5.6-sol")?.auto_review_model_override).toBe(OVERRIDE);
+  });
+
   test("a provider-scoped stamp keeps its precedence over the global override", () => {
     home = codexHomeWith(ROOT);
     process.env.CODEX_HOME = home;
