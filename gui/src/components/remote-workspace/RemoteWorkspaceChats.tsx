@@ -9,6 +9,9 @@ import { useSessionActions } from "./use-session-actions";
 const DRAG_TYPE = "application/x-opencodex-session";
 const EDGES: SplitEdge[] = ["left", "right", "up", "down"];
 
+// Only a nested split reserves its width; a leaf pane stays free to follow the ratio.
+const trackMin = (child: PaneLayout) => child.type === "split" ? minLayoutWidth(child) : 0;
+
 function SplitBranch({ node, renderPane, resize }: {
   node: PaneLayout; renderPane: (id: string) => ReactNode; resize: (id: string, ratio: number) => void;
 }) {
@@ -16,8 +19,6 @@ function SplitBranch({ node, renderPane, resize }: {
   const container = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   if (node.type === "pane") return renderPane(node.sessionId);
-  // Only a nested split reserves its width; a leaf pane stays free to follow the ratio.
-  const trackMin = (child: PaneLayout) => child.type === "split" ? minLayoutWidth(child) : 0;
   const style = { "--split-ratio": node.ratio, "--split-min-width": minLayoutWidth(node),
     "--split-first-min": trackMin(node.first), "--split-second-min": trackMin(node.second) } as CSSProperties;
   return <div ref={container} className={`remote-split-branch remote-split-branch--${node.axis}`} style={style}>

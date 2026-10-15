@@ -64,9 +64,10 @@ export function resizeSplit(tree: PaneLayout, id: string, ratio: number): PaneLa
 }
 
 export function reconcileLayout(tree: PaneLayout | null, ids: string[], fallback?: string): PaneLayout | null {
+  const live = new Set(ids);
   let next = tree;
-  for (const id of paneIds(tree)) if (!ids.includes(id)) next = removePane(next, id);
-  return next ?? (fallback && ids.includes(fallback) ? pane(fallback) : ids.length ? pane(ids[ids.length - 1]!) : null);
+  for (const id of paneIds(tree)) if (!live.has(id)) next = removePane(next, id);
+  return next ?? (fallback && live.has(fallback) ? pane(fallback) : ids.length ? pane(ids[ids.length - 1]!) : null);
 }
 
 /** Storage contains only layout identifiers, never prompts or model output. */
