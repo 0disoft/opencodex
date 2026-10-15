@@ -206,15 +206,10 @@ describe("Codex CLI update plan identity", () => {
     }
   });
 
-  test("a session starting or ending between dry-run and apply does not invalidate the plan", async () => {
-    // Blockers are re-read at apply time where they can only refuse. Binding them into
-    // the id would expire a plan the operator read correctly, for a reason that cannot
-    // make the install wrong.
-    const first = await applicablePlan();
-    const second = await applicablePlan({
-      scanProcesses: () => ({ kind: "observed", processes: [] }),
-    });
-    expect(second.planId).toBe(first.planId);
+  test("an applicable plan binds only the declared evidence, excluding session state", async () => {
+    // Independently computed SHA-256 vector for MANAGED + RESOLVED, schema 1.
+    // Binding session state (or any undeclared field) changes this fixed oracle.
+    expect((await applicablePlan()).planId).toBe("65ce26ec550cbcd82dda68f0c86a0b4c");
   });
 
   test("the id contains only the explicitly bound evidence", () => {
@@ -227,10 +222,10 @@ describe("Codex CLI update plan identity", () => {
       targetVersion: "1.1.0",
       targetIntegrity: "sha512-AAAA",
     };
-    expect(codexCliUpdatePlanId(bound)).toBe(codexCliUpdatePlanId(bound));
-    expect(codexCliUpdatePlanId(bound)).toMatch(/^[0-9a-f]{32}$/);
-    // A digest of the same evidence recomputed by a different build agrees.
-    expect(codexCliUpdatePlanId({ ...bound })).toBe(codexCliUpdatePlanId(bound));
+    const expected = "65ce26ec550cbcd82dda68f0c86a0b4c";
+    expect(codexCliUpdatePlanId(bound)).toBe(expected);
+    const withSession = { ...bound, session: { state: "active", matches: 1 } };
+    expect(codexCliUpdatePlanId(withSession)).toBe(expected);
   });
 });
 
