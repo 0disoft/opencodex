@@ -1,5 +1,6 @@
 /**
- * Explicit authorized opaque proxy tunnel. No production caller is registered.
+ * Explicit authorized opaque proxy tunnel. The desktop upstream dialer consumes
+ * a single selected route while retaining its own fixed-target TLS contract.
  * Shares OpenCodex's MIT SOCKS handshake; the caller owns all post-establishment
  * cancellation and socket cleanup. Never replay or implicitly retry directly.
  */
@@ -69,9 +70,9 @@ function validateOptions(candidates: readonly OpaqueProxyRoute[], timeoutMs: num
       || !['http', 'https', 'socks5', 'socks5h'].includes(p.kind ?? 'http')) throw new TunnelError('CONFIG', 'Invalid proxy candidate');
     if ((p.username === undefined) !== (p.password === undefined)
       || (p.username !== undefined && (typeof p.username !== 'string' || typeof p.password !== 'string'
-        || p.username.includes(':') || Buffer.byteLength(p.username + p.password) > 4096))) throw new TunnelError('CONFIG', 'Invalid proxy credentials');
+        || (!p.kind?.startsWith('socks') && p.username.includes(':')) || Buffer.byteLength(p.username + p.password) > 4096))) throw new TunnelError('CONFIG', 'Invalid proxy credentials');
     if ((p.kind ?? 'http').startsWith('socks') && p.username !== undefined
-      && (!p.username || !p.password || Buffer.byteLength(p.username) > 255 || Buffer.byteLength(p.password) > 255)) throw new TunnelError('CONFIG', 'SOCKS credentials must each contain 1–255 UTF-8 bytes');
+      && (Buffer.byteLength(p.username) > 255 || Buffer.byteLength(p.password) > 255)) throw new TunnelError('CONFIG', 'SOCKS credentials must each fit in 255 UTF-8 bytes');
     if ((p.proxyCa !== undefined || p.proxyServername !== undefined) && p.kind !== 'https') throw new TunnelError('CONFIG', 'Proxy TLS settings require HTTPS proxy');
     if (p.proxyCa !== undefined && typeof p.proxyCa !== 'string' && !Buffer.isBuffer(p.proxyCa)) throw new TunnelError('CONFIG', 'Invalid proxy CA');
     if (p.proxyServername !== undefined && (typeof p.proxyServername !== 'string' || !p.proxyServername || /[\s/@\x00]/.test(p.proxyServername))) throw new TunnelError('CONFIG', 'Invalid proxy TLS server name');
@@ -178,7 +179,8 @@ function connectOne(authority: string, proxy: OpaqueProxyRoute, { signal, timeou
   });
 }
 
-// Reader contract follows desktop-upstream-tunnel.ts. The framing is the existing
+// The bounded socket reader owns setup cancellation and preserves queued bytes.
+// Framing uses the existing
 // MIT socks5-handshake module; neither shared framing nor its DNS policy changes.
 async function connectSocks(authority: string, proxy: OpaqueProxyRoute, { signal, timeoutMs, authorize }: AttemptOptions): Promise<Socket> {
   if (signal?.aborted) throw aborted();

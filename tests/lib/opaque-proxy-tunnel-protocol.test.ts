@@ -114,7 +114,7 @@ test('configuration rejects unsupported protocols and invalid credential sizes b
   const route = { id: 'x', host: '127.0.0.1', port: 1 };
   await assert.rejects(dialAllowed('origin.fixture.invalid:443', [{ ...route, kind: 'direct' } as unknown as OpaqueProxyRoute]), { code: 'CONFIG' });
   await assert.rejects(dialAllowed('origin.fixture.invalid:443', [{ ...route, kind: 'socks5', username: 'x'.repeat(256), password: 'p' }]), { code: 'CONFIG' });
-  await assert.rejects(dialAllowed('origin.fixture.invalid:443', [{ ...route, kind: 'socks5h', username: 'u', password: '' }]), { code: 'CONFIG' });
+  await assert.rejects(dialAllowed('origin.fixture.invalid:443', [{ ...route, kind: 'socks5h', username: 'u', password: 'x'.repeat(256) }]), { code: 'CONFIG' });
   await assert.rejects(dialAllowed('origin.fixture.invalid:443', [route], { totalTimeoutMs: 0 }), { code: 'CONFIG' });
 });
 

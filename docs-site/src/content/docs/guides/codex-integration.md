@@ -1614,3 +1614,22 @@ The shared SSE decoder accepts LF, CRLF and standalone CR line endings, even whe
 Choosing an account-qualified model does not enable credit spending. Stored accounts obey **Use credits after limit** during authentication, when credentials are prepared, and before Responses HTTP or WebSocket dispatch after pacing or retry waits. A held request reports the credit policy, not an authentication failure; wait for the reset, choose another account, or explicitly enable that account’s credit spending.
 
 Stored-account vision and web-search helpers also recheck this policy before sending, including retries. If consent changes or a limit is reached after helper selection, the helper reports the policy refusal without sending that attempt. The standalone search relay returns a reset-bound 429. Caller-owned Direct credentials retain their existing behavior.
+
+## Native Desktop relay proxy connections
+
+When the existing native Desktop compatibility relay is enabled, its upgraded
+connections to `chatgpt.com:443` use the selected HTTP/HTTPS CONNECT or
+SOCKS5/SOCKS5h proxy. This is the relay's outbound transport, not a new proxy setting
+or a claim that the original Desktop accepts local proxy credentials. Existing
+`NO_PROXY` and explicit direct-route decisions remain unchanged; a selected proxy
+failure never retries directly.
+
+Proxy and target TLS identities remain verified. HTTP Basic usernames containing
+colons, credential pairs exceeding 4096 UTF-8 bytes, and malformed CONNECT response
+headers are refused. SOCKS credentials retain the shared handshake's 255-byte
+per-field limit and existing empty-field behavior; both SOCKS schemes resolve the
+target through the proxy. Credentials are used only for the chosen proxy handshake.
+
+The owned CONNECT-session library remains an internal integration seam. This change
+adds no session-launch command, persistent credential injection, OS proxy change,
+certificate installation, or original-Desktop authentication flow.

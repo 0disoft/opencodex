@@ -411,18 +411,25 @@ refuses. A failed selected route never retries directly. Identity verification u
 HTTP path, while provider inference retains its separate existing provider-egress policy.
 
 `src/lib/desktop-upstream-tunnel.ts` dials fixed chatgpt.com TLS through HTTP/HTTPS CONNECT
-or authenticated SOCKS5. It bounds the whole connection setup, rejects proxy EOF, abort and
+or authenticated SOCKS5. Its selected-proxy branch delegates handshake framing to
+`src/lib/opaque-proxy-tunnel.ts` with one explicit candidate and exact target policy;
+its direct branch and final target TLS handshake remain locally owned. It bounds
+the whole connection setup, rejects proxy EOF, abort and
 oversized handshake heads, and verifies both proxy and upstream certificate identities.
 Only the proxy handshake carries proxy credentials. The raw upgraded socket remains opaque;
 the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
+`tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer and
+owned-session composition; `tests/clients/desktop-compatibility-relay.test.ts`
+preserves the real relay’s fixed-target and opaque upgrade contracts.
 
 ## Explicit opaque proxy candidates
 
 `src/lib/opaque-proxy-tunnel.ts` exposes an authorized, paused target socket through
 an explicit ordered HTTP, HTTPS CONNECT, SOCKS5 or SOCKS5h candidate list. It has no
-registered production caller and changes neither desktop proxy discovery nor the
+implicit activation. The desktop upstream dialer is a production consumer of a
+single explicit candidate; this changes neither desktop proxy discovery nor the
 fixed-destination TLS contract above. Each call requires a synchronous target
 predicate; it is rechecked before every physical attempt and handshake write.
 A completed proxy handshake is rechecked before the socket is handed to the caller.
@@ -434,7 +441,9 @@ and absent from error messages; the module stores no credentials and emits no lo
 The existing `src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS
 scheme spellings retain its ATYP DOMAIN remote-DNS behavior; they are not distinct
 local/remote DNS modes. Credentials offer both NO-AUTH and USER-PASS as that shared
-contract specifies. HTTPS proxy identity and trust are always verified. Target TLS
+contract specifies; SOCKS usernames may contain colons and decoded fields retain
+the existing helper’s zero-to-255-byte compatibility bounds. HTTP Basic usernames
+with colons are rejected rather than emitting an ambiguous identity. HTTPS proxy identity and trust are always verified. Target TLS
 belongs to the client and target, not the opaque tunnel.
 
 Per-candidate and total deadlines bound establishment. A transport failure before
