@@ -510,7 +510,6 @@ describe("qoder adapter", () => {
     process.env.QODERCN_APPEND_SYSTEM_PROMPT = "ambient-cn-secret";
     try {
       for (const profile of [QODER_GLOBAL_PROFILE, QODER_CN_PROFILE]) {
-        expect(buildQoderChildEnv(profile, "pat").QODER_EXPOSE_TOKEN_USAGE).toBe("true");
         expect(buildQoderChildEnv(profile, "pat").QODER_APPEND_SYSTEM_PROMPT).toBeUndefined();
         const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
         expect(buildQoderChildEnv(profile, "pat")[promptEnv]).toBeUndefined();
@@ -532,9 +531,16 @@ describe("qoder adapter", () => {
     const globalEnv = buildQoderChildEnv(QODER_GLOBAL_PROFILE, "global-pat");
     const cnEnv = buildQoderChildEnv(QODER_CN_PROFILE, "cn-pat");
     expect(globalEnv.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(globalEnv.QODERCN_EXPOSE_TOKEN_USAGE).toBeUndefined();
     expect(globalEnv.QODER_PERSONAL_ACCESS_TOKEN).toBe("global-pat");
     expect(globalEnv.QODERCN_PERSONAL_ACCESS_TOKEN).toBeUndefined();
-    expect(cnEnv.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
+    // The CN build derives every variable from a QODERCN_ prefix and has no QODER_ fallback for this switch.
+    expect(cnEnv.QODERCN_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(cnEnv.QODER_EXPOSE_TOKEN_USAGE).toBeUndefined();
+    expect(Object.keys(cnEnv).filter(key => key.startsWith("QODER"))).toEqual([
+      "QODERCN_EXPOSE_TOKEN_USAGE",
+      "QODERCN_PERSONAL_ACCESS_TOKEN",
+    ]);
     expect(cnEnv.QODERCN_PERSONAL_ACCESS_TOKEN).toBe("cn-pat");
     expect(cnEnv.QODER_PERSONAL_ACCESS_TOKEN).toBeUndefined();
 
@@ -559,7 +565,8 @@ describe("qoder adapter", () => {
     expect(global.env.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
     expect(global.env.QODER_PERSONAL_ACCESS_TOKEN).toBe("global-pat");
     expect(global.env.QODERCN_PERSONAL_ACCESS_TOKEN).toBeUndefined();
-    expect(cn.env.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(cn.env.QODERCN_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(cn.env.QODER_EXPOSE_TOKEN_USAGE).toBeUndefined();
     expect(cn.env.QODERCN_PERSONAL_ACCESS_TOKEN).toBe("cn-pat");
     expect(cn.env.QODER_PERSONAL_ACCESS_TOKEN).toBeUndefined();
   });
