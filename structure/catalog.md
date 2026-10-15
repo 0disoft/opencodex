@@ -597,10 +597,4 @@ The sync result in `src/codex/sync.ts` preserves the catalog owner's optional re
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
 `src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
-only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do not fetch on the request path; catalog sync owns their bootstrap. Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.
-
-`src/server/index/model-alias-id.ts` applies the opt-in `preferModelAliasIds` projection
-to `/v1/models` only. A short effective alias becomes the row ID only when a read-only
-route preview identifies the same provider and native model by `model-alias`; ambiguous
-or shadowed names retain their qualified public IDs. Promoted rows preserve the original
-ID in `native_id` and keep `alias_of`. Codex catalog gathering remains unchanged.
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do not fetch on the request path; catalog sync owns their bootstrap. Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation. `src/server/index/model-alias-id.ts` applies opt-in `preferModelAliasIds` to `/v1/models` only: short aliases are promoted only when a read-only route preview identifies the same upstream by `model-alias`; ambiguous or shadowed aliases and aliases with unparseable synthetic Fast siblings retain qualified IDs. Promoted rows keep their original ID in `native_id` and retain `alias_of`. Codex catalog gathering is unchanged.

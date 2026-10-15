@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { parseFastRowId, fastRowBases } from "../../src/server/fast-row";
+import { knownEffortRowIds } from "../../src/server/effort-row";
 import { routeModel } from "../../src/router";
 import { gatherRoutedModels } from "../../src/codex/catalog/provider-fetch";
 import { startServer } from "../../src/server";
@@ -165,4 +167,25 @@ test("preferred and native IDs share a route; Codex gather is unchanged", async 
   const after = await gatherRoutedModels(config);
   expect(after.map(m => [m.id, m.alias])).toEqual(before.map(m => [m.id, m.alias]));
   expect(after.filter(m => m.provider === "seek")).toHaveLength(1);
+});
+
+
+test("built-in aliases preserve routable Fast siblings", async () => {
+  const config = aliasConfig(true);
+  config.defaultModelAliases = true;
+  config.providers.seek!.models = ["claude-haiku-4-5"];
+  config.providers.seek!.modelAliases = {};
+  config.providers.seek!.supportsServiceTier = true;
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string }[] };
+    const fast = body.data.filter(row => row.id.endsWith("--fast"));
+    expect(fast).toHaveLength(1);
+    for (const row of fast) {
+      const parsed = parseFastRowId(row.id, config, knownEffortRowIds(config), fastRowBases(config));
+      expect(parsed).not.toBeNull();
+      expect(routeModel(config, parsed!.baseId)).toMatchObject({ providerName: "seek", modelId: "claude-haiku-4-5" });
+    }
+  } finally { server.stop(true); }
 });

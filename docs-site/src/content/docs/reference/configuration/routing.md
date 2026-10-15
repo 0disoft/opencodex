@@ -20,7 +20,8 @@ as the `id` in `GET /v1/models`. The default is `false`. Promoted rows retain th
 previous qualified ID in `native_id` and keep `alias_of`; both IDs remain routable.
 Models without aliases keep their existing IDs. If a short alias is ambiguous across
 providers or is shadowed by another route, the row keeps its qualified ID so selecting
-it still reaches the intended model. Codex's own model catalog is unchanged.
+it still reaches the intended model. The qualified ID also stays when a built-in short
+alias would produce an unparseable synthetic Fast selector. Codex's own model catalog is unchanged.
 
 ### Codex Pool low-quota protection
 
