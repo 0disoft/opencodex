@@ -433,7 +433,7 @@ State-changing: yes.
 
 JSON mode: `payload`.
 
-- `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
+- `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog, cache, or changed configuration write, so it cannot restart a healthy install on request.
 - Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
 

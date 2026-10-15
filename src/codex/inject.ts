@@ -142,6 +142,8 @@ export interface CodexInjectResult {
   message: string;
   /** False when injection intentionally preserves configuration owned by another provider. */
   configApplied?: false;
+  /** True only after a successful configuration transaction changes config.toml bytes. */
+  configChanged?: boolean;
   /**
    * Structured read-only history preflight refusal; never parsed from display text.
    *
@@ -717,6 +719,11 @@ async function injectCodexConfigImpl(
     releaseConfigWriteLock(configLock.handle);
     heldConfigWriteLock = undefined;
   }
+  // Both write paths have committed, including the coordinator's post-callback checks.
+  // Compare against the admitted original, not post-v1-reconcile input: the native
+  // feature transition is part of this transaction too. Refusals/rollbacks return
+  // above and must never publish this receipt. No filesystem reread after unlock.
+  const configChanged = Boolean(missingConfig) || effectivePlan.content !== rawContent;
   // Legacy mode still forward-tags history so re-tagged threads stay listable. Design B needs
   // the opposite: a one-time migration of previously re-tagged threads BACK to openai (restore
   // machinery; cheap no-op when there is nothing to migrate). The client-compaction opt-in keeps
@@ -799,6 +806,7 @@ async function injectCodexConfigImpl(
   if (effectivePlan.keptUserBaseUrl && effectivePlan.keepRootOverrideAlongsideTable) {
     return {
       success: true,
+      configChanged,
       ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
       ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
       message:
@@ -817,6 +825,7 @@ async function injectCodexConfigImpl(
   if (effectivePlan.keptUserBaseUrl) {
     return {
       success: true,
+      configChanged,
       ...(effectivePlan.nativeSubagentDefaultsWarning
         ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning }
         : {}),
@@ -839,6 +848,7 @@ async function injectCodexConfigImpl(
       : `Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url + realtime sideband override).\n`;
   return {
     success: true,
+    configChanged,
     ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
     ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
     message:
