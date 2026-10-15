@@ -579,7 +579,8 @@ export function rotateGenericOAuthAccountOnRefusal(
     return null;
   }
   if (strategy === "reset-first") {
-    return rankAccountsByResetFirst(providerName, candidates, requestedModelId, now)[0] ?? null;
+    return rankAccountsByResetFirst(providerName, candidates, requestedModelId, now,
+      new Map(set.accounts.map(account => [account.id, account])))[0] ?? null;
   }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
@@ -711,8 +712,8 @@ export function preferredInitialAccount(
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
     const eligibleNow = preferKiroModelSupport(providerName,
       eligibleFailoverAccounts(providerName, now, family), requestedModelId, config);
-    if (eligibleNow.length === 0 || !hasHeadroomEvidence(providerName, eligibleNow, requestedModelId)) return null;
-    const best = rankAccountsByResetFirst(providerName, eligibleNow, requestedModelId, now)[0] ?? null;
+    if (eligibleNow.length === 0 || !hasHeadroomEvidence(providerName, eligibleNow, requestedModelId, accountRows)) return null;
+    const best = rankAccountsByResetFirst(providerName, eligibleNow, requestedModelId, now, accountRows)[0] ?? null;
     return best && best !== active ? best : null;
   }
 

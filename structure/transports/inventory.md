@@ -311,7 +311,9 @@ accounts by the soonest future reset of the requested family's weekly window, fa
 the 5-hour window, then by headroom; exhausted accounts go last. A passive provider with
 evidence for only part of the ring keeps headroom order. The first-attempt pick uses the same
 eligible set as round-robin, including per-account model listings, and needs headroom evidence.
-The Anthropic kind refuses the strategy. Coverage: `tests/oauth/oauth-account-quota-rank.test.ts`
+Kiro passes account-bound quota evidence through both selection paths, preserving headroom
+ordering and explicit exhaustion when reset times are unknown. The Anthropic kind refuses
+the strategy. Coverage: `tests/oauth/oauth-account-quota-rank.test.ts`
 and `tests/server/account-pool-management-api.test.ts`.
 
 ## SOCKS5 dispatch boundary
