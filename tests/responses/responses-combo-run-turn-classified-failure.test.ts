@@ -136,6 +136,19 @@ for (const stream of [false, true]) {
     expect(response.status).toBe(429);
     expect(JSON.parse(response.text).error).toMatchObject({ type: "insufficient_quota", code: "insufficient_quota" });
   });
+
+  // The consumer truncates the child message to 500 characters, so a refusal phrase past that
+  // point survives only as the child's own cyber_policy code.
+  test(`a cyber-policy refusal read from a long message still stops the combo (stream=${stream})`, async () => {
+    childFailure = {
+      type: "error", status: 502, errorType: "upstream_error", code: "upstream_error",
+      message: `${"Agent transcript detail. ".repeat(30)}This request was flagged for possible cybersecurity risk.`,
+    };
+    const response = await respond(config([{ provider: "cursor", model: MODEL }, { provider: "fallback", model: MODEL }]), stream);
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.text).error.code).toBe("cyber_policy");
+    expect(fallbackCalls).toBe(0);
+  });
 }
 
 test("a classified child failure keeps its verdict without displacing the formatter's own refusals", async () => {
