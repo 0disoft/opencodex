@@ -154,7 +154,7 @@ export const ja: Record<TKey, string> = {
   "advisor.activity.status.ok": "助言を受信",
   "advisor.activity.status.failed": "失敗",
   "advisor.activity.status.cancelled": "キャンセル済み",
-  "advisor.activity.status.blocked": "予算により停止",
+  "advisor.activity.status.blocked": "ブロック",
   "advisor.timeout": "タイムアウト (ms)",
   "advisor.save": "アドバイザー設定を保存",
   "advisor.saved": "アドバイザー設定を保存しました。",

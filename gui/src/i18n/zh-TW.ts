@@ -146,7 +146,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.activity.status.ok": "已回傳建議",
   "advisor.activity.status.failed": "失敗",
   "advisor.activity.status.cancelled": "已取消",
-  "advisor.activity.status.blocked": "預算限制",
+  "advisor.activity.status.blocked": "已阻擋",
   "advisor.timeout": "逾時（毫秒）",
   "advisor.save": "儲存顧問設定",
   "advisor.saved": "顧問設定已儲存。",

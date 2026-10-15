@@ -155,7 +155,7 @@ export const en = {
   "advisor.activity.status.ok": "Advice returned",
   "advisor.activity.status.failed": "Failed",
   "advisor.activity.status.cancelled": "Cancelled",
-  "advisor.activity.status.blocked": "Budget blocked",
+  "advisor.activity.status.blocked": "Blocked",
   "advisor.timeout": "Timeout (ms)",
   "advisor.save": "Save advisor settings",
   "advisor.saved": "Advisor settings saved.",

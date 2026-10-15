@@ -48,7 +48,7 @@ export const pt: Record<TKey, string> = {
   "advisor.activity.status.ok": "Conselho recebido",
   "advisor.activity.status.failed": "Falhou",
   "advisor.activity.status.cancelled": "Cancelada",
-  "advisor.activity.status.blocked": "Bloqueada pelo orçamento",
+  "advisor.activity.status.blocked": "Bloqueada",
   "advisor.timeout": "Tempo limite (ms)",
   "advisor.save": "Salvar configurações do Advisor",
   "advisor.saved": "Configurações do Advisor salvas.",

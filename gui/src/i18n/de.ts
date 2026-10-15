@@ -154,7 +154,7 @@ export const de: Record<TKey, string> = {
   "advisor.activity.status.ok": "Rat erhalten",
   "advisor.activity.status.failed": "Fehlgeschlagen",
   "advisor.activity.status.cancelled": "Abgebrochen",
-  "advisor.activity.status.blocked": "Budget blockiert",
+  "advisor.activity.status.blocked": "Blockiert",
   "advisor.timeout": "Zeitlimit (ms)",
   "advisor.save": "Beratereinstellungen speichern",
   "advisor.saved": "Beratereinstellungen gespeichert.",

@@ -154,7 +154,7 @@ export const ru: Record<TKey, string> = {
   "advisor.activity.status.ok": "Совет получен",
   "advisor.activity.status.failed": "Ошибка",
   "advisor.activity.status.cancelled": "Отменено",
-  "advisor.activity.status.blocked": "Бюджет исчерпан",
+  "advisor.activity.status.blocked": "Заблокировано",
   "advisor.timeout": "Тайм-аут (мс)",
   "advisor.save": "Сохранить настройки консультанта",
   "advisor.saved": "Настройки консультанта сохранены.",

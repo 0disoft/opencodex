@@ -154,7 +154,7 @@ export const ko: Record<TKey, string> = {
   "advisor.activity.status.ok": "조언 수신",
   "advisor.activity.status.failed": "실패",
   "advisor.activity.status.cancelled": "취소됨",
-  "advisor.activity.status.blocked": "예산으로 차단됨",
+  "advisor.activity.status.blocked": "차단됨",
   "advisor.timeout": "타임아웃 (ms)",
   "advisor.save": "어드바이저 설정 저장",
   "advisor.saved": "어드바이저 설정이 저장되었습니다.",

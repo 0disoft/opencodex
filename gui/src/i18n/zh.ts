@@ -154,7 +154,7 @@ export const zh: Record<TKey, string> = {
   "advisor.activity.status.ok": "已返回建议",
   "advisor.activity.status.failed": "失败",
   "advisor.activity.status.cancelled": "已取消",
-  "advisor.activity.status.blocked": "预算限制",
+  "advisor.activity.status.blocked": "已阻止",
   "advisor.timeout": "超时（毫秒）",
   "advisor.save": "保存顾问设置",
   "advisor.saved": "顾问设置已保存。",

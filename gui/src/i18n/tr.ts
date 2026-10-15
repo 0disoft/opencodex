@@ -154,7 +154,7 @@ export const tr: Record<TKey, string> = {
   "advisor.activity.status.ok": "Tavsiye alındı",
   "advisor.activity.status.failed": "Başarısız",
   "advisor.activity.status.cancelled": "İptal edildi",
-  "advisor.activity.status.blocked": "Bütçe engeli",
+  "advisor.activity.status.blocked": "Engellendi",
   "advisor.timeout": "Zaman aşımı (ms)",
   "advisor.save": "Danışman ayarlarını kaydet",
   "advisor.saved": "Danışman ayarları kaydedildi.",

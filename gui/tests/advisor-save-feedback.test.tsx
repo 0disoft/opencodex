@@ -106,12 +106,15 @@ test("activity distinguishes requested, mapped, and unreported reasoning and usa
   const html = renderToStaticMarkup(<LanguageProvider><AdvisorActivityTable entries={[
     { id: "known", startedAt: 1000, trigger: "repair_failure", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: "high", status: "ok", durationMs: 45, usage: { inputTokens: 10, outputTokens: 3 } },
     { id: "unknown", startedAt: 1001, trigger: "manual", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: null, status: "failed", durationMs: 20 },
+    { id: "capped", startedAt: 1002, trigger: "manual", workerModel: "worker", advisorModel: "expert", requestedEffort: "max", effectiveEffort: null, status: "blocked", durationMs: 0 },
   ]} /></LanguageProvider>);
   expect(html).toContain("Repair failed again");
   expect(html).toContain("max → high");
   expect(html).toContain("max → unreported");
   expect(html).toContain("Advice returned");
   expect(html).toContain("Failed");
+  expect(html).toContain("Blocked");
+  expect(html).not.toContain("Budget blocked");
 });
 
 test("Case 1: a new save clears previous success feedback and fails with only error notice visible", async () => {

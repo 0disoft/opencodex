@@ -153,7 +153,7 @@ export const vi: Record<TKey, string> = {
   "advisor.activity.status.ok": "Đã nhận lời khuyên",
   "advisor.activity.status.failed": "Thất bại",
   "advisor.activity.status.cancelled": "Đã hủy",
-  "advisor.activity.status.blocked": "Bị chặn do ngân sách",
+  "advisor.activity.status.blocked": "Bị chặn",
   "advisor.timeout": "Thời gian chờ (ms)",
   "advisor.save": "Lưu cài đặt cố vấn",
   "advisor.saved": "Đã lưu cài đặt cố vấn.",
