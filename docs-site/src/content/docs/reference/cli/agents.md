@@ -1079,7 +1079,7 @@ ocx system codex-cli-update check --json
 including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
 the candidate snapshot, not successful Codex execution. On POSIX, selection is attested only when the runtime
 resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest
-can then establish `managed: true`; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
