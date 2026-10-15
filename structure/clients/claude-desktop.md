@@ -121,11 +121,7 @@ and the auto-detect (WPAD) flag in `Connections\DefaultConnectionSettings`, and 
 a bypass, no covering proxy, or an undecidable PAC script or WPAD. A failed registry read is
 reported as unreadable, never as an absent value, and a stale settings env never earns an `ok`. It
 never prints the proxy value and never records a doctor failure, because the CLI and other clients
-still route. An applied, selected picker profile uses Desktop's app-owned fixed egress proxy
-while that proxy is available, including when missing trust leaves the picker pending and
-`claude.ai` tunnels relay blindly. Missing trust preserves the profile and its selection.
-The system-proxy observation applies to picker-off installs and pending installs with no
-applied picker profile.
+still route. An applied, selected picker profile uses Desktop's app-owned fixed egress proxy while that proxy is available, including when missing trust leaves the picker pending and `claude.ai` tunnels relay blindly. Missing trust preserves the profile and its selection. The system-proxy observation applies to picker-off installs and pending installs with no applied picker profile.
 Doctor verifies the selected profile's loopback CONNECT relay directly, independently of picker trust or effectiveness. Off, absent, unselected, unreadable, stale-settings and unavailable-relay cases retain the registry diagnostic; a credential-bearing main intercept proxy does not count as Desktop's egress relay.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
@@ -192,10 +188,7 @@ Windows trust removal in `src/claude/intercept/picker-trust-windows.ts` requires
 Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens legacy inherited DACLs only after verifying the current owner and exclusively current-user, SYSTEM or Administrators grants; already private directories skip hardening. Newly created exclusive files and directories are hardened before strict owner/ACL verification and before CA access. ACL verification, including inherited SQLite sidecar ACLs, is memoized by bigint device/inode/birthtime within one publication; birthtime distinguishes recycled file IDs while preserving same-volume rename identity. Path and descriptor identity checks remain active on every access, and removed or replaced entries retire their memo.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on
-only within the chosen first-party mode: either an explicit Desktop integration `false` or
-`claudeCode.intercept.picker: false` disables it. Default intent does not install certificate
-trust; startup and status only inspect trust, and explicit activation owns installation.
+Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
 
 On macOS and Windows, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
@@ -270,8 +263,7 @@ stored in that directory; public certificates and non-secret identity metadata r
 `<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux skips picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
-no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the
-picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
+no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.
 Legacy predecessor cleanup may still require consent during migration. Native keychain unlock and
 application-access dialogs are controlled by macOS; restart or upgrade does not guarantee their absence.
 `picker-ca-store.ts` owns the versioned OS credential service, canonical-config identity namespace,
@@ -288,9 +280,7 @@ activation, which uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is
-removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the
-picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
 `ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
 certificate is rewritten under the lock so a second process cannot rotate out a live owner's
@@ -352,11 +342,9 @@ enable attempt added trust and a later check or profile write fails, it removes 
 an earlier successful picker profile keeps the trust it needs. The owned profile helpers in
 `src/claude/desktop-picker-profile.ts` use the standard row `opencodex-picker`, whose file contains
 only `egressProxyUrl`. The previous Desktop selection is stored in
-`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`. On Windows the same row is written through the existing `%LOCALAPPDATA%` configLibrary writer.
+`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`. On Windows the same row is written through the existing `%LOCALAPPDATA%` configLibrary writer. Full `ocx uninstall` (`src/cli/uninstall-client-state.ts`) runs the same picker cleanup after Desktop disconnect and before config removal: profile release, current-root untrust, then the pending-predecessor drain. Any residual refuses removal, so `ca.pem` and the pending journal still name the root a retry must untrust.
 
-The local controls are `ocx claude desktop picker on|off|status|trust`; CLI help, toggle messages and GUI trust states use OS-neutral certificate-trust wording. With a live server, `on`,
-`off`, and transition cleanup use the controller; `trust` performs the operator's local OS trust
-step (login keychain on macOS, current-user Root confirmation on Windows) and then reports the result to the server. Before installing the root, the CLI independently
+The local controls are `ocx claude desktop picker on|off|status|trust`; CLI help, toggle messages and GUI trust states use OS-neutral certificate-trust wording. With a live server, `on`, `off`, and transition cleanup use the controller; `trust` performs the operator's local OS trust step (login keychain on macOS, current-user Root confirmation on Windows) and then reports the result to the server. Before installing the root, the CLI independently
 requires the picker common name on a self-signed CA and the exact critical `claude.ai`-only DNS
 and all-IP exclusion constraints, plus the full minted extension profile — critical `CA:TRUE`
 basicConstraints, a `keyCertSign|cRLSign`-only keyUsage, a non-critical subjectKeyIdentifier, and
