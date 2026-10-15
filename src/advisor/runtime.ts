@@ -187,11 +187,15 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     }
     if (deps.abortSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
     const budgetKey = identify(parsed).budget;
-    if (consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST
+    const requestCapped = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
+    if (requestCapped
       || (current.policy === "adaptive" && budgetKey && !budget.reserve(budgetKey, current.maxConsultationsPerTask, now()).ok)) {
       const id = activities.start({ trigger: reason, workerModel: deps.workerModelId, advisorModel: current.model, requestedEffort: current.effort }, now());
-      activities.finish(id, { status: "blocked", durationMs: 0, blockReason: "budget" });
-      return { ok: false, isError: true, blocked: "budget", content: formatAdvisorUnavailable("limit", "task budget exhausted or unavailable; no consultation sent") };
+      const blocked = requestCapped ? "limit" : "budget";
+      activities.finish(id, { status: "blocked", durationMs: 0, blockReason: blocked });
+      return { ok: false, isError: true, blocked, content: formatAdvisorUnavailable("limit", requestCapped
+        ? "per-request consultation limit reached; no consultation sent"
+        : "task budget exhausted or unavailable; no consultation sent") };
     }
     consultations += 1;
     fingerprints.add(fingerprint);

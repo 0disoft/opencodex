@@ -97,7 +97,10 @@ test("no stable identity means no adaptive automatic call, while manual remains 
   const plan = f.plan(); const parsed = request(true, "", "");
   expect(await plan.preflightInject(parsed)).toBe(false);
   for (let i = 0; i < 3; i++) expect((await plan.consult(parsed, "manual", String(i))).ok).toBe(true);
-  expect((await plan.consult(parsed, "manual", "fourth")).blocked).toBe("budget");
+  const blocked = await plan.consult(parsed, "manual", "fourth");
+  expect(blocked.blocked).toBe("limit");
+  expect(blocked.content).toContain("per-request consultation limit reached");
+  expect(f.activities.snapshot()[0]!.blockReason).toBe("limit");
   expect(calls).toHaveLength(3);
 });
 

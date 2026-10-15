@@ -187,6 +187,7 @@ attempt, survive restarts, and never evict live tasks (512-task capacity). A loc
 or full database refuses the expert call while the worker continues. No database is opened
 until an adaptive consultation with stable identity is actually admitted. Manual and preflight
 policies retain request limits and the existing preflight ledger without the durable task cap.
+Activity and worker results distinguish a request consultation `limit` from a durable task `budget` refusal.
 
 ## Policies
 

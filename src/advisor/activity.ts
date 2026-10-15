@@ -14,7 +14,7 @@ export interface AdvisorActivity {
   status: "running" | "ok" | "failed" | "cancelled" | "blocked";
   durationMs: number | null;
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-  blockReason?: "consent" | "settings" | "budget" | "duplicate";
+  blockReason?: "consent" | "settings" | "budget" | "limit" | "duplicate";
 }
 
 /** Metadata only. No prompts, advice, commands, task/thread ids, errors, or hidden reasoning. */
