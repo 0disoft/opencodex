@@ -2,6 +2,9 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { getConfigPath, getDefaultConfig, loadConfig, validateConfigCandidate } from "../../src/config";
 import { sanitizeOpenCodeZenOverridesForLoad } from "../../src/config/opencode-zen-upgrade";
+import { readConfigDiagnostics, readConfigFileSnapshot } from "../../src/config/diagnostics";
+import { handleConfigCommand } from "../../src/cli/config-command";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { createTempHome } from "../helpers/temp-home";
 
 const BASES = ["https://opencode.ai/zen/v1", "https://opencode.ai/inference/v1"];
@@ -19,6 +22,7 @@ function candidate(modelAdapters: unknown, overrides: Record<string, unknown> = 
       "saved-gateway": {
         adapter: "openai-chat", baseUrl: "https://gateway.example.test/v1", apiKey: "synthetic-other-key",
         note: "Keep this provider", modelAdapters: { "gemini-3.7-flash": "openai-responses" },
+        modelPreferHostedTools: { "gemini-3.7-flash": ["image_generation"] },
       },
     },
     codexAccounts: [{ id: "saved-account", email: "fixture@example.test", alias: "Saved account", plan: "plus", isMain: false }],
@@ -84,6 +88,77 @@ describe("OpenCode Zen saved-config upgrade", () => {
     }
   });
 
+  test.each(BASES)("diagnostics, export and persisted edits preserve saved state at %s", async baseUrl => {
+    const home = createTempHome("ocx-zen-config-readers-");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const out = spyOn(console, "log").mockImplementation(() => {});
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    const previousExit = process.exitCode;
+    try {
+      const raw = candidate({ "gemini-3.7-flash": "openai-responses" }, { baseUrl });
+      const bytes = "\uFEFF" + JSON.stringify(raw, null, 2) + "\r\n";
+      writeFileSync(getConfigPath(), bytes);
+      const snapshot = readConfigFileSnapshot();
+      expect(snapshot.raw).toBe(bytes);
+      expect(snapshot.diagnostics.source).toBe("file");
+      expect(snapshot.diagnostics.error).toBeNull();
+      expect(snapshot.diagnostics.config).toEqual(loadConfig());
+      const exported = home.path("export.json");
+      expect(await handleConfigCommand(["export", exported, "--json"])).toBe(0);
+      expect(JSON.parse(readFileSync(exported, "utf8"))).toEqual(snapshot.diagnostics.config);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      expect(await handleConfigCommand(["set", "port", "10201", "--json"])).toBe(0);
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8"));
+      expect(persisted.port).toBe(10201);
+      expect(Object.keys(persisted.providers).sort()).toEqual(["opencode-zen", "saved-gateway"]);
+      expect(persisted.providers["opencode-zen"]).toMatchObject({
+        apiKey: raw.providers["opencode-zen"].apiKey, note: "Saved Zen provider",
+      });
+      expect(persisted.providers["opencode-zen"].modelAdapters).toBeUndefined();
+      expect(persisted.providers["saved-gateway"]).toEqual(raw.providers["saved-gateway"]);
+      expect(persisted.codexAccounts).toEqual(raw.codexAccounts);
+      expect(persisted.codexAccountPriorities).toEqual(raw.codexAccountPriorities);
+      expect(persisted.activeCodexAccountPinned).toBe(raw.activeCodexAccountPinned);
+      expect(persisted.pausedCodexAccountIds).toEqual(raw.pausedCodexAccountIds);
+      expect(readConfigDiagnostics()).toMatchObject({ source: "file", error: null });
+    } finally {
+      warn.mockRestore(); out.mockRestore(); err.mockRestore(); process.exitCode = previousExit;
+      await flushConfigDirHardeningAndReaps(home.root);
+      home.remove();
+    }
+  });
+
+  test.each(["model", "provider"])("migrates only valid legacy Gemini hosted preferences from %s Responses", mode => {
+    const home = createTempHome("ocx-zen-hosted-upgrade-");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const unrelated = mode === "model" ? { "gpt-6.1-sol": ["image_generation"] } : {};
+      const raw = candidate(mode === "model"
+        ? { "gemini-3.7-flash": "openai-responses", "gpt-6.1-sol": "openai-responses" } : undefined, {
+        adapter: mode === "provider" ? "openai-responses" : "openai-chat",
+        modelPreferHostedTools: { "gemini-3.7-flash": ["image_generation"], ...unrelated },
+      });
+      const bytes = JSON.stringify(raw);
+      writeFileSync(getConfigPath(), bytes);
+      const loaded = loadConfig();
+      expect(Object.keys(loaded.providers).sort()).toEqual(["opencode-zen", "saved-gateway"]);
+      expect(loaded.codexAccounts).toEqual(raw.codexAccounts);
+      expect(loaded.providers["opencode-zen"].modelPreferHostedTools).toEqual(mode === "model" ? unrelated : undefined);
+      expect(loaded.providers["saved-gateway"]).toEqual(raw.providers["saved-gateway"]);
+      expect(readConfigDiagnostics()).toMatchObject({ source: "file", error: null, config: loaded });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    } finally { warn.mockRestore(); home.remove(); }
+  });
+
+  test("new writes still reject Google-incompatible hosted preferences without mutating the candidate", () => {
+    const raw = candidate(undefined, { modelPreferHostedTools: { "gemini-3.7-flash": ["image_generation"] } });
+    const original = structuredClone(raw);
+    const result = validateConfigCandidate(raw);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("modelPreferHostedTools");
+    expect(raw).toEqual(original);
+  });
+
   test.each(["openai-chat", "openai-responses"])("strict candidate validation still rejects a new %s override without modifying it", adapter => {
     for (const model of ["gemini-3.7-flash", "GeMiNi-future", "  GEMINI-3.6-flash  "]) {
       const raw = candidate({ [model]: adapter });
@@ -112,7 +187,9 @@ describe("OpenCode Zen load sanitizer boundaries", () => {
     ["Cloud Code Assist", { googleMode: "cloud-code-assist" }],
   ];
   test.each(exclusions)("preserves overrides and emits no upgrade warning for %s", (_label, overrides) => {
-    const raw = candidate({ "  GeMiNi-3.7-flash  ": "openai-responses" }, overrides);
+    const raw = candidate({ "  GeMiNi-3.7-flash  ": "openai-responses" }, {
+      ...overrides, modelPreferHostedTools: { "  GeMiNi-3.7-flash  ": ["image_generation"] },
+    });
     const original = structuredClone(raw);
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -142,6 +219,47 @@ describe("OpenCode Zen load sanitizer boundaries", () => {
     } finally { warn.mockRestore(); }
   });
 
+  test("malformed, denied and non-Responses Gemini preferences remain subject to validation", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const value of [null, "image_generation", [], ["web_search"], ["image_generation", 42]]) {
+        const raw = candidate({ "gemini-3.7-flash": "openai-responses" }, {
+          modelPreferHostedTools: { "gemini-3.7-flash": value },
+        });
+        sanitizeOpenCodeZenOverridesForLoad(raw);
+        expect(raw.providers["opencode-zen"]).toMatchObject({ modelPreferHostedTools: { "gemini-3.7-flash": value } });
+        expect(validateConfigCandidate(raw).ok).toBe(false);
+      }
+      for (const overrides of [
+        { unsupportedHostedTools: ["image_gen"], modelAdapters: { "gemini-3.7-flash": "openai-responses" } },
+        { modelAdapters: undefined },
+        { adapter: "openai-responses", modelAdapters: { "gemini-3.7-flash": "openai-chat" } },
+      ]) {
+        const prefs = { "gemini-3.7-flash": ["image_generation"] };
+        const raw = candidate(undefined, { ...overrides, modelPreferHostedTools: prefs });
+        sanitizeOpenCodeZenOverridesForLoad(raw);
+        expect(raw.providers["opencode-zen"]).toMatchObject({ modelPreferHostedTools: prefs });
+        const once = structuredClone(raw);
+        sanitizeOpenCodeZenOverridesForLoad(raw);
+        expect(raw).toEqual(once);
+        expect(validateConfigCandidate(raw).ok).toBe(false);
+      }
+    } finally { warn.mockRestore(); }
+  });
+
+  test("malformed hosted-tool denials do not throw before load degradation", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const unsupportedHostedTools of [null, 42, "image_gen", {}, [null, 42]]) {
+        const raw = candidate({ "gemini-3.7-flash": "openai-responses" }, {
+          unsupportedHostedTools, modelPreferHostedTools: { "gemini-3.7-flash": ["image_generation"] },
+        });
+        expect(() => sanitizeOpenCodeZenOverridesForLoad(raw)).not.toThrow();
+        expect(raw.providers["opencode-zen"]).toMatchObject({ unsupportedHostedTools });
+        expect(Object.hasOwn(raw.providers["opencode-zen"], "modelPreferHostedTools")).toBe(false);
+      }
+    } finally { warn.mockRestore(); }
+  });
   test("malformed containers and maps are left untouched", () => {
     for (const raw of [undefined, null, false, [], {}, { providers: null }, { providers: [] },
       { providers: { "opencode-zen": null } }, { providers: { "opencode-zen": [] } },

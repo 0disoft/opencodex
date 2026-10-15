@@ -765,7 +765,7 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 
-Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix.
+Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Older Gemini Chat/Responses overrides and Responses-only hosted-tool preferences are ignored when reading saved configurations.
 
 **The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
 any request that arrives without an `x-opencode-session` header, answering with error type
