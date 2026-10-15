@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
-import { pane, splitPane } from "../src/components/remote-workspace/split-layout";
+import { pane, parseLayout, splitPane } from "../src/components/remote-workspace/split-layout";
 import type { RemoteSession } from "../src/components/remote-workspace/types";
 
 let win: Window, root: Root | null = null, previous: Record<string, unknown>;
@@ -113,4 +113,36 @@ test("a cold page mount preserves saved panes until its first network snapshot a
   expect(JSON.parse(win.localStorage.getItem(key)!)).toEqual(saved);
   await act(async () => { finish(response({ available: true, sessions: [session("a"), session("b")], devices: [], runtimes: {} })); });
   expect(host.querySelectorAll(".remote-chat-pane").length).toBe(2);
+});
+
+
+test("both divider axes honor keyboard bounds and restore sizes without draft storage", async () => {
+  const { host, row, button, click, type, act } = await mount();
+  await click(button(row("a"), "Split right"));
+  await click(button(row("b"), "Split below"));
+  await type("a", "private unsent draft");
+  const key = "ocx-remote-workspace-layout:/split";
+  const dividers = host.querySelectorAll('[role="separator"]');
+  const press = async (divider: Element, key: string) => act(async () => divider.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as never));
+  expect(dividers[0]!.getAttribute("aria-orientation")).toBe("vertical");
+  expect(dividers[1]!.getAttribute("aria-orientation")).toBe("horizontal");
+  await press(dividers[0]!, "ArrowDown");
+  expect(dividers[0]!.getAttribute("aria-valuenow")).toBe("50");
+  await press(dividers[0]!, "Home");
+  await press(dividers[0]!, "ArrowLeft");
+  expect(dividers[0]!.getAttribute("aria-valuenow")).toBe("20");
+  await press(dividers[1]!, "End");
+  await press(dividers[1]!, "ArrowDown");
+  expect(dividers[1]!.getAttribute("aria-valuenow")).toBe("80");
+  await press(dividers[1]!, "ArrowUp");
+  expect(dividers[1]!.getAttribute("aria-valuenow")).toBe("75");
+  const saved = win.localStorage.getItem(key)!;
+  expect(saved).not.toContain("private unsent draft");
+  const tree = parseLayout(saved);
+  expect(tree?.type === "split" && tree.ratio).toBe(0.2);
+  await act(async () => { root!.unmount(); root = null; });
+  const restored = await mount();
+  expect([...restored.host.querySelectorAll('[role="separator"]')].map(divider => divider.getAttribute("aria-valuenow"))).toEqual(["20", "75"]);
+  expect(restored.paneFor("a").querySelector("textarea")!.value).toBe("");
+  expect(win.localStorage.getItem(key)).toBe(saved);
 });

@@ -20,7 +20,7 @@ function SplitBranch({ node, renderPane, resize }: {
     <div className="remote-split-child"><SplitBranch node={node.first} renderPane={renderPane} resize={resize} /></div>
     <div role="separator" tabIndex={0} className="remote-split-divider" aria-label={t("remote.split.resize")}
       aria-orientation={node.axis === "row" ? "vertical" : "horizontal"} aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(node.ratio * 100)}
-      onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); dragging.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
+      onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); dragging.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
       onPointerMove={event => {
         if (!dragging.current || !container.current) return;
         const rect = container.current.getBoundingClientRect();

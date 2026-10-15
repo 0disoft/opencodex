@@ -53,10 +53,8 @@ the macOS window has a 360-point minimum width. The same test pins the capabilit
 on the app origin because the bundled bootstrap and update pages draw their own matching strip —
 a page with an overlay title bar and no strip cannot be dragged or zoomed at all. Windows and
 Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the
-sidebar-top layout applies unchanged beneath it.
-
-The main webview disables Tauri’s native drag/drop handler in `desktop/src-tauri/src/lib.rs` so
-the dashboard receives HTML drag/drop events for session pane placement, including on Windows.
+sidebar-top layout applies unchanged beneath it. The main webview disables Tauri’s native
+drag/drop handler in `desktop/src-tauri/src/lib.rs` so HTML session-pane drops reach the dashboard on Windows.
 
 ## Startup, quit and the tray
 

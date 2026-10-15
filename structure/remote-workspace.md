@@ -50,7 +50,9 @@ feature; neither the upstream Codex terminal UI nor the official desktop rendere
 resize/drop controls; `split-layout.ts` validates and transforms the persisted layout tree.
 `use-session-actions.ts` isolates drafts, concurrent prompt requests and Stop races by session,
 while `types.ts` shares the dashboard contracts with the page. Only layout identifiers, axes
-and ratios are stored locally; draft text and session output remain in memory.
+and ratios are stored locally; draft text and session output remain in memory. Separators support
+axis-specific arrow keys and Home/End bounds. At viewport widths up to 760px, panes stack
+without separators or horizontal scrolling while the saved desktop split tree remains intact.
 
 Hub runtime admission counts pending create/resume starts as well as live handles against global and per-device limits; every outcome releases its reservation. Stop and shutdown reclaim late resumed handles before clearing ownership. Coordinator result size limits normalize both response text and success, so bridge and MCP callers receive consistent errors.
 
