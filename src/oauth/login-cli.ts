@@ -138,7 +138,15 @@ export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): P
 }
 
 export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
-  if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
+  const preflightConfig = loadConfig();
+  if (name === "anthropic2") assertAnthropicInstanceLoginConfig(preflightConfig, name);
+  // runLogin refuses this too, but its error is not in the public vocabulary the catch below
+  // prints, so a local configuration problem would read as an authentication failure.
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(preflightConfig.codexAccountNamespaces, name);
+  if (namespaceCollision) {
+    console.error(`Error: ${namespaceCollision}.`);
+    process.exit(1);
+  }
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);
