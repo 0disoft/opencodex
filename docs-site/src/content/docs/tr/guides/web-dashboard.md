@@ -39,6 +39,8 @@ yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
 kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
 kararıdır.
 
+**Bu cihazı hatırla** varsayılan olarak kapalıdır. Doğrudan HTTPS panelinde (veya yerel loopback üzerinden) yönetici belirteci, sunucunun verdiği HttpOnly, SameSite=Strict cihaz çereziyle değiştirilir; HTTPS çerezi Secure ve yalnızca bu sunucuya özeldir. Yönetici belirteci localStorage veya sessionStorage içine yazılmaz. Özel dashboard-sessions.json yalnızca çerez, kimlik bilgisi ve tarayıcı özetleriyle sabit 30 günlük süreyi saklar. Safari ana ekran uygulaması yeniden açılınca geçerli cihaz kaydı kısa bir oturumu yeniler. Kenar çubuğu veya mobil işlemlerde **Bu cihazı unut** ve oturumu kapatma, kaydı ve türetilen tüm oturumları iptal eder. Süre dolması, tarayıcı kimliği değişmesi veya belirtecin değiştirilip sunucunun yeniden başlatılması yeniden giriş gerektirir. Relay, başka origin ve uzak düz HTTP desteklenmez. Eski belirteç anahtarları okunmadan veya taşınmadan silinir. Yalnızca güvenilir cihazda kullanın; Safari AutoFill özelliğini geri getirmez.
+
 ## Kota özeti çubuğu
 
 Başlangıç güvenliği sayfası dışındaki her sayfanın üst kısmındaki tek satırlık özet, her

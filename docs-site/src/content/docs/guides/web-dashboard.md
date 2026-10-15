@@ -35,6 +35,8 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie. HTTPS cookies are Secure and host-only. The browser never stores the admin token in localStorage or sessionStorage. The server stores only a cookie hash, an admin-credential fingerprint, browser identity hash and a fixed 30-day expiry in its private dashboard-sessions.json file. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. **Forget this device** in the sidebar or mobile action bar (and session logout) revokes the record and all sessions resumed from it. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again. Cross-origin/relayed dashboards and remote plaintext HTTP do not support this option. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
+
 ### Finding the admin token
 
 You only need this on a non-loopback bind. A local dashboard never asks, and if a local one

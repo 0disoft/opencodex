@@ -37,6 +37,8 @@ remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en
 dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
 gestionnaire de mots de passe.
 
+**Mémoriser cet appareil** est désactivé par défaut. Sur un tableau de bord HTTPS direct (ou en boucle locale), le serveur échange le jeton administrateur contre un cookie HttpOnly, SameSite=Strict, limité à cet hôte et Secure en HTTPS. Aucun jeton administrateur n’est stocké dans localStorage ou sessionStorage. Le fichier privé dashboard-sessions.json conserve uniquement les empreintes du cookie, du jeton et du navigateur ainsi qu’une expiration fixe de 30 jours. La relance de l’application Safari reprend une session courte tant que cet appareil reste autorisé. **Oublier cet appareil** dans les actions mobiles ou la barre latérale, ainsi que la déconnexion, révoque cet appareil et toutes ses sessions. L’expiration, un changement d’identité du navigateur ou la rotation du jeton suivie d’un redémarrage impose une nouvelle connexion. Les tableaux de bord relayés, inter-origines ou HTTP distant ne prennent pas en charge cette option. Les anciennes clés de jeton mémorisé sont supprimées sans lecture ni migration. Réservez-la aux appareils de confiance ; elle ne rétablit pas l’AutoFill de Safari.
+
 ## Barre de résumé des quotas
 
 Une ligne de résumé en haut de chaque page, sauf la page Sécurité au démarrage, indique

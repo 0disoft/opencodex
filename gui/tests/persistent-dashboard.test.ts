@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { promptForAdminToken } from "../src/admin-token-dialog";
-import { hasApiSession, installApiAuthFetch, resetApiAuthFetchForTests } from "../src/api";
+import { hasApiSession, installApiAuthFetch, resetApiAuthFetchForTests, setRebootstrapTimeoutForTests } from "../src/api";
 
 const names = ["window", "document", "navigator", "localStorage", "sessionStorage", "HTMLElement"] as const;
 let previous: unknown[];
@@ -54,4 +54,20 @@ test("obsolete remembered bearer tokens are removed without reading or migrating
   expect(reads).toBe(0); expect(getter("opencodex.remembered-admin-token")).toBeNull();
   expect(getter("opencodex.remembered-admin-token:https://server|same-origin")).toBeNull();
   expect(getter("opencodex.remembered-admin-token-decoy")).toBe("unrelated");
+});
+
+test("a hung Remember response body is aborted and cannot install a session", async () => {
+  let verdict: unknown; let attempts = 0; let signal: AbortSignal | undefined;
+  resetApiAuthFetchForTests(async verify => { verdict = await verify("ocx_admin_fixture", true); return null; });
+  setRebootstrapTimeoutForTests(20);
+  window.fetch = (async (input, init) => {
+    if (!String(input).endsWith("/api/session/remember")) return new Response(null, { status: 401 });
+    attempts++; signal = init?.signal as AbortSignal;
+    const response = new Response(null);
+    response.json = () => new Promise(() => {});
+    return response;
+  }) as typeof fetch;
+  installApiAuthFetch();
+  expect((await window.fetch("/api/config")).status).toBe(401);
+  expect(attempts).toBe(1); expect(verdict).toBe("unavailable"); expect(signal?.aborted).toBe(true); expect(hasApiSession("shared")).toBe(false);
 });

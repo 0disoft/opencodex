@@ -7,7 +7,7 @@ in [GUI and management API](gui-and-management-api.md).
 ## UX boundary
 
 The dashboard is a local control surface, not a separate service. It should reflect the same config
-and catalog invariants documented in this folder rather than inventing parallel state.
+and catalog invariants documented in this folder rather than inventing parallel state. The sign-in form offers opt-in **Remember this device** for direct HTTPS dashboards or loopback, requesting a server-issued HttpOnly session rather than storing an admin token. Both mobile and sidebar actions offer **Forget this device**, using logout to revoke durable and transient device authority; session-change events update both surfaces. Expiry and cookie authentication belong to [GUI and management API](gui-and-management-api.md).
 
 Codex quota cards consume the display cache from `src/codex/quota.ts`. Partial refreshes remove
 omitted short tuples after their reset deadline; validated main-window absence also removes

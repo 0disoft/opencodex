@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { initializeManagementAuthState, createManagementSessionControl, issueGuiSession, requireManagementAuth } from "../../src/server/management-auth";
@@ -79,4 +79,25 @@ test("remember rejects cross-origin, plaintext remote and unauthenticated issuan
     expect(result?.status).toBe(403);
   }
   const req = request(); expect(handleSessionRoutes({ req, url: new URL(req.url), config, principal: "gui-session", sessionControl: control } as ManagementContext)?.status).toBe(403);
+});
+
+test("the persistent cookie alone grants no management access, and a derived token needs its cookie", async () => {
+  const { state, response } = login(); expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const session = (await response!.json()).session;
+  const cookieOnly = request("/api/config", cookie, {}, "GET"); cookieOnly.headers.delete("X-OpenCodex-API-Key");
+  expect(requireManagementAuth(cookieOnly, state, config)?.status).toBe(401);
+  const tokenOnly = request("/api/config", undefined, { "X-OpenCodex-API-Key": session.token, "X-OpenCodex-GUI-Origin": origin }, "GET");
+  expect(requireManagementAuth(tokenOnly, state, config)?.status).toBe(401);
+  const both = request("/api/config", cookie, { "X-OpenCodex-API-Key": session.token, "X-OpenCodex-GUI-Origin": origin }, "GET");
+  const control = createManagementSessionControl(state);
+  expect(requireManagementAuth(both, state, config)).toBeNull();
+  expect(control.isPaired(both, config)).toBe(false); expect(control.canRevealDataKeys?.(both, config)).toBe(false);
+});
+
+test("an unreadable or malformed device store fails closed without issuing a cookie or overwriting it", () => {
+  writeFileSync(join(home, "dashboard-sessions.json"), "not-json", { mode: 0o600 });
+  const { response } = login(); expect(response?.status).toBe(503);
+  expect(response!.headers.get("set-cookie")).toBeNull();
+  expect(readFileSync(join(home, "dashboard-sessions.json"), "utf8")).toBe("not-json");
 });

@@ -119,7 +119,7 @@ OpenCodex uses three mutually exclusive reusable admission credential classes:
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
-does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
+does not enable management access. The data plane may continue to start, but `/api/*` remains closed. The opt-in bodyless `POST /api/session/remember` exchanges admin-token authority for a host-only HttpOnly, SameSite=Strict device cookie (Secure on HTTPS), never browser-stored admin credentials. `src/server/persistent-gui-session.ts` owns the private hash-only `dashboard-sessions.json` store (128 devices/128 KiB) and fixed 30-day expiry. Enrollment requires direct same-origin HTTPS or loopback; relay, cross-origin and remote HTTP are refused. Cookie hashes bind server origin (including port), browser identity and admin-credential fingerprint. Bootstrap issues short-lived origin/CSRF-bound `remembered-admin` sessions, which never count as pairing or data-key-reveal consent. Every derived session still requires the cookie and durable record; logout durably revokes both before reporting success. Legacy bearer-token storage is purged without reading or migrating it. Tests: `tests/server/persistent-dashboard-session.test.ts`.
 CLI health collection follows the same boundary without transporting the reusable management
 credential. Its local-read HMAC capability is an additional single-use, route-scoped admission
 mechanism, not a reusable credential class. `ocx doctor` and OAuth health derive these capabilities
