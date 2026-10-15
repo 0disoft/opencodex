@@ -72,6 +72,7 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
 
   const windows = new Map<string, ProviderQuotaWindow>();
   const modelWindows: ProviderQuotaWindow[] = [];
+  const labels = new Set(["Gem", "Cla"]);
   for (const [modelId, rawModelInfo] of Object.entries(models)) {
     const modelInfo = asRecord(rawModelInfo);
     if (!modelInfo) continue;
@@ -90,7 +91,13 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
         const tier = typeof quotaInfo.tier === "string" && quotaInfo.tier.length <= 64
           ? quotaInfo.tier.trim().slice(0, Math.max(0, 125 - modelId.length))
           : "";
-        const modelLabel = `${modelId}${tier ? ` · ${tier}` : ""}`;
+        const baseLabel = `${modelId}${tier ? ` · ${tier}` : ""}`;
+        let modelLabel = baseLabel;
+        for (let ordinal = 2; labels.has(modelLabel); ordinal += 1) {
+          const suffix = ` #${ordinal}`;
+          modelLabel = `${baseLabel.slice(0, 128 - suffix.length)}${suffix}`;
+        }
+        labels.add(modelLabel);
         modelWindows.push({
           label: modelLabel,
           modelId,

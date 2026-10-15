@@ -78,6 +78,26 @@ describe("Antigravity model quota evidence", () => {
     expect(result.quota.customWindows?.some(window => window.modelId === "malformed" || window.label.length > 128)).toBe(false);
   });
 
+  test("multiple readings retain distinct bounded labels even when tiers truncate", async () => {
+    const longModel = "gemini-" + "x".repeat(115);
+    setModelsResponse({
+      autocomplete: { quotaInfos: [{ remainingFraction: 0.8 }, { remainingFraction: 0.2 }] },
+      [longModel]: { quotaInfoByTier: {
+        "shared-prefix-one": { remainingFraction: 0.7 },
+        "shared-prefix-two": { remainingFraction: 0.1 },
+      } },
+    });
+    const result = await probeAntigravityUsageQuota("synthetic-token", "synthetic-project");
+    expect(result.kind).toBe("available");
+    if (result.kind !== "available") return;
+    const rows = result.quota.customWindows!.filter(window => window.modelId !== undefined);
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map(window => window.label)).size).toBe(4);
+    expect(rows.every(window => window.label.length <= 128)).toBe(true);
+    expect(rows.map(window => window.percent)).toEqual([20, 80, 30, 90]);
+    expect(rows.map(window => window.modelId)).toEqual(["autocomplete", "autocomplete", longModel, longModel]);
+  });
+
   test("bounds diagnostic rows without truncating later family evidence", async () => {
     setModelsResponse(Object.fromEntries([
       ...Array.from({ length: 300 }, (_, i) => [`aux-${i}`, { quotaInfo: { remainingFraction: 0.5 } }]),

@@ -9,6 +9,7 @@ import { type AccountQuota, normalizeQuotaForPlan } from "../codex-quota-utils";
 
 export type QuotaWindowKey = "fiveHour" | "weekly" | "monthly";
 export type QuotaBarRow = {
+  id: string;
   windowKey?: QuotaWindowKey;
   customLabel?: string;
   label: string;
@@ -69,7 +70,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   const displayQuota = normalizeQuotaForPlan(quota, plan);
   if (!displayQuota) return [];
   // Intrinsic ranks for the standard slots; custom windows rank on their RAW labels.
-  const ranked: Array<{ rank: number; row: QuotaBarRow }> = [];
+  const ranked: Array<{ rank: number; row: Omit<QuotaBarRow, "id"> & { id?: string } }> = [];
   if (typeof displayQuota.fiveHourPercent === "number") {
     ranked.push({
       rank: 0,
@@ -112,6 +113,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
     ranked.push({
       rank: rawCustomWindowRank(customLabel),
       row: {
+        id: JSON.stringify([w.modelId ?? null, w.label, w.resetAt ?? null]),
         customLabel,
         label: localized,
         limitLabel: localized,
@@ -122,7 +124,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   }
   if (displayQuota.creditsUsd && typeof displayQuota.creditsUsd.percent === "number") {
     const hasSubscriptionCreditsCustom = displayQuota.customWindows?.some(
-      w => canonicalCustomWindowLabel(w.label) === SUBSCRIPTION_CREDITS_LABEL,
+      w => w.modelId === undefined && canonicalCustomWindowLabel(w.label) === SUBSCRIPTION_CREDITS_LABEL,
     );
     if (!hasSubscriptionCreditsCustom) {
       const localized = localizeCustomQuotaLabel(SUBSCRIPTION_CREDITS_LABEL, t);
@@ -138,7 +140,13 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
       });
     }
   }
-  return ranked.sort((a, b) => a.rank - b.rank).map(entry => entry.row);
+  const identities = new Map<string, number>();
+  return ranked.sort((a, b) => a.rank - b.rank).map(({ row }) => {
+    const identity = row.id ?? row.windowKey ?? row.customLabel!;
+    const ordinal = identities.get(identity) ?? 0;
+    identities.set(identity, ordinal + 1);
+    return { ...row, id: JSON.stringify([identity, ordinal]) };
+  });
 }
 
 /** Max utilisation across known windows (for sorting providers by urgency). */
@@ -330,7 +338,7 @@ export default function QuotaBars({
         {observedLine}
         {rows.map(row => (
           <StackedQuotaRow
-            key={row.limitLabel}
+            key={row.id}
             row={row}
             threshold={threshold}
             t={t}
@@ -347,7 +355,7 @@ export default function QuotaBars({
     <div className={`codex-account-quota-slot quota-compact${className ? ` ${className}` : ""}`}>
       {observedLine}
       {rows.map(row => (
-        <Fragment key={row.label}>
+        <Fragment key={row.id}>
           <QuotaRow
             credits={row.customLabel === SUBSCRIPTION_CREDITS_LABEL}
             label={row.label}
