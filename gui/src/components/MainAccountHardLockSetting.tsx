@@ -108,6 +108,32 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
   const mountedRef = useRef(false);
   const generationRef = useRef(0);
   const readAbortRef = useRef<AbortController | null>(null);
+  const modelsAbortRef = useRef<AbortController | null>(null);
+  const modelsLoadedRef = useRef(false);
+
+  const ensureModelsLoaded = useCallback(() => {
+    if (modelsLoadedRef.current || modelsAbortRef.current) return;
+    const controller = new AbortController();
+    modelsAbortRef.current = controller;
+    void (async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/models`, { signal: controller.signal });
+        if (!response.ok) throw new Error("models");
+        const rows: unknown = await response.json();
+        if (!Array.isArray(rows)) throw new Error("models");
+        modelsLoadedRef.current = true;
+        if (mountedRef.current) {
+          setModels(rows.filter(row => row !== null && typeof row === "object"
+            && typeof (row as ModelInfo).namespaced === "string"
+            && (row as ModelInfo).native !== true
+            && (row as ModelInfo).disabled !== true) as ModelInfo[]);
+        }
+      } catch { /* saved value stays selectable */ }
+      finally {
+        if (modelsAbortRef.current === controller) modelsAbortRef.current = null;
+      }
+    })();
+  }, [apiBase]);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const restoreFocusRef = useRef(false);
@@ -138,33 +164,16 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
     mountedRef.current = true;
     const timeout = window.setTimeout(() => { void load(); }, 0);
     const stop = startVisibilityPoll(() => { void load(); }, 30_000);
-    // The picker is a convenience over the catalog; a failed read degrades it to the
-    // saved value only, the same way the shadow-call row reads as bare selectors.
-    const modelsController = new AbortController();
-    const modelsTimer = window.setTimeout(async () => {
-      try {
-        const response = await fetch(`${apiBase}/api/models`, { signal: modelsController.signal });
-        if (!response.ok) throw new Error("models");
-        const rows: unknown = await response.json();
-        if (!Array.isArray(rows)) throw new Error("models");
-        if (mountedRef.current) {
-          setModels(rows.filter(row => row !== null && typeof row === "object"
-            && typeof (row as ModelInfo).namespaced === "string"
-            && (row as ModelInfo).native !== true
-            && (row as ModelInfo).disabled !== true) as ModelInfo[]);
-        }
-      } catch { /* saved value stays selectable */ }
-    }, 0);
     return () => {
       mountedRef.current = false;
       generationRef.current += 1;
       readAbortRef.current?.abort();
+      modelsAbortRef.current?.abort();
+      modelsAbortRef.current = null;
       window.clearTimeout(timeout);
-      modelsController.abort();
-      window.clearTimeout(modelsTimer);
       stop();
     };
-  }, [apiBase, load]);
+  }, [load]);
 
   useEffect(() => {
     if (confirming || saving || !restoreFocusRef.current) return;
@@ -337,6 +346,7 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
         </p>}
       </div>
       <div className="codex-main-hard-lock-fallback" role="group" aria-label={t("codexAuth.mainHardLockFallbackTitle")}
+        onFocusCapture={ensureModelsLoaded} onPointerDownCapture={ensureModelsLoaded} onClickCapture={ensureModelsLoaded}
         style={{ flexBasis: "100%" }}>
         <div className="spread" style={{ alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
