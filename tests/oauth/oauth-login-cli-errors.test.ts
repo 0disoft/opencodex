@@ -96,17 +96,18 @@ test("a non-Error login rejection prints fixed text and exits unsuccessfully", a
 test("a Codex account namespace collision is reported as configuration before any login starts", async () => {
   const { stdout, stderr, code } = await runLoginChild(`
     import { handleLogin } from ${moduleUrl("oauth", "login-cli.ts")};
+    import { OAUTH_PROVIDERS } from ${moduleUrl("oauth", "index.ts")};
     import { loadConfig, saveConfig } from ${moduleUrl("config.ts")};
     const config = loadConfig();
     config.codexAccountNamespaces = { anthropic: "pool-a" };
     saveConfig(config);
     if (!loadConfig().codexAccountNamespaces?.anthropic) throw new Error("fixture namespace was not persisted");
-    await handleLogin("anthropic", {
-      ask: async () => "",
-      runLogin: async () => { console.log("login started"); throw new Error(${JSON.stringify(marker)}); },
-    });
+    OAUTH_PROVIDERS.anthropic.login = async () => { console.log("login started"); throw new Error(${JSON.stringify(marker)}); };
+    await handleLogin("anthropic", { ask: async () => "" });
   `);
-  expect(stderr.trim()).toBe("Error: provider name must not collide with a configured Codex account namespace.");
+  expect(stderr.trim()).toBe(
+    "❌ OAuth login failed (configuration_error): provider name must not collide with a configured Codex account namespace",
+  );
   expect(stdout).not.toContain("login started");
   expect(code).toBe(1);
 });

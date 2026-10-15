@@ -220,9 +220,9 @@ currently accepted OAuth and API-key provider ids when the name is missing or un
 
 Failed OAuth logins exit with status 1 and print a fixed diagnostic: the HTTP status and standard
 OAuth error code (such as `invalid_grant`) when the provider returned one, `network_error` or
-`timeout` when the provider could not be reached, and `oauth_authentication_failed` otherwise.
-A provider name that collides with a configured Codex account namespace is reported before the
-login starts.
+`timeout` when the provider could not be reached, `configuration_error` with the reason when a
+local setting such as a Codex account namespace blocks the login, and `oauth_authentication_failed`
+otherwise.
 
 Use the same command to **reauthenticate** after `ocx status` / `ocx doctor` reports
 reauthentication required or a terminal refresh failure (or use Reauthenticate in the dashboard).

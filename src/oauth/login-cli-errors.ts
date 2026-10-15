@@ -1,5 +1,5 @@
 import { AnthropicTokenError } from "./anthropic";
-import { publicOAuthAuthenticationErrorMessage } from "./index";
+import { OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, publicOAuthAuthenticationErrorMessage } from "./index";
 import { XaiTokenRequestError } from "./xai";
 
 // Standard RFC 6749 / RFC 6750 / RFC 8628 error codes. A provider's `error` field is printed only
@@ -13,6 +13,9 @@ const STANDARD_OAUTH_ERROR_CODES = new Set([
 
 /** Fixed, machine-readable reason for a failed login; never derived from free-form text. */
 export function oauthLoginFailureDiagnostic(error: unknown): string {
+  if (error instanceof OAuthProviderNamespaceCollisionError || error instanceof OAuthProviderPublicationError) {
+    return "configuration_error";
+  }
   const status = error instanceof AnthropicTokenError ? error.httpStatus
     : error instanceof XaiTokenRequestError ? error.status : undefined;
   const oauthError = error instanceof AnthropicTokenError || error instanceof XaiTokenRequestError
