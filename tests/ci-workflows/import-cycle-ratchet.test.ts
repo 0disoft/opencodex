@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   BASELINE_REL,
   cyclicComponents,
@@ -36,6 +36,39 @@ const CORE_OFF_CYCLE = [
 const graphOf = (edges: Record<string, string[]>): ImportGraph => new Map(Object.entries(edges));
 
 describe("import-cycle ratchet: scanner", () => {
+  test("parses compact declarations without treating comments or erased imports as edges", () => {
+    expect(staticImports([
+      '#!/usr/bin/env bun',
+      'import{ b }from"./b";export{ c }from"./c";',
+      'import"./side";export*from"./star";',
+      'import/*gap*/{ d }/*gap*/from"./d";',
+      'import type{ T }from"./types";export type{ T }from"./types";',
+      'import{type U}from"./erased";export{type U}from"./erased";',
+      '// import{ fake }from"./comment";',
+      'const text = `import{ fake }from"./text"`;',
+      'const lazy = () => import("./lazy");',
+    ].join("\n"))).toEqual(["./b", "./c", "./side", "./star", "./d"]);
+  });
+
+  test.each(["tsx", "mts"])("directory index.%s imports close cycles", extension => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-import-index-"));
+    mkdirSync(join(root, "src", "nested"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), 'import { b } from "./nested"; export const a = b;');
+    writeFileSync(join(root, "src", "nested", `index.${extension}`),
+      'import { a } from "../a"; export const b = a;' + (extension === "tsx" ? " export const view = <span/>;" : ""));
+    expect(cyclicModules(scanGraph(root))).toEqual(["src/a.ts", `src/nested/index.${extension}`]);
+  });
+
+  test("directory precedence agrees with Bun when multiple indexes exist", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-import-precedence-"));
+    const src = join(root, "src");
+    mkdirSync(join(src, "nested"), { recursive: true });
+    writeFileSync(join(src, "a.ts"), 'import { b } from "./nested";');
+    for (const ext of ["ts", "tsx", "mts"]) writeFileSync(join(src, "nested", `index.${ext}`), "export const b = 1;");
+    const resolved = basename(Bun.resolveSync("./nested", src));
+    expect(scanGraph(root).get("src/a.ts")).toEqual([`src/nested/${resolved}`]);
+  });
+
   test("only load-time value imports form edges", () => {
     const source = [
       'import { a } from "./a";',
@@ -71,6 +104,7 @@ describe("import-cycle ratchet: scanner", () => {
     writeFileSync(join(root, "src", "nested", "index.ts"), 'import { a } from "../a";\nexport const b = a;\n');
     writeFileSync(join(root, "src", "lazy.ts"), 'import type { A } from "./typed";\nexport const l = () => import("./a");\n');
     writeFileSync(join(root, "src", "typed.ts"), 'import { l } from "./lazy";\nexport type A = typeof l;\n');
+    writeFileSync(join(root, "src", "ambient.d.mts"), 'export const declarationOnly: number;');
     expect(cyclicModules(scanGraph(root))).toEqual(["src/a.ts", "src/nested/index.ts"]);
   });
 });
