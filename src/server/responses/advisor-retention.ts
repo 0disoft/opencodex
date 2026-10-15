@@ -54,14 +54,19 @@ export class AdvisorRetention {
     }
   }
 
-  retain(event: AdapterEvent, call = false): void {
-    if (this.events >= MAX_ADVISOR_RETAINED_EVENTS || (call && this.calls >= MAX_ADVISOR_RETAINED_CALLS)) {
+  /**
+   * `counted: false` is only for non-empty text/thinking deltas: the leg's 16 KiB character
+   * caps already bound how many of those can be held, and an ordinary long answer streams
+   * thousands of them. They still consume bytes.
+   */
+  retain(event: AdapterEvent, call = false, counted = true): void {
+    if ((counted && this.events >= MAX_ADVISOR_RETAINED_EVENTS) || (call && this.calls >= MAX_ADVISOR_RETAINED_CALLS)) {
       throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
     }
     const bytes = jsonUtf8Bytes(event) + 1;
     this.charge(bytes, "retained_collectors");
     this.legBytes += bytes;
-    this.events++;
+    if (counted) this.events++;
     if (call) this.calls++;
   }
 

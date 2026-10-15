@@ -80,16 +80,31 @@ test("legitimate multi-call batches preserve questions and every excess call's p
   } finally { budget.dispose(); }
 });
 
-test.each(["text_delta", "thinking_delta", "thinking_signature", "redacted_thinking", "tool_call_delta"] as const)("empty %s fragments have count admission without a shared budget", async type => {
+test.each(["thinking_signature", "redacted_thinking", "tool_call_delta"] as const)("empty %s fragments have count admission without a shared budget", async type => {
   const first = (async function* () {
     if (type === "tool_call_delta") yield { type: "tool_call_start", id: "c", name: "advisor" } as AdapterEvent;
     for (let i = 0; i <= MAX_ADVISOR_RETAINED_EVENTS; i++) {
-      yield ({ type, ...(type === "text_delta" ? { text: "" } : type === "thinking_delta" ? { thinking: "" }
-        : type === "thinking_signature" ? { signature: "" } : type === "redacted_thinking" ? { data: "" } : { arguments: "" }) }) as AdapterEvent;
+      yield ({ type, ...(type === "thinking_signature" ? { signature: "" } : type === "redacted_thinking" ? { data: "" } : { arguments: "" }) }) as AdapterEvent;
     }
     yield done;
   })();
   expect((await run(first)).events.at(-1)).toMatchObject(overflow);
+});
+
+test("ordinary token-sized text and thinking deltas never exhaust the event count", async () => {
+  const deltas = (n: number): AdapterEvent[] => Array.from({ length: n }, (_, i) =>
+    (i % 2 ? { type: "text_delta", text: "abcd" } : { type: "thinking_delta", thinking: "abcd" }) as AdapterEvent);
+  const empty = Array.from({ length: MAX_ADVISOR_RETAINED_EVENTS + 1 }, (_, i) =>
+    (i % 2 ? { type: "text_delta", text: "" } : { type: "thinking_delta", thinking: "" }) as AdapterEvent);
+  // A plain answer passes through untouched.
+  const plain = await run(stream([...deltas(MAX_ADVISOR_RETAINED_EVENTS * 2), ...empty, done]));
+  expect(plain.events.at(-1)).toEqual(done);
+  expect(plain.requests).toHaveLength(0);
+  // A long leg that ends in an advisor call still gets its consultation and continuation.
+  const advised = await run(stream([...deltas(MAX_ADVISOR_RETAINED_EVENTS * 2), ...call("c", '{"question":"q"}'), done]));
+  expect(advised.questions).toEqual(["q"]);
+  expect(advised.requests).toHaveLength(1);
+  expect(advised.events.some(event => event.type === "error")).toBe(false);
 });
 
 test("closed calls have a separate count limit, including empty arguments", async () => {

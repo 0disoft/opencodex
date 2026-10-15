@@ -255,10 +255,11 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
           // Retain (bounded) the leg's visible content so the rebuilt assistant message is complete.
           if (event.type === "text_delta") {
             legTextChars += event.text.length;
-            if (!hasRealToolCall && legTextChars <= MAX_LEG_TEXT_CHARS) { retention.retain(event); legEvents.push(event); }
+            // Empty deltas add nothing to the rebuilt message; non-empty ones are bounded by the cap.
+            if (!hasRealToolCall && event.text !== "" && legTextChars <= MAX_LEG_TEXT_CHARS) { retention.retain(event, false, false); legEvents.push(event); }
           } else if (event.type === "thinking_delta") {
             legThinkingChars += event.thinking.length;
-            if (!hasRealToolCall && legThinkingChars <= MAX_LEG_THINKING_CHARS) { retention.retain(event); legEvents.push(event); }
+            if (!hasRealToolCall && event.thinking !== "" && legThinkingChars <= MAX_LEG_THINKING_CHARS) { retention.retain(event, false, false); legEvents.push(event); }
           } else if (
             event.type === "thinking_signature"
             || event.type === "redacted_thinking"
