@@ -449,7 +449,7 @@ export async function executeComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
-  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission);
+  const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)

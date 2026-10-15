@@ -176,6 +176,9 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
+        ? { allowMeteredTargets: true }
+        : {}),
       ...(!Object.hasOwn(requestedCombo, "cooldownMs") && previous?.cooldownMs !== undefined
         ? { cooldownMs: previous.cooldownMs }
         : {}),

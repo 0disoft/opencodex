@@ -8,6 +8,7 @@ type ComboInput = {
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
   nativeAlias?: boolean;
+  allowMeteredTargets?: boolean;
 };
 const TARGET_KEYS = new Set(["provider", "model", "weight", "reasoningEfforts", "modelProfile", "lastResort", "metered"]);
 
@@ -73,6 +74,10 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
   const image = takeOptionWithSyntax(args, "--image-input")?.value;
   const reasoning = takeOptionWithSyntax(args, "--reasoning-effort-mode")?.value;
   const nativeAlias = takeNativeAlias(args);
+  const metered = takeOptionWithSyntax(args, "--allow-metered-targets")?.value;
+  if (metered !== undefined && metered !== "on" && metered !== "off") {
+    throw new CliUsageError("--allow-metered-targets must be on or off");
+  }
   if (file !== undefined && args.some(arg => arg === "--targets" || arg.startsWith("--targets="))) {
     throw new CliUsageError("--targets-file cannot be combined with --targets");
   }
@@ -87,5 +92,6 @@ export async function prepareComboInput(args: string[], deps: RuntimeApiDeps = {
     ...(image === undefined ? {} : { imageInput: image }),
     ...(reasoning === undefined ? {} : { reasoningEffortMode: reasoning }),
     ...(nativeAlias === undefined ? {} : { nativeAlias }),
+    ...(metered === undefined ? {} : { allowMeteredTargets: metered === "on" }),
   };
 }

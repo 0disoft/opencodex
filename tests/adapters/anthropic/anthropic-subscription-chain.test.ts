@@ -2,7 +2,7 @@
  * One model id, three billing paths: an Anthropic OAuth subscription pool, Cursor's copy of the
  * same model, then a pay-per-use Anthropic API key. A failover combo whose alias is the model id
  * the clients already send gives that order; `metered` keeps issued keys off the API-key target,
- * and every caller needs explicit configured-key consent to reach a metered target.
+ * and callers need explicit key consent or loopback-only operator consent to reach a metered target.
  */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -288,4 +288,28 @@ test("streaming combo preflight preserves Cursor's structured rate-limit status"
   const response = await chat(cfg, LOOPBACK, true);
   expect(response.status).toBe(429);
   expect(JSON.parse(response.text).error.code).toBe("rate_limit_exceeded");
+});
+
+for (const stream of [false, true]) {
+  test(`loopback operator opt-in reaches the API key after subscription exhaustion (stream=${stream})`, async () => {
+    subscriptionSpent = true;
+    cursorLimited = true;
+    const cfg = config();
+    cfg.combos!["claude-chain"]!.allowMeteredTargets = true;
+    const response = await chat(cfg, LOOPBACK, stream);
+    expect(response.status).toBe(200);
+    expect(sent.filter(entry => entry.lane === "api-key")).toHaveLength(1);
+  });
+}
+
+test("public listener plus combo opt-in still refuses the metered fallback for local and unconsented keyed callers", async () => {
+  subscriptionSpent = true;
+  cursorLimited = true;
+  const cfg = config();
+  cfg.hostname = "0.0.0.0";
+  cfg.combos!["claude-chain"]!.allowMeteredTargets = true;
+  for (const admission of [LOOPBACK, ISSUED]) {
+    expect((await chat(cfg, admission)).status).toBe(429);
+    expect(sent.filter(entry => entry.lane === "api-key")).toHaveLength(0);
+  }
 });

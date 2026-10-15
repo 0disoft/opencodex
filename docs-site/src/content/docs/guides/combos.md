@@ -17,9 +17,14 @@ if `provider/model` selectors are new to you.
 
 ## Metered fallback consent
 
-Mark a pay-per-use combo target with `"metered": true` when it follows subscription targets. Every caller skips marked targets unless its configured `apiKeys[]` entry has `"allowMeteredComboTargets": true`. Omitted or false consent denies metered dispatch, and the environment token never qualifies. A loopback-bound proxy admits requests without reading any key, so marked targets are reachable only through a listener that requires API keys, using an opted-in key. Model/provider scopes still apply. This applies to initial selection, failover and recovery across combo strategies, and to a subagent model fallback that names a combo alias. Unmarked targets retain existing behavior; this flag does not detect billing automatically.
+Mark a pay-per-use combo target with `"metered": true` when it follows subscription targets. Omitted or false consent denies metered dispatch. Choose consent for your deployment:
 
-For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without key consent, exhaustion returns the last unmetered error. Dashboard saves retain an omitted metered flag; explicitly setting it to false clears it. Set the key consent in the config file; the dashboard does not expose this field.
+- **Local Claude Code or Codex:** on a loopback-only proxy, set `"allowMeteredTargets": true` on the combo, or run `ocx combo set <id> --allow-metered-targets on`. This explicitly permits local callers to use its marked targets. The default is false; `off` clears consent. Loopback authentication does not read API keys.
+- **Network or linked callers:** the caller's configured `apiKeys[]` entry must have `"allowMeteredComboTargets": true`. A proxy with a non-loopback listener ignores the combo flag, including on its secondary loopback listener. Linked callers also retain their configured-key consent requirement when the primary listener is loopback. The environment token never qualifies.
+
+Request headers cannot grant consent. Model/provider scopes still apply. This covers initial selection, failover and recovery across combo strategies, compaction, Messages, Chat Completions and WebSocket requests, and a subagent model fallback naming a combo alias. A collapsed fallback tries a usable unmetered target before refusing. Unmarked targets retain existing behavior; metering is declared by the operator rather than detected automatically.
+
+For example, a failover chain can target Anthropic OAuth, then Cursor, then `{ "provider": "anthropic-apikey", "model": "claude-opus-5-5", "metered": true }`. Without consent, exhaustion returns the last unmetered error. Dashboard saves retain omitted target metering and combo consent; explicitly setting either to false clears it. These consent fields are configured through the config file or API; the combo flag is also available through the CLI, while the dashboard does not expose it.
 
 ## 60-second quickstart
 
@@ -767,7 +772,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+`--allow-metered-targets on|off`, `--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--decision-provider`, or `--decision-timeout` to
 clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for

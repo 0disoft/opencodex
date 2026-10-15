@@ -51,10 +51,10 @@ test("metered metadata survives dashboard saves, explicit false clears it, malfo
     };
     saveConfig(config);
     expect(loadConfig().apiKeys?.[0]?.allowMeteredComboTargets).toBe(true);
-    const put = async (target: unknown) => {
+    const put = async (target: unknown, extra: Record<string, unknown> = {}, id = "chain", renameFrom?: string) => {
       const req = new ManagementRequest("http://localhost:16389/api/combos", {
         method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: "chain", combo: { strategy: "failover", targets: [target] } }),
+        body: JSON.stringify({ id, ...(renameFrom ? { renameFrom } : {}), combo: { strategy: "failover", targets: [target], ...extra } }),
       });
       return handleManagementAPI(req, new URL(req.url), config, {
         createManagementConvergeCodex: catalogConvergenceFactory(async () => {}),
@@ -69,6 +69,22 @@ test("metered metadata survives dashboard saves, explicit false clears it, malfo
     expect(disk().combos?.chain?.targets[0]?.metered).toBe(true);
     expect((await put({ provider: "a", model: "m", metered: false }))?.status).toBe(200);
     expect(disk().combos?.chain?.targets[0]).not.toHaveProperty("metered");
+    const target = { provider: "a", model: "m", metered: true };
+    expect((await put(target, { allowMeteredTargets: true }))?.status).toBe(200);
+    expect(loadConfig().combos?.chain?.allowMeteredTargets).toBe(true);
+    expect((await put(target))?.status).toBe(200);
+    expect(disk().combos?.chain?.allowMeteredTargets).toBe(true);
+    for (const invalid of ["true", 1, null]) {
+      expect((await put(target, { allowMeteredTargets: invalid }))?.status).toBe(400);
+      expect(disk().combos?.chain?.allowMeteredTargets).toBe(true);
+      writeFileSync(join(home, "config.json"), JSON.stringify({ ...config, combos: { chain: { targets: [target], allowMeteredTargets: invalid } } }));
+      expect(loadConfig().combos?.chain).toBeUndefined();
+      saveConfig(config);
+    }
+    expect((await put(target, {}, "renamed", "chain"))?.status).toBe(200);
+    expect(disk().combos?.renamed?.allowMeteredTargets).toBe(true);
+    expect((await put(target, { allowMeteredTargets: false }, "renamed"))?.status).toBe(200);
+    expect(disk().combos?.renamed).not.toHaveProperty("allowMeteredTargets");
     writeFileSync(join(home, "config.json"), JSON.stringify({ ...config, apiKeys: [{ ...key, allowMeteredComboTargets: "true" }] }));
     expect(loadConfig().apiKeys ?? []).toHaveLength(0);
   } finally {

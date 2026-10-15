@@ -351,8 +351,8 @@ export interface OcxApiKeyEntry {
   allowedModels?: string[];
   /**
    * Lets this key reach combo targets marked `metered`. Absent means no: an issued key stops
-   * at the last unmetered target. The environment token and unauthenticated loopback requests
-   * never qualify; a loopback bind reads no key at all.
+   * at the last unmetered target. The environment token never qualifies. A loopback bind
+   * reads no key; local operator consent is instead declared on the combo.
    */
   allowMeteredComboTargets?: boolean;
 }
@@ -1346,13 +1346,16 @@ export interface OcxComboTarget {
   lastResort?: boolean;
   /**
    * Pay-per-use target (for example an API-key row behind subscription targets). Only the
-   * configured keys with `allowMeteredComboTargets: true` may reach it.
+   * configured keys with `allowMeteredComboTargets: true`, or a loopback-only combo
+   * with `allowMeteredTargets: true`, may reach it.
    */
   metered?: boolean;
 }
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
+  /** Operator consent for metered targets on a loopback-only proxy. Default false; public listeners still require key consent. */
+  allowMeteredTargets?: boolean;
   /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */

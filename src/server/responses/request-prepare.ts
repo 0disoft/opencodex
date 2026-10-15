@@ -17,7 +17,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -602,8 +602,17 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
   }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
-  const meteredComboTargetsAllowed = admissionMayUseMeteredComboTargets(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
+    // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
+    // policy so random/RR cannot refuse while an unmetered target is still usable.
+    if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
+      config, options.admission, config.combos?.[candidate.combo.comboId],
+    )) {
+      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      if (!pick) throw new NoAvailableComboTargetsError(candidate.combo.comboId);
+      const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+      candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
+    }
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
     // shadow-intercept target and both subagent-fallback re-routes. Checking
@@ -626,11 +635,6 @@ export async function prepareResponsesRequest(
       providerName: candidate.providerName,
       modelId: previewXaiOauthWireModel(parsed, candidate, config, inboundWire),
     });
-    // A combo the router collapsed to one pick here (a subagent fallback naming a combo alias)
-    // never reaches the combo loop's metered filter, so consent is enforced again and fails closed.
-    if (candidate.combo?.target.metered && !meteredComboTargetsAllowed) {
-      throw new NoAvailableComboTargetsError(candidate.combo.comboId);
-    }
     return candidate;
   };
   try {

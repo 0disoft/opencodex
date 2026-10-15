@@ -1,4 +1,5 @@
 import type { DataPlaneAdmission } from "./auth-cors";
+import { isApiAuthRequired } from "./auth-cors";
 import type { OcxApiKeyEntry, OcxConfig } from "../types";
 import { markResponseNonReplayable } from "../lib/upstream-retry";
 
@@ -77,14 +78,20 @@ export function resolveAdmissionModelScope(
   return entry ? admissionModelScopeOf(entry) : undefined;
 }
 
-/** Metered combo dispatch requires an explicitly opted-in configured key. */
+/** Consent comes from stored operator config, never request headers. Use the full listener config. */
 export function admissionMayUseMeteredComboTargets(
-  config: Pick<OcxConfig, "apiKeys">,
+  config: Pick<OcxConfig, "apiKeys" | "hostname">,
   admission: DataPlaneAdmission | undefined,
+  combo?: { allowMeteredTargets?: boolean },
 ): boolean {
-  if (!admission || admission.kind !== "configured") return false;
-  const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
-  return entry?.allowMeteredComboTargets === true;
+  if (admission?.kind === "configured") {
+    const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
+    return entry?.allowMeteredComboTargets === true;
+  }
+  // Linked ingress always carries keyed admission, even when the primary bind is loopback.
+  // A secondary loopback listener on a public proxy does not qualify either.
+  return (!admission || admission.kind === "loopback")
+    && !isApiAuthRequired(config) && combo?.allowMeteredTargets === true;
 }
 
 /**

@@ -1224,7 +1224,7 @@ provider in question.
 
 ### Managed record shapes
 
-`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token and unauthenticated loopback requests never qualify. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
+`apiKeys[]` entries contain `id`, `name`, generated `key`, and ISO `createdAt` strings. Optional `allowMeteredComboTargets: true` explicitly permits targets marked `metered: true`; omitted or false consent denies them. The environment token never qualifies. Local loopback-only callers can instead use per-combo `allowMeteredTargets: true`; configured-key and linked callers still need key consent. See [Metered fallback consent](/guides/combos/#metered-fallback-consent).
 `codexAccounts[]` entries require `id`, `email`, and `isMain`, with optional `plan`,
 `chatgptAccountId`, and privacy-safe `logLabel`. These records are normally dashboard-managed.
 
