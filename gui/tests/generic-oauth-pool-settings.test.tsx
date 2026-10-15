@@ -389,4 +389,18 @@ describe("generic pool card in the OAuth account list", () => {
     expect(stored.strategy).toBe("least-loaded");
     expect(strategyButton(host)?.textContent).toBe("least-loaded");
   });
+  test("explicitly choosing quota replaces a CLI-only least-loaded strategy", async () => {
+    const stored: Stored = { enabled: true, strategy: "least-loaded", inert: false };
+    const { puts } = stubPoolServer(stored);
+    const host = await mountPanel("kiro");
+    await act(async () => { strategyButton(host)?.click(); });
+    const quota = Array.from(testWindow.document.querySelectorAll('[role="option"]'))
+      .find(option => option.textContent === "Quota");
+    expect(quota).toBeDefined();
+    await act(async () => { (quota as unknown as HTMLButtonElement).click(); await flush(); });
+    expect(puts).toHaveLength(1);
+    expect(puts[0].strategy).toBe("quota");
+    expect(stored.strategy).toBe("quota");
+  });
+
 });
