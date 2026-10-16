@@ -1317,7 +1317,7 @@ export function bridgeToResponsesSSE(
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
                   incomplete_details: {
-                    reason: event.reason,
+                    reason: truncationReasonFor(event.reason) ?? event.reason,
                     ...(event.message ? { message: event.message } : {}),
                     ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
                   },

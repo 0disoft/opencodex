@@ -304,6 +304,12 @@ in both JSON and SSE. Partial output is preserved, and the bridge does not emit 
 completion event for that open call. Calls already completed keep their status. This preserves
 the provider outcome; client retry behavior for incomplete responses is unchanged.
 
+Explicit incomplete reasons use the same vocabulary in adapter-backed responses and native
+Responses JSON, SSE, and WebSocket delivery:
+output-limit aliases such as `length` and `max_tokens` become `max_output_tokens`, and refusal/filter
+aliases such as `refusal` become `content_filter`. Other reasons remain unchanged, along with the
+provider's message, retryability, and usage. Direct Chat and Messages encoders apply the same mapping.
+
 On the pending `dev` implementation for #4112, a final upstream HTTP 413 on this surface
 is classified as `invalid_request_error` / `context_length_exceeded`. Non-streaming callers
 retain HTTP 413 with a JSON `error`; streaming callers retain the terminal SSE failure.
