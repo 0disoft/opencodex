@@ -13,6 +13,7 @@ import { discardPickerCaKey } from "./picker-ca";
 import { preparePersistentPickerAuthority } from "./picker-ca-startup";
 import type { PickerCaStore } from "./picker-ca-store";
 import type { PickerRouteInput } from "./picker-models";
+import { CLAUDE_INTERCEPT_PORT_OFFSET, claudeInterceptEnabled, claudeInterceptProxyPort, claudePickerProxyPort } from "./port-policy";
 import { createPickerRuntime, pickerDesired, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
 import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "./proxy-auth";
@@ -42,25 +43,7 @@ const PICKER_AUTHORITY_ERROR_CODES = new Set([
   "picker_ca_unsupported_platform",
 ]);
 
-export const CLAUDE_INTERCEPT_PORT_OFFSET = 100;
-
-export function claudeInterceptEnabled(config: Pick<OcxConfig, "claudeCode" | "runtimeRole">): boolean {
-  if (config.runtimeRole === "client") return false;
-  if (config.claudeCode?.enabled === false) return false;
-  return config.claudeCode?.intercept?.enabled !== false;
-}
-
-export function claudeInterceptProxyPort(config: Pick<OcxConfig, "claudeCode">, publicPort: number): number {
-  const configured = config.claudeCode?.intercept?.port;
-  if (typeof configured === "number" && Number.isInteger(configured) && configured >= 1 && configured <= 65535) return configured;
-  return publicPort + CLAUDE_INTERCEPT_PORT_OFFSET;
-}
-
-/** Desktop's egress proxy for picker mode: the port after the intercept proxy (before it at 65535). */
-export function claudePickerProxyPort(config: Pick<OcxConfig, "claudeCode">, publicPort: number): number {
-  const interceptPort = claudeInterceptProxyPort(config, publicPort);
-  return interceptPort < 65535 ? interceptPort + 1 : interceptPort - 1;
-}
+export { CLAUDE_INTERCEPT_PORT_OFFSET, claudeInterceptEnabled, claudeInterceptProxyPort, claudePickerProxyPort } from "./port-policy";
 
 export type ClaudeInterceptOutcome = { ok: true; state: ClaudeInterceptState } | { ok: false; reason: "disabled" | "client_role" | "ephemeral_port" | "port_in_use" | "stopped" | "failed"; port?: number; message?: string };
 
