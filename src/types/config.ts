@@ -1631,8 +1631,7 @@ export interface OcxVisionSidecarConfig {
 }
 
 /**
- * Advisor sidecar configuration. Kept deliberately small for PR1: no adaptive trigger knobs
- * (failedValidations / noProgressCycles / semanticClassifier) — those belong to a later PR.
+ * Advisor sidecar configuration. Automatic triggers require deterministic task evidence.
  */
 export interface OcxAdvisorConfig {
   /** Master switch. Default: false — the advisor stays off the request path entirely. */
@@ -1651,7 +1650,9 @@ export interface OcxAdvisorConfig {
    * consultation per task once the task has produced orientation evidence (an assistant tool call
    * or a tool result after the latest user message).
    */
-  policy?: "manual" | "preflight";
+  policy?: "manual" | "preflight" | "adaptive";
+  /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
+  maxConsultationsPerTask?: number;
   /** Advisor fetch timeout (ms). Default 120000. */
   timeoutMs?: number;
   /**
