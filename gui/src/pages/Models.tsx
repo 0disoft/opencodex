@@ -79,6 +79,8 @@ import {
   modelPricingKnown,
   REASONING_EFFORT_LEVELS,
   routedModelOptions,
+  parseContextWindowDraft,
+  type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -112,32 +114,6 @@ const SUBTITLE_TKEY: Record<ModelsTab, TKey> = {
   compatibility: "models.subtitle.compatibility",
 };
 
-/**
- * Parse a context-window field: a number, `null` for "unset", or `undefined` when the text is
- * not usable. Separators are cosmetic, so "64,000" and "64_000" and "64000" are one value.
- *
- * Safe-integer rather than integer: `Number.isInteger(1e100)` is true, the server rejects it,
- * and accepting it here would turn a typo into a round-trip error instead of inline feedback.
- *
- * Module scope because it closes over nothing — rebuilding it every render is wasted work.
- */
-function parseContextWindowDraft(raw: string): number | null | undefined {
-  const normalized = raw.replace(/[_,\s]/g, "");
-  if (!normalized) return null;
-  const value = Number(normalized);
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-/** #2465 per-provider model-preset view, as `GET /api/model-presets` returns it. */
-interface ModelPresetView {
-  mode: "preset" | "all" | "custom";
-  appliedVersion?: number;
-  availableVersion: number;
-  presetIds: string[];
-  presetCount: number;
-  totalCount: number;
-  fallback?: string;
-}
 interface ModelDiscoveryView {
   policy: "on" | "off";
   providers: Record<string, "on" | "off" | "inherit">;

@@ -728,4 +728,3 @@
 /* List toolbar: collapse/expand, the order hint, and the custom-model count on one row. */
 .models-collapse-controls { align-items: center; flex-wrap: wrap; }
 .models-collapse-controls > .models-custom-summary { margin: 0 0 0 auto; }
-
