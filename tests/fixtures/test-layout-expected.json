@@ -3,6 +3,7 @@
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
   "protocol-argon-thought-boundary.test.ts": "responses",
+  "config-native-reasoning-retention.test.ts": "config", "server-native-reasoning-retention-merge.test.ts": "server", "server-native-reasoning-retention.test.ts": "server", "responses-retained-reasoning-stream-recovery.test.ts": "responses",
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",

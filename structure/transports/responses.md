@@ -333,7 +333,7 @@ Custom `openai-responses` gateways declare native v2 triggers with `supportsNati
 A replayed compaction item carries an `encrypted_content` blob only its minting backend can decode, and the client replays it on every later turn. The proxy's own `ocx1:`/`ocx2:` envelopes are transparent base64, so they always lower to plain user messages. A
 native blob is relayed only when there is no known serving-identity mismatch and the destination is known to decode native blobs — the canonical ChatGPT forward surface, the official OpenAI API, or a provider with the explicit
 `decodesNativeCompactionBlobs` capability. The destination gate alone is insufficient because more than one backend, including OpenAI and xAI, mints native blobs: a destination can decode its own blob without being able to decode the previous backend's.
-The same serving-identity mismatch signal therefore strips reasoning `encrypted_content` and degrades native compaction blobs through the existing opaque-note path. Claude-native reasoning batches rejected blob tags into one scrub pass: only the
+The same serving-identity mismatch signal therefore strips reasoning `encrypted_content` unless the narrowly scoped [native reasoning retention](native-reasoning-retention.md#runtime-boundary) policy permits it; native compaction blobs still degrade through the existing opaque-note path independently of that policy. Claude-native reasoning batches rejected blob tags into one scrub pass: only the
 matching durable endpoint and generation-bearing credential retain raw and parsed carriers. Without recorded thread identity, the destination gate remains. Noncanonical forward providers receive no caller credentials and may point at any backend. On any
 other routed destination the blob also degrades to the same opaque note the bridged parser uses, because forwarding it there fails the turn and the item outlives the failure in the client transcript, repeating on every later turn including the compaction
 turn the proxy itself drives. With `store: false`, request sanitization strips ids from every input item, including compact-wire items, matching codex-rs (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
@@ -356,7 +356,7 @@ account minted a conversation's carried state (`previous_response_id`, encrypted
 provider conversation or file ids). `src/server/responses/account-change-state.ts` applies that
 record on `/v1/responses` and `/v1/responses/compact`, including same-request alternate-account
 retries and the compact routed fallback: when the serving account differs, the proxy drops the
-continuation id and strips encrypted reasoning with the existing helpers before dispatch, keeps
+continuation id and provider conversation reference. Parsed Responses requests also remove foreign reasoning item ids and apply the encrypted-reasoning policy before dispatch, keeping
 readable user text, and records `conversationStateScrub: "account-change"` on the request log
 without account identifiers. Once the new account issues its own state, later turns carry it
 normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
