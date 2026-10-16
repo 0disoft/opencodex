@@ -12,6 +12,7 @@ import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LIT
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
+  CODEX_FORWARD_BASE_URL,
   destinationDecodesNativeCompactionBlob,
   isCanonicalOpenAiForwardProvider,
   isOpenAiOperatedResponsesDestination,
