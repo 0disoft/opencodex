@@ -571,7 +571,7 @@ Claude Code — это лишь учётные данные для доступ�
 | `tool_use` ассистента | `function_call` (`input` → `arguments` в виде JSON-строки) |
 | `tool_result` пользователя | `function_call_output` (`is_error` → префикс `[tool error]`) |
 | Повтор `thinking` / `redacted_thinking` | Элементы `reasoning` с ограниченными конвертами `ocxr1` для подписей и скрытых данных |
-| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). На переведённом маршруте к `api.anthropic.com` типизированные объявления `web_search_*` и `web_fetch_*` также передаются Anthropic для выполнения на сервере, если только сайдкар веб-поиска сам не предоставляет `web_search`. Поиск и загрузка возвращаются клиенту как `server_tool_use` и соответствующий `web_search_tool_result` / `web_fetch_tool_result` |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованная функция→`{type:"function",name}`, размещённый WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
