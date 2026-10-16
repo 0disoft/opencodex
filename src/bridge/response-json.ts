@@ -68,6 +68,8 @@ export function buildResponseJSON(
     if (options?.translatorBudget && options.recordBufferedDelivery !== false) {
       attemptDeliveryRecorder(budget)?.noteBufferedDelivery(body);
     }
+    if (body.status === "completed" && options?.compaction
+      && !events.some(event => event.type === "done" && event.compactionEncryptedContent)) options.compactionRetention?.commit();
     return body;
   } finally {
     for (const event of events) {
@@ -99,6 +101,7 @@ function buildResponseJSONWithBudget(
     toolSearchToolNames?: Set<string>;
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
     compaction?: boolean;
+    compactionRetention?: { encode(summary: string): string; commit(): void };
     onProviderState?: (state: OcxProviderContinuationState) => void;
     /** Raw adapter-reported usage before wire normalization (see bridgeToResponsesSSE onUsage). */
     onUsage?: (usage: OcxUsage | undefined) => void;
@@ -628,7 +631,7 @@ function buildResponseJSONWithBudget(
   ) {
    const item = {
       type: "compaction", id: `cmp_${uuid()}`,
-      encrypted_content: compactionEncryptedContent ?? encodeCompactionSummary(joinChunks(batchCompaction)),
+      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(batchCompaction)) ?? encodeCompactionSummary(joinChunks(batchCompaction))),
     };
     pushOutput(item, compactionEncryptedContent ? 0 : batchCompaction.bytes);
   }
