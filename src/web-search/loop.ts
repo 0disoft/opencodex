@@ -6,6 +6,7 @@ import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaqu
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
+import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -316,6 +317,8 @@ export interface WebSearchLoopDeps {
   settings: SidecarSettings;
   maxSearches: number;
   forceEmptyResponseId?: boolean;
+  /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
+  terminalRefusalAsFailed?: boolean;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
   beforeSidecarDispatch?: () => void;
@@ -948,7 +951,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // limit-reached result instead of failing the turn (#6464: stripping
           // the declaration makes some models emit the raw call as visible
           // text).
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall;
+          // A refused iteration ends the turn even when it carried a search call: running the
+          // search would send the refused context back to the model (#7148).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall
+            && !split.passthrough.some(isTerminalRefusalIncomplete);
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -1048,6 +1054,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
+      ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
