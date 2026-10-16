@@ -1059,6 +1059,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   dropResponsesReasoningItems: "editor",
   modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
+  supportsNativeCompactionTrigger: "editor",
+  supportsNativeCompactEndpoint: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
   // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
