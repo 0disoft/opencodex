@@ -327,6 +327,37 @@ describe("Zed Hosted AI provider", () => {
   });
 });
 
+describe("Zed OpenAI tool selection after filtering", () => {
+  const custom = { type: "custom", name: "synthetic_custom", format: { type: "text" } };
+  const web = { type: "web_search" };
+  for (const [name, tools, choice, expectedTools, expectedChoice] of [
+    ["custom is preserved", [custom, web], "required", [custom], "required"],
+    ["all removed with auto", [web], "auto", [], "auto"],
+    ["all removed with required", [web], "required", [], "none"],
+    ["removed named built-in", [web], { type: "web_search" }, [], "none"],
+    ["mixed allowed tools", [custom, web], { type: "allowed_tools", mode: "auto", tools: [web, { type: "custom", name: "synthetic_custom" }] },
+      [custom], { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "synthetic_custom" }] }],
+    ["all allowed tools removed", [web], { type: "allowed_tools", mode: "auto", tools: [web] }, [], "none"],
+  ] as const) test(name, async () => {
+    const catalog = [jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }), jsonResponse({ models: [{ id: "gpt-6.1-sol", provider: "open_ai" }] })];
+    globalThis.fetch = (async () => {
+      const next = catalog.shift();
+      if (!next) throw new Error("unexpected Zed catalog fetch");
+      return next;
+    }) as typeof fetch;
+    const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello", tools, tool_choice: choice });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const adapter = withTestTranslatorBudget(createZedAdapter({ adapter: "zed", baseUrl: "https://cloud.zed.dev",
+      authMode: "oauth", apiKey: "access-token" }));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(body.input[0]).toMatchObject({ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] });
+    expect(body.tools).toEqual(expectedTools);
+    expect(body.tool_choice).toEqual(expectedChoice);
+  });
+});
+
 describe("Zed inference send accounting", () => {
   async function fixture(limit: number, full = false) {
     const catalog = [jsonResponse({ default_organization_id: "org-1" }),

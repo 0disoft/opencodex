@@ -313,9 +313,17 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
     }
     if (zedProvider === "open_ai" && Array.isArray(providerRequest.tools)) {
       // Zed's Responses decoder supports function/custom tools, not Codex's built-in web_search.
-      providerRequest.tools = providerRequest.tools.filter(tool =>
-        isRecord(tool) && (tool.type === "function" || tool.type === "custom"),
-      );
+      const supported = (tool: unknown) => isRecord(tool) && (tool.type === "function" || tool.type === "custom");
+      const tools = providerRequest.tools.filter(supported);
+      providerRequest.tools = tools;
+      const choice = providerRequest.tool_choice;
+      if (isRecord(choice) && choice.type === "allowed_tools" && Array.isArray(choice.tools)) {
+        const allowed = choice.tools.filter(supported);
+        providerRequest.tool_choice = allowed.length ? { ...choice, tools: allowed } : "none";
+      } else if ((isRecord(choice) && !supported(choice)) || (choice === "required" && tools.length === 0)) {
+        // Match the shared hosted-tool policy when no supported selection remains.
+        providerRequest.tool_choice = "none";
+      }
     }
     delegate = { provider: zedProvider, adapter: selected };
     const requestUrl = `${provider.baseUrl.replace(/\/+$/, "")}/completions`;
