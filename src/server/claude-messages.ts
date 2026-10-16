@@ -1126,8 +1126,9 @@ async function handleClaudeMessagesWithBudget(
 
   let clientEncoder: ClientEncoderOption | undefined;
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
-  // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
-  // verified live 2026-07-11). Strip them for that route; routed providers keep them.
+  // bodies: it 400s on sampling params (verified live 2026-07-11). Every openai-responses
+  // route drops temperature/top_p/stop/user below; max_output_tokens is left to
+  // stripUnsupportedForwardParams (canonical-forward.ts), which drops it only for that backend.
   let settledRoute: RouteResult | undefined;
   /**
    * Which replayed thinking fields the send that actually happened will serialize.
@@ -1194,7 +1195,8 @@ async function handleClaudeMessagesWithBudget(
       clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
     }
     if (route.provider.adapter === "openai-responses") {
-      delete internalBody.max_output_tokens;
+      // max_output_tokens is the caller's spend cap: the adapter strips it only for the canonical
+      // ChatGPT backend that rejects it (#5753), so other Responses gateways keep the cap.
       delete internalBody.temperature;
       delete internalBody.top_p;
       delete internalBody.stop;
