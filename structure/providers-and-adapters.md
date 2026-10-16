@@ -557,14 +557,13 @@ destination. The input body, historical tool calls and results, and non-Meta req
 
 ## Shared type declarations
 
-`src/types/` holds the declarations every layer imports: config types (`src/types/config.ts`),
-provider and account types (`src/types/provider.ts`, `src/types/accounts.ts`), and the internal
-request shape (`src/types/request.ts`). Two files also own small resolvers that must agree at every
-boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted names, declared-name
+`src/types/` holds the declarations every layer imports: config types (`src/types/config.ts`), provider and account types (`src/types/provider.ts`, `src/types/accounts.ts`), and the internal request shape (`src/types/request.ts`). Small resolvers must also agree at every boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted names, declared-name
 normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream HTTP-version pin, shared by
 config load, management writes and fetch, so no boundary accepts a value another rejects. It also hard-pins OpenCode Go's
 Anthropic models across runtime and static policy resolution, even with Chat/Responses overrides. The existing `opencode-go` preset pins saved URLs to its canonical endpoint; its inference alias supplies destination metadata and affinity to differently named rows. `src/types/opencode-go.ts` shares exact native pins (including Qwen3.7 Plus/3.8 Max/3.8 Flash) and overridable Responses defaults (including GPT 6 Luna); new native pins use the pinned canonical Go key destination even in pure policy captures of saved rows, while the five legacy name pins retain compatibility; unknown models retain Chat. `tests/providers/opencode-go-model-protocols.test.ts` covers resolution and dispatch. Every `dsh-account` model is pinned to the `dsh-account` adapter whatever `baseUrl` says, because that adapter is the [DSH account token's destination boundary](providers/dsh-account.md#destinations).
+
+For canonical `opencode-zen`, `src/types/wire.ts` pins `gemini-*` to `google`, including when a Chat/Responses override is configured. `src/types/opencode-zen.ts` shares the destination check with `src/adapters/google.ts`: only `https://opencode.ai/zen/v1` and `https://opencode.ai/inference/v1` qualify, with key auth and AI Studio mode (both may be unset), no URL credentials, query or fragment, and optional trailing slashes. The adapter appends `/models/<encoded-model-id>:generateContent` or `:streamGenerateContent?alt=sse` to the selected base, sends `x-goog-api-key`, and skips AI Studio's `-tiered` model renames. The pin does not apply to `opencode-free`, OpenCode Go, custom destinations, OAuth/forward auth, Vertex or Cloud Code Assist.
 
 `src/types/config.ts` declares the optional per-phase `memoryModels` setting;
 `src/types/request.ts` carries the selected phase through combo handoffs without changing the

@@ -1,4 +1,5 @@
 import { isOpenCodeGoGeminiDestination, OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL_WIRES, OPENCODE_GO_LEGACY_NAME_PINS, type OpenCodeGoDestination } from "./opencode-go";
+import { openCodeZenBaseUrl, type OpenCodeZenDestination } from "./opencode-zen";
 
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
@@ -81,7 +82,7 @@ const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = O
 });
 
 /** Just enough of a provider config to tell whether it still points at the pinned endpoint. */
-export interface WirePinProvider extends OpenCodeGoDestination {}
+export interface WirePinProvider extends OpenCodeGoDestination, OpenCodeZenDestination {}
 
 function normalizedEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -105,6 +106,7 @@ const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string
 
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
   if (Object.hasOwn(CREDENTIAL_PINNED_ADAPTERS, providerName)) return CREDENTIAL_PINNED_ADAPTERS[providerName];
+  if (providerName === "opencode-zen" && openCodeZenBaseUrl(provider)) return { "gemini-": "google" };
   if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
   const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
   return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;

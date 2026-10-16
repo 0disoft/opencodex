@@ -1,3 +1,4 @@
+import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
@@ -994,7 +995,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
@@ -1217,12 +1218,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // Go speaks Gemini on its own endpoint; ordinary AI Studio keeps /v1beta and its key header.
+      // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.
       const goEndpoint = openCodeGoGeminiEndpoint(provider, routedModelId);
-      const endpoint = goEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
+      const zenEndpoint = openCodeZenGeminiEndpoint(provider, routedModelId);
+      const endpoint = goEndpoint ?? zenEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
       const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : "google (AI Studio)"} requires a non-empty API key`);
+      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : zenEndpoint ? "OpenCode Zen" : "google (AI Studio)"} requires a non-empty API key`);
       if (goEndpoint) {
         // Console inference documents Bearer auth. Send only the selected Go key.
         for (const name of Object.keys(headers)) {
