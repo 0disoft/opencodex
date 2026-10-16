@@ -71,4 +71,3 @@ test.each([true, false, undefined])("a refused image_gen iteration stops with te
   else expect(text).toContain('"reason":"content_filter"');
   expect(text).not.toContain("event: response.completed");
 });
-

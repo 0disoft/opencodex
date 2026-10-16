@@ -58,4 +58,3 @@ test.each([true, false, undefined])("a refused web_search iteration stops with t
   else expect(text).toContain('"reason":"content_filter"');
   expect(text).not.toContain("event: response.completed");
 });
-
