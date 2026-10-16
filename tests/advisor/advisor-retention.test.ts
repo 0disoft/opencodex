@@ -74,7 +74,8 @@ test("legitimate multi-call batches preserve questions and every excess call's p
     expect(result.questions).toEqual(["질문 0 😀", "질문 1 😀", "질문 2 😀"]);
     expect(result.requests).toHaveLength(1);
     const assistant = result.requests[0]!.context.messages.find(m => m.role === "assistant");
-    expect(assistant?.content).toContainEqual({ type: "thinking", thinking: "reason", signature: "signature", redacted: ["opaque"] });
+    expect(assistant?.content).toContainEqual({ type: "thinking", thinking: "reason", signature: "signature" });
+    expect(assistant?.content).toContainEqual({ type: "thinking", thinking: "", redacted: ["opaque"] });
     expect(result.requests[0]!.context.messages.filter(m => m.role === "toolResult").slice(-2).map(m => m.content)).toEqual(["limit result", "limit result"]);
     expect(budget.snapshot().currentBytes).toBe(78);
   } finally { budget.dispose(); }
