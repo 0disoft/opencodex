@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
@@ -53,6 +53,8 @@ describe("retained reasoning public wire contracts", () => {
       const req = new Request(url, init);
       calls.push(req.url);
       if (req.url.endsWith("/responses/compact")) return new Response("Not Found", { status: 404 });
+      // A canonical 404 fallback still speaks native v2 and must see the original reasoning.
+      expect(await req.text()).toContain("original reasoning");
       return sseResponse([{ type: "response.completed", response: {
         id: "resp_opaque", status: "completed", output: [item],
       } }]);
@@ -66,7 +68,7 @@ describe("retained reasoning public wire contracts", () => {
     expect(await response.json()).toEqual({ output: [item] });
     expect(calls).toEqual(["https://chatgpt.com/backend-api/codex/responses/compact",
       "https://chatgpt.com/backend-api/codex/responses"]);
-    if (maxTokens === 1) expect(readdirSync(join(home, "reasoning-archive"))).toEqual([]);
+    expect(existsSync(join(home, "reasoning-archive"))).toBe(false);
   });
 
   test.each(["openai-responses", "openai-chat"] as const)("ordinary %s turns replay retained text as history, not new reasoning", async adapter => {

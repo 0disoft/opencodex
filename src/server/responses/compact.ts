@@ -1624,7 +1624,8 @@ export async function handleResponsesCompact(
   const rawInputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   // Keep readable reasoning local until success, outside the summarizer request.
   // Opaque compaction responses below keep their original protocol and ciphertext.
-  const retention: ReasoningRetentionResult = config.reasoningRetention?.enabled === true ? applyReasoningRetention(rawInputItems, {
+  const retention: ReasoningRetentionResult = config.reasoningRetention?.enabled === true
+    && !isCanonicalOpenAiForwardProvider(route.provider) ? applyReasoningRetention(rawInputItems, {
     archiveDir: join(getConfigDir(), "reasoning-archive"),
     contextWindow: route.staticPolicy.model.contextWindow ?? route.staticPolicy.model.maxInputTokens,
     maxContextPercent: config.reasoningRetention?.maxContextPercent,
