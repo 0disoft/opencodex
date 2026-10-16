@@ -2,7 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
-import { ClientPathError, piAgentDir } from "./config-export";
+import { ClientPathError, piAgentDir } from "./client-path";
 
 interface BootstrapIO {
   readText(path: string): { kind: "text"; text: string } | { kind: "missing" } | { kind: "failed" };
