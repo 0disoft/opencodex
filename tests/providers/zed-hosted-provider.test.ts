@@ -269,7 +269,7 @@ describe("Zed Hosted AI provider", () => {
       content: [{ type: "text", text: "hello zed" }],
     });
   });
-  test("normalizes OpenAI string input to sequence blocks with input_text for Zed backend", async () => {
+  test("normalizes OpenAI input and removes Codex-only fields for Zed backend", async () => {
     const responses = [
       jsonResponse({ default_organization_id: "org-1" }),
       jsonResponse({ token: "llm-token-1" }),
@@ -287,18 +287,43 @@ describe("Zed Hosted AI provider", () => {
       authMode: "oauth",
       apiKey: "access-token",
     };
-    const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello zed openai", stream: true });
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      input: [
+        { type: "message", role: "developer", content: [{ type: "input_text", text: "Follow the user request." }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hello zed openai" }] },
+      ],
+      stream: true,
+      access_programs: { cyber: ["standard"] },
+      tools: [
+        { type: "web_search", search_context_size: "medium" },
+        { type: "function", name: "synthetic_tool", parameters: { type: "object", properties: {} } },
+      ],
+    });
     parsed._zedAuthContext = { userId: "user-1" };
     const adapter = withTestTranslatorBudget(createZedAdapter(provider));
     const request = await adapter.buildRequest(parsed);
-    const body = JSON.parse(request.body) as { provider: string; provider_request: { input: Array<{ type: string; role: string; content: unknown }> } };
+    const body = JSON.parse(request.body) as {
+      provider: string;
+      provider_request: {
+        input: Array<{ type: string; role: string; content: unknown }>;
+        tools: Array<{ type: string }>;
+      };
+    };
 
     expect(body.provider).toBe("open_ai");
     expect(body.provider_request.input[0]).toEqual({
       type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: "Follow the user request." }],
+    });
+    expect(body.provider_request.input[1]).toEqual({
+      type: "message",
       role: "user",
       content: [{ type: "input_text", text: "hello zed openai" }],
     });
+    expect(body.provider_request).not.toHaveProperty("access_programs");
+    expect(body.provider_request.tools).toEqual([{ type: "function", name: "synthetic_tool", parameters: { type: "object", properties: {} } }]);
   });
 });
 
