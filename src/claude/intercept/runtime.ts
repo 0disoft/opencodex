@@ -223,11 +223,15 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       });
       const pickerProfileApplied = pickerProfile.kind === "applied";
       let pickerBlocked = false;
+      let pickerWired = false;
       try {
         const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../desktop-first-party");
         const fresh = options.config;
         const platform = options.pickerPlatform ?? process.platform;
-        if (pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform)) {
+        const pickerRequired = pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform);
+        // Preserve macOS's dormant wiring; Windows binds only for intent or selected-profile recovery.
+        pickerWired = platform !== "win32" || pickerRequired;
+        if (pickerRequired) {
           await preparePersistentPickerAuthority({ configDir, store: options.pickerCaStore, security: options.pickerSecurity, platform });
         }
       } catch (error) {
@@ -258,7 +262,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
           }
         }
       }
-      picker = pickerBlocked ? null : (options.createPicker ?? createPickerRuntime)({
+      picker = pickerBlocked || !pickerWired ? null : (options.createPicker ?? createPickerRuntime)({
         config: options.config,
         configDir,
         persistentAuthority: { store: options.pickerCaStore },

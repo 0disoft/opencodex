@@ -190,7 +190,7 @@ The authority primitive accepts `validityDays` from 1 through 3650 for short-liv
 
 Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
 
-On macOS and Windows, when the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows with picker intent or an applied profile requiring recovery,
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
@@ -275,8 +275,8 @@ predecessor before writing the credential, verifies readback, then commits metad
 it removes the journal last. Recovery requires matching journal/store identity; missing initialized
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
-profile needs recovery. Its dormant macOS or Windows runtime/controller remains available for later explicit
-activation, which uses the same persistent authority path.
+profile needs recovery. macOS retains its dormant runtime/controller for later explicit activation;
+Windows without picker intent or an applied profile constructs neither picker runtime/controller nor relay. Activation uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
