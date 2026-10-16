@@ -61,7 +61,9 @@ async function start(platform: NodeJS.Platform = "win32", recovery = false) {
     }) as unknown as PickerRuntime,
     // Exercise the real CONNECT handlers without probing or reserving a fixed port.
     startProxy: async (requested, options) => {
-      const proxy = await startConnectProxy(0, options);
+      const proxy = await startConnectProxy(0, {
+        ...options, dialUpstream: (_host, port) => connect({ host: "127.0.0.1", port }),
+      });
       binds.push({ requested, port: proxy.port, options });
       return proxy;
     },
@@ -75,7 +77,7 @@ async function connectStatus(proxyPort: number, targetPort: number): Promise<str
     let head = "";
     socket.setTimeout(2000, () => socket.destroy(new Error("CONNECT timed out")));
     socket.on("error", reject);
-    socket.on("connect", () => socket.write(`CONNECT 127.0.0.1:${targetPort} HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\n\r\n`));
+    socket.on("connect", () => socket.write(`CONNECT relay-test.invalid:${targetPort} HTTP/1.1\r\nHost: relay-test.invalid:${targetPort}\r\n\r\n`));
     socket.on("data", bytes => {
       head += bytes.toString();
       if (head.includes("\r\n\r\n")) {
