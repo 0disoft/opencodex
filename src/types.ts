@@ -61,7 +61,6 @@ export type {
   OcxProviderContinuationOwner,
   OcxProviderContinuationState,
   AdapterEvent,
-  AnthropicServerBlocks,
   OcxUrlCitation,
   OcxUsage,
 } from "./types/request";
