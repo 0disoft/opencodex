@@ -2,12 +2,7 @@
 
 ## Client rate-limit retry advice
 
-With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes
-`resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`.
-`src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest
-lower bound first; competing original hints are retained under an explicit provider-detail label.
-Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates
-no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
+With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes `resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`. `src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest lower bound first; competing original hints are retained under an explicit provider-detail label. Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
 
 ## Adapter incomplete reasons
 
@@ -534,12 +529,7 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 
 ## Inbound history and code-mode shell wire repairs
 
-Inbound function-call history with a missing JSON object prefix is repaired for every provider when
-restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only
-when the remaining text parses as an object unchanged or after restoring a closing brace or quote
-and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay
-as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in
-`tests/responses/responses-mimo-envelope.test.ts`.
+Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
 Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while
 retaining the existing ambiguity and foreign-grammar boundaries.
 
