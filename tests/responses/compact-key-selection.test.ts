@@ -52,11 +52,11 @@ function fixture(keyCap = true): OcxConfig {
   saveConfig(config);
   return config;
 }
-function status(config: OcxConfig) { return providerRequestPacingStatus(NAME, config.providers[NAME]!); }
+function status(config: OcxConfig) { return providerRequestPacingStatus(config.defaultProvider!, config.providers[config.defaultProvider!]!); }
 function keyStatus(config: OcxConfig, id: string) { return status(config).keys!.find(key => key.id === id)!; }
 function cool(config: OcxConfig, index: number) {
-  const selection = { ...captureProviderApiKeySelection({ ...config.providers[NAME]!, apiKey: KEYS[index] }), distributed: true };
-  expect(recordDistributedKeyFailure(config, NAME, selection, 429, Date.now(), "30")).toBe(true);
+  const selection = { ...captureProviderApiKeySelection({ ...config.providers[config.defaultProvider!]!, apiKey: KEYS[index] }), distributed: true };
+  expect(recordDistributedKeyFailure(config, config.defaultProvider!, selection, 429, Date.now(), "30")).toBe(true);
 }
 async function queue(config: OcxConfig, id: string) {
   const deadline = Date.now() + 2_000;
@@ -68,7 +68,7 @@ async function queue(config: OcxConfig, id: string) {
 function start(config: OcxConfig, abort: AbortController) {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/responses/compact", { method: "POST", headers: { "content-type": "application/json" },
-    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${NAME}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
   const pending = handleResponsesCompact(req, config, logCtx).then(async response => ({ response, text: await response.text(), logCtx }));
   void pending.catch(() => {});
   return pending;
@@ -284,12 +284,14 @@ for (const cancel of [false, true]) test(`active manual key switch readmits the 
 for (const reselect of [false, true]) test(`gateway compact preserves custom transport after key admission (reselect=${reselect})`, async () => {
   const config = fixture();
   const provider = config.providers[NAME]!;
+  config.providers = { "gateway-key-fixture": provider };
+  config.defaultProvider = "gateway-key-fixture";
   provider.baseUrl = "https://gateway.example/v1";
   provider.responsesPath = "/custom-responses";
   provider.supportsNativeCompactEndpoint = true;
   provider.headers = { "x-gateway-static": "initial" };
   saveConfig(config);
-  const held = reselect ? await waitForProviderRequestSlot(NAME, provider) : undefined;
+  const held = reselect ? await waitForProviderRequestSlot(config.defaultProvider, provider) : undefined;
   const abort = new AbortController();
   const pending = start(config, abort);
   try {
