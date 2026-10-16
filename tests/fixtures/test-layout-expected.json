@@ -1,4 +1,10 @@
 {
+    "bridge-terminal-refusal.test.ts": "adapters",
+    "loop-terminal-refusal.test.ts": "images",
+    "web-search-terminal-refusal.test.ts": "web-search",
+    "combo-terminal-refusal.test.ts": "routing",
+    "server-terminal-refusal-wiring.test.ts": "server",
+
   "incomplete-reason-normalization.test.ts": "responses",  "gcp-credential-boundary.test.ts": "adapters/google", "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
