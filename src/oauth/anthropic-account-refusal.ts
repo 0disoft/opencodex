@@ -31,6 +31,22 @@ export function bindAnthropicRefusalCredentialForSend(response: Response, owner:
   responseCredentials.set(response, Object.freeze({ ...owner, providerAccountUuid, checkProviderUuid: arguments.length >= 3 }));
 }
 
+/** Preserve the original send proof across internal error normalization, without renewing it. */
+export function carryAnthropicRefusalCredential(source: Response, target: Response): void {
+  const sent = responseCredentials.get(source);
+  if (sent) responseCredentials.set(target, sent);
+}
+
+/** Recheck after body consumption: a late refusal cannot acquire a replacement login's authority. */
+export function anthropicRefusalCredentialIsCurrent(response: Response, instance: AnthropicInstanceId, accountId: string): boolean {
+  const sent = responseCredentials.get(response);
+  if (!sent || sent.provider !== instance || sent.accountId !== accountId
+    || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return false;
+  const row = getAccountCredentialWithStatus(instance, accountId);
+  return !!row && !row.paused && !row.needsReauth
+    && (!sent.checkProviderUuid || row.credential.accountId === sent.providerAccountUuid);
+}
+
 async function isRevokedOAuthToken(response: Response, signal?: AbortSignal): Promise<boolean> {
   if (response.status !== 401) return false;
   try {

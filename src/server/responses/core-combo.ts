@@ -55,6 +55,7 @@ import { routeConcreteModel, comboRouteDecisionTrace } from "../../router";
 import { memoryModelRouteReason } from "./memory-models";
 import { baseProviderLabel, poolAccountProviderLabel } from "../../providers/label";
 import { getAccountSet } from "../../oauth/store";
+import { anthropicRefusalCredentialIsCurrent } from "../../oauth/anthropic-account-refusal";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isAnthropicBillingFailure } from "../../providers/anthropic-billing-refusal";
 import {
@@ -166,7 +167,7 @@ function cooledGenericOAuthAccountLabel(
  */
 function creditRefusedAnthropicAccountLabel(
   config: OcxConfig, providerName: string, modelId: string, label: string | undefined,
-  message: string, code: string | null | undefined,
+  message: string, code: string | null | undefined, response: Response,
 ): string | undefined {
   const instance = configuredAnthropicInstance(config, providerName);
   if (!label || !instance || config.providers[providerName]?.authMode !== "oauth"
@@ -175,6 +176,7 @@ function creditRefusedAnthropicAccountLabel(
   const matches = getAccountSet(instance)?.accounts.filter(account =>
     formatAnthropicProviderForLog(instance, account.id) === label) ?? [];
   return matches.length === 1
+    && anthropicRefusalCredentialIsCurrent(response, instance, matches[0]!.id)
     && routing.recordAnthropicAccountRefusal(config, matches[0]!.id, 403, null)
     && routing.getEligibleAnthropicAccounts(Date.now(), modelId).length > 0
     ? label : undefined;
@@ -1205,6 +1207,7 @@ export async function executeComboResponses(
     const failedAccount = failure.response.status === 402
       ? creditRefusedAnthropicAccountLabel(
         config, pick.target.provider, pick.target.model, poolAccountLabel, failure.classificationText, failure.upstreamCode,
+        failure.response,
       )
       : cooledPoolAccountLabel(config, pick.target.provider, pick.target.model, poolAccountLabel)
       ?? (failure.response.status === 429 && failureCooldownScope === "target"

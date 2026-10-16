@@ -307,6 +307,9 @@ Generic permission, resource/model access, content policy, quoted diagnostics, c
 error codes and incomplete/malformed bodies remain terminal. The shared physical dispatch
 in `src/server/responses/request-transport.ts` binds the refusal to the stored bearer it sent;
 overridden headers, additional API keys and replaced credentials cannot cool that account.
+Combo 402 credit-balance refusals carry that immutable send proof across bounded error
+normalization in `src/server/responses/core-combo-failure.ts`. The combo rechecks instance,
+account incarnation, credential generation and pause/reauth state before recording entitlement cooldown.
 
 `src/oauth/anthropic-routing.ts` records a process-local cooldown, clears account affinity,
 and applies the existing strategy, pause/reauth exclusions, model route and selection commit.
