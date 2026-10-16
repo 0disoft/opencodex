@@ -45,6 +45,7 @@ export const RESPONSES_CORE_MODULES = [
   "request-transport.ts",
   "request-sidecar-auth.ts",
   "response-effects.ts",
+  "response-tool-ownership.ts",
   "request-send-budget.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
