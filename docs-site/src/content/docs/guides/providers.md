@@ -302,6 +302,8 @@ provided, and the bridge infers the hosted backend family from the live row or t
 model discovery is not an allowlist. The Zed access token has no refresh endpoint, so when Zed
 revokes it, run `ocx login zed` again.
 
+For Zed-hosted OpenAI models, OpenCodex translates `developer` instructions to `system` messages and removes OpenAI-private fields and unsupported built-in tools such as `web_search`. Function and custom tools remain available through the delegate.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request
 (the Responses wire accepts the same field, but opencodex does not send it there today);
