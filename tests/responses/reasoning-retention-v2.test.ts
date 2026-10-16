@@ -110,8 +110,10 @@ describe("routed v2 retention", () => {
     expect(sent).not.toContain("ocx2:");
   });
 
-  test("canonical native v2 retains its original protocol and creates no local archive", async () => {
-    const config = keyProviderConfig({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" });
+  test.each(["canonical", "gateway"])("%s native v2 retains its original protocol and creates no local archive", async destination => {
+    const config = keyProviderConfig(destination === "canonical"
+      ? { authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }
+      : { supportsNativeCompactionTrigger: true });
     config.reasoningRetention = { enabled: true, maxTokens: 1 };
     let sent = "";
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {

@@ -1,4 +1,4 @@
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { supportsNativeResponsesCompactionTrigger } from "../../providers/openai-tiers";
 import type { OcxConfig } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type {
@@ -47,7 +47,7 @@ export async function handleResponsesInner(
     if (transportState instanceof Response) return transportState;
     options.onCompactionRecoveryRoute?.(requestState.route);
     if (requestState.parsed._compactionRequest && options.compactionRecoveryKind !== "compaction-v1"
-      && (requestState.parsed._portableCompaction || !isCanonicalOpenAiForwardProvider(requestState.route.provider))) {
+      && (requestState.parsed._portableCompaction || !supportsNativeResponsesCompactionTrigger(requestState.route.provider))) {
       retention = prepareCompactionRetention(requestState.parsed, config,
         requestState.route.staticPolicy.model.contextWindow ?? requestState.route.staticPolicy.model.maxInputTokens,
         options.translatorBudget, options.abortSignal ?? req.signal);
