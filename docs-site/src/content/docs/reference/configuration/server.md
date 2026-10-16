@@ -779,6 +779,66 @@ without tool declarations. This changes only the summary request, not stored his
 compaction; a failed summary does not replace the history. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
 
+### Reasoning retention during compaction
+
+Readable reasoning retention is an advanced, explicit opt-in and is **off by default**.
+Only `reasoningRetention.enabled: true` enables it; an omitted block, `enabled: false`,
+or legacy limits without `enabled: true` leave ordinary compaction behavior unchanged.
+When enabled for routed v1 `POST /v1/responses/compact` and routed v2 `compaction_trigger` requests, readable reasoning stays local while the selected
+model summarizes other context. After a readable summary succeeds, exact retained text returns
+alongside it in framed historical context messages, not as new assistant reasoning or instructions.
+Repeated compaction withholds those messages again. Ordinary subsequent turns replay them as history.
+
+```json
+{
+  "reasoningRetention": {
+    "enabled": true,
+    "maxContextPercent": 20,
+    "maxTokens": 100000
+  }
+}
+```
+
+Both limit fields are optional and, **when enabled**, default at runtime to `20` percent and `100000` estimated tokens.
+The effective limit is the smaller of the percentage of the compacting model's context window
+and the absolute token cap; when the context window is unknown, only the absolute cap applies.
+The estimate includes each retained message's historical-context frame, not just its reasoning text.
+Above the limit, readable text is written verbatim under the resolved OpenCodex home's
+`reasoning-archive/` (normally `~/.opencodex/reasoning-archive/`). The summarizer receives a
+path note instead of the text, and the finished readable summary includes a notice naming that file.
+New archives are private to the user on POSIX. An archive is provisional until a readable summary
+returns its path: failures, cancellation, invalid summaries, and opaque compaction responses remove
+the current attempt's file. Internal retries reuse it; previously successful archives are preserved.
+Failed compaction returns no replacement history.
+
+The percentage/token limits bound reasoning returned in context, **not cumulative archive storage**.
+Each archive contains only readable reasoning admitted in that request; request admission is bounded
+by `maxInboundBodyBytes` (256 MiB by default, configurable up to 512 MiB), plus small block separators.
+There is **no aggregate archive byte/file limit, automatic expiry, or background archive cleanup**.
+Successful archives remain until you manually delete their files, including after disabling retention
+or resetting the setting. They are plaintext, contain potentially sensitive conversation reasoning,
+and share the resolved OpenCodex home of that proxy instance. Deleting an archive makes any existing
+path notice unable to recover its contents; save anything you need first. A process crash or failed
+filesystem write/cleanup can also leave a provisional file requiring manual cleanup.
+
+**Dashboard → Overview → Advanced settings → Reasoning retention** provides the explicit switch
+and both limits; **Reset and turn off** removes the override and switches retention off. GET/PUT `/api/settings` exposes `reasoningRetention`: null clears the block,
+and omission preserves it. `enabled` must be a boolean when present. Percentages must be greater than 0 and at most 100; token caps must
+be positive integers, and unknown fields are rejected. Invalid hand edits disable only this
+block with a warning, keeping unrelated providers and settings.
+
+Private provider ciphertext and signatures are not decrypted or copied into portable retained
+messages. An upstream native opaque compaction response retains its exact output item and
+ciphertext, without added retained messages or a rewritten summary. Native compact endpoints
+keep their existing behavior.
+
+Routed v2 still returns exactly one compaction item. Its proxy-owned `ocx2:` envelope stores
+the summary and retained historical reasoning separately as JSON/Base64; this is encoding,
+not provider encryption. Subsequent requests restore separate historical messages, and
+repeated compaction withholds the reasoning again. Old `ocx1:` summaries remain supported.
+Opt-in emergency compaction recovery also preserves this separation for JSON and SSE.
+Explicit native-history recovery restores separate summary and historical reasoning messages too.
+
 ## Memory routing
 
 In **Dashboard → Overview → Memory routing**, choose a model and an optional reasoning effort for

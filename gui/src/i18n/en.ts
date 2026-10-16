@@ -7,6 +7,18 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "reasoningRetention.advanced": "Advanced settings",
+  "reasoningRetention.title": "Reasoning retention",
+  "reasoningRetention.enable": "Enable reasoning retention",
+  "reasoningRetention.description": "Off by default. When enabled for routed v1/v2 compaction with a readable summary, reasoning within the smaller of the context-window percentage and token cap returns as historical context alongside the summary. Above the limit, it is archived locally and replaced by a path note. Defaults when enabled: 20% and 100,000 tokens. Private provider reasoning is not decrypted; opaque compaction output stays unchanged.",
+  "reasoningRetention.storageHint": "Enabling can preserve plaintext reasoning in local history and archives. Completed archives have no total-size limit or expiry; delete unneeded archives manually.",
+  "reasoningRetention.percent": "Context window (%)",
+  "reasoningRetention.tokens": "Token cap",
+  "reasoningRetention.reset": "Reset and turn off",
+  "reasoningRetention.invalid": "Enter a percentage greater than 0 and at most 100, and a positive whole token count.",
+  "reasoningRetention.loadFailed": "Could not load reasoning retention settings.",
+  "reasoningRetention.saveFailed": "Could not save reasoning retention settings.",
+  "reasoningRetention.saved": "Reasoning retention settings saved.",
   ...desktopCompatibilityCopy("en"),
   "claude.tierDefaults.unset": "Unset (keep existing Claude setting)",
   "claude.tierDefaults.recovery": "Apply stopped and automatic restore failed. Check the backup below before retrying.",

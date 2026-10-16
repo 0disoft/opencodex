@@ -1,5 +1,4 @@
 {
-<<<<<<< HEAD
   "gcp-credential-boundary.test.ts": "adapters/google", "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
@@ -7,10 +6,7 @@
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
-||||||| 7640a942b3
-=======
- "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",
->>>>>>> a4f8a347ae361e615db76b045ec5db39fb867045
+  "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",
@@ -975,6 +971,7 @@
   "rate-limit-retry.test.ts": "providers", "raycast-client.test.ts": "clients",
   "raycast-detect.test.ts": "clients", "reasoning-effort-summary-default.test.ts": "responses",
   "reasoning-effort.test.ts": "codex-integration", "reasoning-envelope.test.ts": "responses",
+  "reasoning-retention.test.ts": "responses", "reasoning-retention-routing.test.ts": "responses", "reasoning-retention-v2.test.ts": "responses",
   "reasoning-metadata.test.ts": "codex-integration", "reasoning-replay-identity.test.ts": "adapters",
   "reasoning-replay-robustness.test.ts": "adapters", "reasoning-replay-scope-source.test.ts": "lib",
   "redact.test.ts": "lib", "relay-eager.test.ts": "server",
@@ -1110,6 +1107,7 @@
   "session-affinity.test.ts": "server", "session-lane-recall-harness.test.ts": "server",
   "settings-desktop-switch-apply.test.ts": "config", "settings-fast-rows.test.ts": "config",
   "settings-main-account-hard-lock.test.ts": "config", "settings-memory-models.test.ts": "config",
+  "settings-reasoning-retention.test.ts": "config",
   "settings-oauth-open-browser.test.ts": "config", "settings-startup-health-seam.test.ts": "config",
   "settings-stream-mode.test.ts": "config", "setup-hooks.test.ts": "ci-workflows",
   "shadow-intercept-target-lifecycle.test.ts": "responses", "shutdown-drain.test.ts": "service",

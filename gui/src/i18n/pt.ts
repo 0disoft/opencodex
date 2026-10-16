@@ -7,6 +7,18 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const pt: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Configurações avançadas",
+  "reasoningRetention.title": "Retenção de raciocínio",
+  "reasoningRetention.enable": "Ativar retenção de raciocínio",
+  "reasoningRetention.description": "Desativada por padrão. Quando ativada para compactação v1/v2 roteada com resumo legível, o raciocínio até o menor valor entre a porcentagem da janela de contexto e o limite de tokens retorna como contexto histórico junto com o resumo. Acima do limite, ele é arquivado localmente e substituído por uma indicação do caminho. Padrões quando ativada: 20% e 100.000 tokens. O raciocínio privado do provedor não é descriptografado; a saída opaca de compactação permanece inalterada.",
+  "reasoningRetention.storageHint": "A ativação pode preservar o raciocínio em texto não criptografado no histórico local e nos arquivos. Os arquivos concluídos não têm limite de tamanho total nem prazo de expiração; exclua manualmente os arquivos desnecessários.",
+  "reasoningRetention.percent": "Janela de contexto (%)",
+  "reasoningRetention.tokens": "Limite de tokens",
+  "reasoningRetention.reset": "Redefinir e desativar",
+  "reasoningRetention.invalid": "Informe uma porcentagem maior que 0 e no máximo 100, e um número inteiro positivo de tokens.",
+  "reasoningRetention.loadFailed": "Não foi possível carregar as configurações de retenção de raciocínio.",
+  "reasoningRetention.saveFailed": "Não foi possível salvar as configurações de retenção de raciocínio.",
+  "reasoningRetention.saved": "Configurações de retenção de raciocínio salvas.",
   ...desktopCompatibilityCopy("pt"),
   "claude.tierDefaults.unset": "Não definido (manter configuração Claude)",
   "claude.tierDefaults.recovery": "Aplicação interrompida; restauração automática falhou. Verifique o backup abaixo antes de tentar novamente.",

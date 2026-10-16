@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Paramètres avancés",
+  "reasoningRetention.title": "Conservation du raisonnement",
+  "reasoningRetention.enable": "Activer la conservation du raisonnement",
+  "reasoningRetention.description": "Désactivée par défaut. Lorsqu’elle est activée pour une compression v1/v2 routée avec un résumé lisible, le raisonnement dans la limite du plus petit des deux seuils, pourcentage de la fenêtre de contexte et plafond de tokens, revient comme contexte historique avec le résumé. Au-delà, il est archivé localement et remplacé par une indication du chemin. Valeurs par défaut à l’activation : 20 % et 100 000 tokens. Le raisonnement privé du fournisseur n’est pas déchiffré ; les sorties de compression opaques restent inchangées.",
+  "reasoningRetention.storageHint": "L’activation peut conserver le raisonnement en texte clair dans l’historique local et les archives. La taille totale des archives terminées n’est pas limitée et celles-ci n’expirent pas ; supprimez manuellement les archives inutiles.",
+  "reasoningRetention.percent": "Fenêtre de contexte (%)",
+  "reasoningRetention.tokens": "Plafond de tokens",
+  "reasoningRetention.reset": "Réinitialiser et désactiver",
+  "reasoningRetention.invalid": "Saisissez un pourcentage supérieur à 0 et inférieur ou égal à 100, et un nombre entier positif de tokens.",
+  "reasoningRetention.loadFailed": "Impossible de charger les paramètres.",
+  "reasoningRetention.saveFailed": "Impossible de sauvegarder les paramètres.",
+  "reasoningRetention.saved": "Paramètres enregistrés.",
   ...desktopCompatibilityCopy("fr"),
   "claude.tierDefaults.unset": "Non défini (conserver le réglage Claude)",
   "claude.tierDefaults.recovery": "Application arrêtée et restauration automatique échouée. Vérifiez la sauvegarde ci-dessous avant de réessayer.",

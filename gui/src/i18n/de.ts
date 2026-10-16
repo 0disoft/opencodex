@@ -6,6 +6,18 @@ import type { TKey } from "./en";
  * German i18n catalog, generated from en.ts. Must match the `TKey` set (compile-checked).
  */
 export const de: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Erweiterte Einstellungen",
+  "reasoningRetention.title": "Aufbewahrung von Denktext",
+  "reasoningRetention.enable": "Aufbewahrung von Denktext aktivieren",
+  "reasoningRetention.description": "Standardmäßig ausgeschaltet. Bei aktivierter Aufbewahrung für geroutete v1/v2-Komprimierung mit lesbarer Zusammenfassung kehrt Denktext bis zum kleineren Wert aus Kontextfensteranteil und Token-Limit zusammen mit der Zusammenfassung als historischer Kontext zurück. Darüber wird er lokal archiviert und durch einen Pfadhinweis ersetzt. Standardwerte bei Aktivierung: 20 % und 100.000 Token. Private Anbieter-Denkdaten werden nicht entschlüsselt; undurchsichtige Komprimierungsausgaben bleiben unverändert.",
+  "reasoningRetention.storageHint": "Durch das Aktivieren kann Denktext im Klartext im lokalen Verlauf und in Archiven erhalten bleiben. Für abgeschlossene Archive gibt es weder ein Limit für die Gesamtgröße noch eine Ablauffrist; löschen Sie nicht mehr benötigte Archive manuell.",
+  "reasoningRetention.percent": "Kontextfenster (%)",
+  "reasoningRetention.tokens": "Token-Limit",
+  "reasoningRetention.reset": "Zurücksetzen und ausschalten",
+  "reasoningRetention.invalid": "Prozentsatz größer als 0 und höchstens 100 sowie eine positive ganze Tokenzahl eingeben.",
+  "reasoningRetention.loadFailed": "Einstellungen konnten nicht geladen werden.",
+  "reasoningRetention.saveFailed": "Einstellungen konnten nicht gespeichert werden.",
+  "reasoningRetention.saved": "Einstellungen gespeichert.",
   ...desktopCompatibilityCopy("de"),
   "claude.tierDefaults.unset": "Nicht festgelegt (Claude-Einstellung beibehalten)",
   "claude.tierDefaults.recovery": "Anwendung gestoppt; automatische Wiederherstellung fehlgeschlagen. Prüfen Sie vor einem erneuten Versuch die Sicherung unten.",

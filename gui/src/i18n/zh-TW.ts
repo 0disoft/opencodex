@@ -3,6 +3,18 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "reasoningRetention.advanced": "進階設定",
+  "reasoningRetention.title": "推理保留",
+  "reasoningRetention.enable": "啟用推理保留",
+  "reasoningRetention.description": "預設關閉。對於傳回可讀摘要的路由 v1/v2 壓縮，啟用後，在上下文視窗比例與 token 上限兩者較小值以內的推理會隨摘要作為歷史上下文帶回。超過上限時，推理會在本機封存並由路徑說明取代。啟用時的預設值：20% 和 100,000 token。不會解密供應商的私有推理；不透明的壓縮輸出保持原樣。",
+  "reasoningRetention.storageHint": "啟用後，明文推理可能會保留在本機歷史記錄與封存檔中。已完成的封存檔沒有總大小限制或到期時間；請手動刪除不需要的封存檔。",
+  "reasoningRetention.percent": "上下文視窗比例（%）",
+  "reasoningRetention.tokens": "Token 上限",
+  "reasoningRetention.reset": "重設並關閉",
+  "reasoningRetention.invalid": "比例須大於 0 且不超過 100，token 上限須為正整數。",
+  "reasoningRetention.loadFailed": "無法載入推理保留設定。",
+  "reasoningRetention.saveFailed": "無法儲存推理保留設定。",
+  "reasoningRetention.saved": "推理保留設定已儲存。",
   ...desktopCompatibilityCopy("zh-TW"),
   "claude.tierDefaults.unset": "未設定（保留現有 Claude 設定）",
   "claude.tierDefaults.recovery": "套用已停止，自動還原失敗。重試前請檢查下方備份。",

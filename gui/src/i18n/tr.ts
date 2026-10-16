@@ -6,6 +6,18 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Gelişmiş ayarlar",
+  "reasoningRetention.title": "Akıl yürütmeyi saklama",
+  "reasoningRetention.enable": "Akıl yürütmeyi saklamayı etkinleştir",
+  "reasoningRetention.description": "Varsayılan olarak kapalıdır. Okunabilir özet döndüren yönlendirilmiş v1/v2 sıkıştırma için etkinleştirildiğinde, bağlam penceresi yüzdesi ile token sınırının küçüğü içinde kalan akıl yürütme, özetle birlikte geçmiş bağlam olarak geri getirilir. Sınır aşılırsa yerel olarak arşivlenir ve dosya yolu notuyla değiştirilir. Etkinleştirildiğindeki varsayılanlar: %20 ve 100.000 token. Sağlayıcının özel akıl yürütmesinin şifresi çözülmez; opak sıkıştırma çıktısı değişmeden kalır.",
+  "reasoningRetention.storageHint": "Etkinleştirmek, akıl yürütmenin yerel geçmişte ve arşivlerde düz metin olarak saklanmasına yol açabilir. Tamamlanan arşivlerin toplam boyut sınırı veya son kullanma süresi yoktur; gereksiz arşivleri elle silin.",
+  "reasoningRetention.percent": "Bağlam penceresi (%)",
+  "reasoningRetention.tokens": "Token sınırı",
+  "reasoningRetention.reset": "Sıfırla ve kapat",
+  "reasoningRetention.invalid": "0’dan büyük, 100’ü aşmayan bir yüzde ve pozitif tam sayı token sınırı girin.",
+  "reasoningRetention.loadFailed": "Ayarlar yüklenemedi.",
+  "reasoningRetention.saveFailed": "Ayarlar kaydedilemedi.",
+  "reasoningRetention.saved": "Ayarlar kaydedildi.",
   ...desktopCompatibilityCopy("tr"),
   "claude.tierDefaults.unset": "Belirtilmedi (mevcut Claude ayarını koru)",
   "claude.tierDefaults.recovery": "Uygulama durdu ve otomatik geri yükleme başarısız oldu. Yeniden denemeden önce aşağıdaki yedeği kontrol edin.",

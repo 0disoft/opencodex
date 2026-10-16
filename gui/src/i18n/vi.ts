@@ -7,6 +7,18 @@ import type { TKey } from "./en";
  * Technical terms and model identifiers intentionally remain English.
  */
 export const vi: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Cài đặt nâng cao",
+  "reasoningRetention.title": "Lưu giữ suy luận",
+  "reasoningRetention.enable": "Bật lưu giữ suy luận",
+  "reasoningRetention.description": "Mặc định tắt. Khi được bật cho quá trình nén v1/v2 qua định tuyến có bản tóm tắt đọc được, suy luận trong ngưỡng nhỏ hơn giữa tỷ lệ cửa sổ ngữ cảnh và giới hạn token sẽ được trả lại dưới dạng ngữ cảnh lịch sử cùng bản tóm tắt. Vượt ngưỡng, suy luận được lưu trữ cục bộ và thay bằng ghi chú đường dẫn. Giá trị mặc định khi bật: 20% và 100.000 token. Không giải mã suy luận riêng tư của nhà cung cấp; đầu ra nén không đọc được giữ nguyên.",
+  "reasoningRetention.storageHint": "Việc bật có thể lưu suy luận ở dạng văn bản thuần trong lịch sử cục bộ và các bản lưu trữ. Các bản lưu trữ đã hoàn tất không có giới hạn tổng dung lượng hay thời hạn hết hạn; hãy xóa thủ công những bản không cần thiết.",
+  "reasoningRetention.percent": "Cửa sổ ngữ cảnh (%)",
+  "reasoningRetention.tokens": "Giới hạn token",
+  "reasoningRetention.reset": "Đặt lại và tắt",
+  "reasoningRetention.invalid": "Nhập tỷ lệ lớn hơn 0 và không quá 100, cùng số token nguyên dương.",
+  "reasoningRetention.loadFailed": "Không thể tải cài đặt.",
+  "reasoningRetention.saveFailed": "Không thể lưu cài đặt.",
+  "reasoningRetention.saved": "Đã lưu cài đặt.",
   ...desktopCompatibilityCopy("vi"),
   "claude.tierDefaults.unset": "Chưa đặt (giữ cài đặt Claude hiện có)",
   "claude.tierDefaults.recovery": "Đã dừng áp dụng và khôi phục tự động thất bại. Kiểm tra bản sao lưu bên dưới trước khi thử lại.",

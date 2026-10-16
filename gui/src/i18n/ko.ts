@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * Korean i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ko: Record<TKey, string> = {
+  "reasoningRetention.advanced": "고급 설정",
+  "reasoningRetention.title": "추론 보존",
+  "reasoningRetention.enable": "추론 보존 활성화",
+  "reasoningRetention.description": "기본적으로 꺼져 있습니다. 읽을 수 있는 요약을 반환하는 라우팅 v1/v2 압축에서 활성화하면 컨텍스트 창 비율과 토큰 한도 중 작은 값 이내의 추론이 요약과 함께 과거 컨텍스트로 돌아옵니다. 한도를 초과하면 로컬에 보관되고 경로 안내로 대체됩니다. 활성화 시 기본값: 20% 및 100,000 토큰. 제공자의 비공개 추론을 복호화하지 않으며 불투명한 압축 출력은 그대로 유지합니다.",
+  "reasoningRetention.storageHint": "활성화하면 평문 추론이 로컬 기록과 보관 파일에 남을 수 있습니다. 완성된 보관 파일에는 전체 크기 제한이나 만료 기한이 없으므로 불필요한 파일은 직접 삭제하세요.",
+  "reasoningRetention.percent": "컨텍스트 비율 (%)",
+  "reasoningRetention.tokens": "토큰 한도",
+  "reasoningRetention.reset": "초기화하고 끄기",
+  "reasoningRetention.invalid": "비율은 0 초과 100 이하, 토큰 한도는 양의 정수여야 합니다.",
+  "reasoningRetention.loadFailed": "설정을 불러올 수 없습니다.",
+  "reasoningRetention.saveFailed": "설정을 저장할 수 없습니다.",
+  "reasoningRetention.saved": "설정을 저장했습니다.",
   ...desktopCompatibilityCopy("ko"),
   "claude.tierDefaults.unset": "미지정 (기존 Claude 설정 유지)",
   "claude.tierDefaults.recovery": "적용이 중단되었고 자동 복원에 실패했어요. 다시 시도하기 전에 아래 백업을 확인하세요.",

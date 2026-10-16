@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "reasoningRetention.advanced": "高级设置",
+  "reasoningRetention.title": "推理保留",
+  "reasoningRetention.enable": "启用推理保留",
+  "reasoningRetention.description": "默认关闭。对于返回可读摘要的路由 v1/v2 压缩，启用后，在上下文窗口比例与 token 上限两者较小值以内的推理会随摘要作为历史上下文带回。超过上限时，推理会在本地归档并由路径说明替代。启用时的默认值：20% 和 100,000 token。不会解密提供商的私有推理；不透明的压缩输出保持原样。",
+  "reasoningRetention.storageHint": "启用后，明文推理可能会保留在本地历史记录和归档中。已完成的归档没有总大小限制或到期时间；请手动删除不需要的归档。",
+  "reasoningRetention.percent": "上下文窗口比例（%）",
+  "reasoningRetention.tokens": "Token 上限",
+  "reasoningRetention.reset": "重置并关闭",
+  "reasoningRetention.invalid": "比例须大于 0 且不超过 100，token 上限须为正整数。",
+  "reasoningRetention.loadFailed": "无法加载推理保留设置。",
+  "reasoningRetention.saveFailed": "无法保存推理保留设置。",
+  "reasoningRetention.saved": "推理保留设置已保存。",
   ...desktopCompatibilityCopy("zh"),
   "claude.tierDefaults.unset": "未设置（保留现有 Claude 设置）",
   "claude.tierDefaults.recovery": "应用已停止，自动恢复失败。重试前请检查下方备份。",

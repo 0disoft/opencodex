@@ -5,6 +5,18 @@ import type { TKey } from "./en";
  * Russian i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ru: Record<TKey, string> = {
+  "reasoningRetention.advanced": "Расширенные настройки",
+  "reasoningRetention.title": "Сохранение рассуждений",
+  "reasoningRetention.enable": "Включить сохранение рассуждений",
+  "reasoningRetention.description": "По умолчанию выключено. Если включено для маршрутизируемого сжатия v1/v2 с читаемой сводкой, рассуждения в пределах меньшего из доли окна контекста и лимита токенов возвращаются как исторический контекст вместе со сводкой. При превышении лимита они архивируются локально и заменяются примечанием с путём. Значения по умолчанию при включении: 20% и 100 000 токенов. Приватные рассуждения провайдера не расшифровываются; непрозрачный результат сжатия не изменяется.",
+  "reasoningRetention.storageHint": "При включении рассуждения могут сохраняться открытым текстом в локальной истории и архивах. У готовых архивов нет ограничения на общий размер или срока хранения; удаляйте ненужные архивы вручную.",
+  "reasoningRetention.percent": "Доля контекста (%)",
+  "reasoningRetention.tokens": "Лимит токенов",
+  "reasoningRetention.reset": "Сбросить и выключить",
+  "reasoningRetention.invalid": "Введите процент больше 0 и не больше 100 и положительное целое число токенов.",
+  "reasoningRetention.loadFailed": "Не удалось загрузить настройки.",
+  "reasoningRetention.saveFailed": "Не удалось сохранить настройки.",
+  "reasoningRetention.saved": "Настройки сохранены.",
   ...desktopCompatibilityCopy("ru"),
   "claude.tierDefaults.unset": "Не задано (сохранить настройку Claude)",
   "claude.tierDefaults.recovery": "Применение остановлено, автоматическое восстановление не удалось. Проверьте резервную копию ниже перед повтором.",
