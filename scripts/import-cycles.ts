@@ -176,4 +176,3 @@ if (import.meta.main) {
     for (const component of components) console.log(component.length + ": " + component.join(" "));
   }
 }
-
