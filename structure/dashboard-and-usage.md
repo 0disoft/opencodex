@@ -381,7 +381,7 @@ roster the exporter itself iterates. The count is
 deliberately not restated here: it was written as eight, a bounded label value was added, and the
 documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct
-recovery kind already retained on an attempt contributes once to its coarse class. The Antigravity validation-refusal sibling resend records `oauth-account-403`, which Logs labels from the shared recovery roster.
+recovery kind already retained on an attempt contributes once to its coarse class. The Antigravity validation-refusal sibling resend records `oauth-account-403`, which Logs labels from the shared recovery roster. A Codex HTTP 402 account move records `oauth-account-402`, maps to `quota-exhausted` and the `quota` metric class, and has a localized Logs label; HTTP 429 remains a rate-limit recovery.
 `opencodex_request_failures_total` counts the cause the recorder derived and never re-derives one,
 and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
