@@ -102,6 +102,8 @@ describe("retained reasoning public wire contracts", () => {
   });
 
   test("routed v1 compact withholds readable reasoning and restores it after a successful summary", async () => {
+    const config = keyProviderConfig();
+    config.reasoningRetention = { enabled: true };
     const original = "  original reasoning\n保留原文  ";
     const input = [{ type: "message", role: "user", content: "summarize this conversation" }, reasoning(original),
       { type: "function_call", call_id: "call_1", name: "shell", arguments: "{}" },
@@ -113,7 +115,7 @@ describe("retained reasoning public wire contracts", () => {
       return jsonResponse(completedPayload("retained conversation summary"));
     }) as typeof fetch;
     const response = await handleResponsesCompact(compactionRequest({ model: "gw/some-model", input }),
-      keyProviderConfig(), { model: "", provider: "" });
+      config, { model: "", provider: "" });
     expect(response.status).toBe(200);
     const body = await response.json() as { output: unknown[] };
     expect(sent).not.toContain("original reasoning");
@@ -123,14 +125,14 @@ describe("retained reasoning public wire contracts", () => {
     expect(JSON.stringify(body.output)).toContain("retained conversation summary");
     expect(input).toEqual(snapshot);
     const repeated = await handleResponsesCompact(compactionRequest({ model: "gw/some-model", input: body.output }),
-      keyProviderConfig(), { model: "", provider: "" });
+      config, { model: "", provider: "" });
     expect(repeated.status).toBe(200);
     const repeatedBody = await repeated.json() as { output: unknown[] };
     expect(repeatedBody.output.filter(item => JSON.stringify(item).includes("original reasoning"))).toEqual([historical(original)]);
     expect(sent).not.toContain("original reasoning");
     const next = await handleResponses(compactionRequest({ model: "gw/some-model", stream: false,
       input: [...repeatedBody.output, { type: "message", role: "user", content: "continue" }] }),
-      keyProviderConfig(), { model: "", provider: "" });
+      config, { model: "", provider: "" });
     expect(next.status).toBe(200);
     await next.text();
     expect(sent).toContain("original reasoning");

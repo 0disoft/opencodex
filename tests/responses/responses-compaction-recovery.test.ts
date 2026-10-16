@@ -203,6 +203,7 @@ describe("routed compaction emergency integration", () => {
     const payload = body(stream);
     (payload.input as unknown[]).unshift({ type: "reasoning", summary: [{ type: "summary_text", text: "Exact preserved option reasoning." }] });
     const config = settings();
+    config.reasoningRetention = { enabled: true };
     const output = async (response: Response) => {
       if (!stream) return (await response.json()).output;
       const events = (await response.text()).split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
@@ -370,6 +371,7 @@ describe("routed compaction emergency integration", () => {
   test.each(["error", "eof"])("retained v2 compaction combo stops after a replay-unsafe runTurn %s", async outcome => {
     sourceEvents = [{ type: "heartbeat", replayUnsafe: true }, ...(outcome === "error" ? [sourceError] : [])];
     const config = settings();
+    config.reasoningRetention = { enabled: true };
     config.compactionRecovery = undefined;
     config.combos = { [`retained-unsafe-${outcome}`]: {
       strategy: "failover", targets: [
@@ -386,7 +388,8 @@ describe("routed compaction emergency integration", () => {
       const response = await handleResponses(request(payload), config, { model: "", provider: "" }, { translatorBudget });
       const text = await response.text();
       expect(calls.map(call => call.model)).toEqual(["swe-2"]);
-      expect(response.status).toBe(502);
+      // Preserve the adapter's explicit rejection status; EOF has no such status.
+      expect(response.status).toBe(outcome === "error" ? 400 : 502);
       expect(isNonReplayableResponse(response)).toBe(true);
       expect(text).toContain(outcome === "error" ? "Source rejected compact fixture" : "Adapter ended before producing a response");
     } finally {
