@@ -12,7 +12,7 @@ import { gatherRoutedModels } from "../../src/codex/catalog/provider-fetch";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 /**
  * `preferModelAliasIds` changes the `/v1/models` row `id` from `provider/nativeId` to the
@@ -54,10 +54,11 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testHome;
 });
 
-afterEach(() => {
+afterEach(async () => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testHome) removeTreeWithRetry(testHome);
+  // Startup leaves config-dir ACL hardening in flight on Windows; settle it before removal.
+  if (testHome) await removeTreeAfterBackgroundWork(testHome);
   testHome = "";
 });
 
@@ -78,7 +79,7 @@ describe("preferModelAliasIds on /v1/models", () => {
       // alias_of is present because we have modelAliases
       expect(seekRow!.alias_of).toBeDefined();
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -100,7 +101,7 @@ describe("preferModelAliasIds on /v1/models", () => {
       // alias_of still present for backward compatibility
       expect(seekRow!.alias_of).toBeDefined();
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -126,7 +127,7 @@ describe("preferModelAliasIds on /v1/models", () => {
       // No native_id added when no alias swap happened
       expect(plainRow!.native_id).toBeUndefined();
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -145,7 +146,7 @@ test("shared aliases remain qualified, unique and routable", async () => {
     expect(ids).toContain("seek/glm-4.7-flash");
     expect(ids).toContain("other/glm-4.7-flash");
     for (const id of ids) expect(() => routeModel(config, id)).not.toThrow();
-  } finally { server.stop(true); }
+  } finally { await server.stop(true); }
 });
 
 test("a shadowed alias never advertises a different provider's route", async () => {
@@ -158,7 +159,7 @@ test("a shadowed alias never advertises a different provider's route", async () 
     const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string; owned_by: string }[] };
     const row = body.data.find(row => row.owned_by === "seek")!;
     expect(routeModel(config, row.id)).toMatchObject({ providerName: "seek", modelId: "glm-4.7-flash" });
-  } finally { server.stop(true); }
+  } finally { await server.stop(true); }
 });
 
 test("preferred and native IDs share a route; Codex gather is unchanged", async () => {
@@ -189,7 +190,7 @@ test("built-in aliases preserve routable Fast siblings", async () => {
       expect(parsed).not.toBeNull();
       expect(routeModel(config, parsed!.baseId)).toMatchObject({ providerName: "seek", modelId: "claude-haiku-4-5" });
     }
-  } finally { server.stop(true); }
+  } finally { await server.stop(true); }
 });
 
 
@@ -207,7 +208,7 @@ test("Codex and Anthropic discovery retain one unchanged identity per model", as
         expect(new Set(list).size).toBe(list.length);
       }
       snapshots.push(ids.map(list => list.toSorted()));
-    } finally { server.stop(true); }
+    } finally { await server.stop(true); }
   }
   expect(snapshots[1]).toEqual(snapshots[0]);
 });
@@ -224,7 +225,7 @@ test("Cursor Fast listing keeps the advertised Fast identity", async () => {
     const body = await (await fetch(new URL("/v1/models", server.url))).json() as { data: { id: string; native_id?: string }[] };
     expect(body.data.map(row => row.id)).toContain("cursor/claude-opus-5-thinking-fast");
     expect(body.data.map(row => row.id)).not.toContain("opus-pick");
-  } finally { server.stop(true); }
+  } finally { await server.stop(true); }
 });
 
 test("the config schema validates the alias-ID opt-in independently", () => {
