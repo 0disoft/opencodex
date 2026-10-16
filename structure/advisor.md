@@ -23,6 +23,23 @@ Management loads `advisor-routes.ts` only for the Advisor namespace. The guard i
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
 boundary from router, lifecycle, Responses core and management API, including direct dynamic imports.
 
+`src/server/responses/advisor-retention.ts` bounds guard-owned retention independently of provider
+parser leases: 32 MiB across raw legs, reconstruction copies and appended replay history, 2 MiB
+per Advisor call's JSON-encoded argument fragments, 4,096 retained events and 1,024 calls per leg.
+Non-empty text/thinking deltas consume bytes but no event slots, because the 16 KiB per-leg
+character caps already bound them; empty ones are not retained. Other empty fragments count;
+signatures, redacted blocks and opaque tool metadata consume bytes. Real
+tool arguments pass through without a retained copy and end replay retention for that leg.
+Reconstruction reserves space before joining or parsing admitted sources; raw and replay owners
+overlap until the replacement is admitted. Appended history remains charged through the guard's
+final exit. Accumulated usage has a separate retained owner across legs; replacement admits the
+new usage while raw terminal data and prior usage remain charged. An optional request translator
+budget receives separate local charges, never shared
+event/call leases or disposal. All exits, including iterator close, release only the guard's own
+charges. Refusals use content-free 502 `upstream_error` / `translation_buffer_limit` events.
+`tests/advisor/advisor-retention.test.ts` covers aggregate/count admission, representations,
+multi-call pairing, overlap and lifecycle release.
+
 ## Execution paths
 
 - Translated (non-passthrough, non-run-turn) fetch path: full support — synthetic tool injection,

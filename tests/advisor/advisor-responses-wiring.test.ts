@@ -11,6 +11,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { activateAdvisor } from "../../src/lib/advisor-activation";
+import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
+import type { TranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { collectSse } from "../helpers/responses-conformance";
@@ -145,6 +147,37 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    let sends = 0;
+    const seen: (TranslatorBudget | undefined)[] = [];
+    const workerFetch = (async () => {
+      const text = sends++ === 0 ? "" : "retry answer";
+      return stream ? sse(plainFrames(text)) : chatCompletion(text);
+    }) as typeof fetch;
+    const config = advisorConfig(undefined, workerFetch);
+    config.emptyCompletionRetry = true;
+    setAdvisorPlanFactory(config, async () => ({
+      tool: { name: "advisor", description: "fixture", parameters: {}, advisor: true },
+      preflightInject: async () => false,
+      attachGuard: parsed => {
+        parsed._advisorGuard = async function* (options) {
+          seen.push(options.translatorBudget);
+          yield* options.firstEvents;
+        };
+      },
+    }));
+    try {
+      const response = await handleResponses(workerRequest("budget wiring", undefined, stream), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(body).toContain("retry answer");
+      expect(sends).toBe(2);
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toBeDefined();
+      expect(seen[1]).toBe(seen[0]);
+    } finally { setAdvisorPlanFactory(config, null); }
+  });
+
   for (const delivery of ["buffered", "bridge", "direct"] as const) {
     for (const retry of [false, true]) for (const catalog of ["empty", "omitted", "partial"] as const) {
       for (const finalTool of [false, true]) {
