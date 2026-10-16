@@ -73,7 +73,7 @@ After a CLI catalog/cache write, advisory restart guidance compares each running
 start time with the written catalog mtime. It reports only processes proven stale; a fresh or
 unreadable observation does not claim that another restart is required. Explicit
 `--restart-codex` and `--restart-app-server-only` retain their operator-consent semantics and act on
-verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. The initial split Codex.app framework-path token pair is also rejected when only a process basename is available; later path arguments do not override a client match. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector.
+verified matching processes regardless of the advisory freshness result. Read-only client diagnostics in `src/codex/native-profile-processes.ts` prefer full executable paths over inferred argv0; macOS comm and args are read separately and joined by PID, so unquoted Codex Framework helper paths do not become CLI clients. The initial split Codex.app framework-path token pair is also rejected when only a process basename is available; later path arguments do not override a client match. Quoted immediate script entrypoints remain supported for known interpreters. This classification does not change the app-server termination selector. Complete Linux procfs observation in `src/codex/app-server-processes.ts` ignores only per-process `ENOENT` disappearance races. Other read failures invalidate that observation: raw enumeration throws and catalog diagnostics report unknown. Restart enumeration skips unreadable entries and retains independently verified targets; its same-user and app-server-only signal boundary is unchanged.
 
 > Decision record: [ADR-0097](decisions/ADR-0097-post-write-app-server-freshness.md)
 
@@ -165,7 +165,7 @@ their own files. `src/grok/inject.ts` holds the shared canonical config-write lo
 
 ## Lifecycle
 
-Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog). Guarded tests isolate the owner registry used by cross-home discovery beneath their selected home, including children without a registry override; production retains the shared locator. See [test state isolation](ops/test-sandbox-cleanup.md).
+Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog). Foreground exit cleanup in `src/cli/index.ts` delegates restoration through the existing sibling/recycle teardown gates; approved external URLs follow [custom-provider consent](codex-provider-routing.md), while unapproved provider configuration and history remain unchanged. Guarded tests isolate the owner registry used by cross-home discovery beneath their selected home, including children without a registry override; production retains the shared locator. See [test state isolation](ops/test-sandbox-cleanup.md).
 `src/server/background-lifecycle.ts` registers low-quota protection for each live server, flushes pending saves before releasing its owner, binds its own event ledger to management requests, and unregisters it on failed startup or stop; with no pending save, owner release remains synchronous. The protection writer loads config persistence only when a threshold schedules a save; see [configuration](config.md#codex-pool-low-quota-protection). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
 described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-contract).
 
@@ -305,14 +305,14 @@ Explicit `codex-shim install` (`src/cli/dispatch.ts`) refuses with nonzero exit;
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
-environment and persisted candidates remain report-only and cannot produce a managed classification in this one-shot command.
+POSIX selection is attested when the runtime resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest can then establish managed ownership; persisted candidates stay unattested.
 On Windows this first slice performs no candidate/configuration filesystem I/O: it preserves only proof-captured
 absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed. That
 fail-closed result records which observation was missing: a run with no proof-captured environment candidate reports
 `windows_inspection_deferred`, because persisted selection is never consulted there and the command cannot claim that
 no Codex CLI exists; a captured candidate whose path is not lexically eligible reports `candidate_path_unavailable`.
 POSIX keeps `candidate_unavailable` for an unobserved candidate.
-This check does not attest or admit a selected runtime. The command exposes no private mutation authority and does not query
+This check does not admit a runtime or authorize an install. The command exposes no private mutation authority and does not query
 a registry, execute Codex/npm, install, repair, stop, restart, or change configuration/cache state.
 
 The bridge enforces a heartbeat stall deadline. It defaults to 300 seconds sampled on a 2 s tick
@@ -366,7 +366,7 @@ Usage consumers preserve positive incomplete-history metadata as specified in
 as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
 their bounded cache.
 
-Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
+Connected `ocx usage` and `ocx usage compare` read `/v1/usage` through `src/client/hub-client.ts`, using the enrolled data key and checking connection/token ownership before and after each read. They report hub/client scope and never substitute local totals on failure. Standalone commands retain their management endpoint.
 
 The client usage read requires HTTPS or loopback HTTP before adding the enrolled credential, and sets request `cache: "no-store"`; the hub response also forbids caching.
 

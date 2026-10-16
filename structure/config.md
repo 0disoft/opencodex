@@ -19,7 +19,7 @@ Connected-client catalog diagnostics use the [terminal rendering contract](runti
 
 Hub management ingress also selects the [local dashboard address](runtime.md#hub-management-dashboard-address) using its configured port.
 
-Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output).
+Native main reauthentication follows the [CLI JSON output contract](runtime.md#native-main-reauth-json-output). Provider-ID consent and URL-only recovery follow the [custom routing contract](codex-provider-routing.md).
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
@@ -126,7 +126,7 @@ The former `showCodexSparkQuota` key is inert passthrough data when loading an o
 
 ## Config injection
 
-An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
+Configuration injection exposes `configChanged` only after a successful configuration transaction, comparing admitted original bytes with final committed bytes including native feature reconciliation. Preflight, preserved external ownership, skipped writes and compensated failures never authorize a configuration-only restart. An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
 One further root key is conditional rather than part of either routing form. While the web-search
 sidecar is switched off (`webSearchSidecar.enabled: false`), the injection also owns Codex's own

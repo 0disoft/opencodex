@@ -127,6 +127,13 @@
       ]
     },
     {
+      "path": "codex-provider-routing.md",
+      "tier": 2,
+      "title": "Custom Codex Provider Routing",
+      "scope": "Explicit provider-ID routing consent, URL-only publication and recovery.",
+      "documents": ["src/codex/provider-routing.ts", "src/cli/codex-provider.ts"]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",
@@ -153,6 +160,16 @@
       "documents": [
         "src/messaging/",
         "src/cli/"
+      ]
+    },
+    {
+      "path": "codex-cli-update.md",
+      "tier": 2,
+      "title": "Codex CLI Update Plan",
+      "scope": "Read-only update planning, isolated npm environment, and complete process observation.",
+      "documents": [
+        "src/codex/cli-update-plan.ts",
+        "src/codex/app-server-processes.ts"
       ]
     },
     {
