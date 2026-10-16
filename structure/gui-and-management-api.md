@@ -369,7 +369,7 @@ to fully quit and reopen Desktop after selecting the picker profile.
 
 Provider writes must not round-trip masked API keys as real secrets. Dashboard actions that change
 model visibility or subagent selection should trigger catalog/cache sync behavior through the server
-path that owns it.
+path that owns it. Provider request-pacing settings expose independent provider and uniform key limits plus opt-in request-local round-robin selection. `GET /api/provider-request-pacing`, owned by `src/server/management/provider-key-pacing-routes.ts` and delegated from `src/server/management/provider-routes.ts`, returns key handles, starts, in-flight counts, queue counts, next spacing slots and known cooldowns, never credential values or internal bucket hashes. Saving these rules uses the existing requestPacing-only PATCH path.
 
 ### Fast selector rows setting
 
