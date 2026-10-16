@@ -575,7 +575,7 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
 | 도구 결과의 `tool_reference` | 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트로 보존합니다. 도구 선언을 추가하거나 번역 경로의 서버 측 지연 로딩을 활성화하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
-| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
+| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
