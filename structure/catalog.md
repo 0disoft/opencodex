@@ -295,7 +295,7 @@ a label edit refresh Codex output.
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
-opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map.
+opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map. `src/server/index/model-alias-id.ts` applies opt-in `preferModelAliasIds` to `/v1/models` only: short aliases are promoted only when a read-only route preview identifies the same upstream by `model-alias`; ambiguous or shadowed aliases and aliases with unparseable synthetic Fast siblings retain qualified IDs; Cursor Fast remaps also keep their advertised identity. Promoted rows keep their original ID in `native_id` and retain `alias_of`. Codex catalog gathering is unchanged. `src/cli/doctor.ts` includes retained `native_id` values in model-exposure checks.
 
 Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
 and convergence pass the same map to the observed-state merge. After native normalization and
