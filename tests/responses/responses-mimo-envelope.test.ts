@@ -14,6 +14,12 @@ describe("MiMo function-call history envelope", () => {
     expect(functionCallArgumentsFromText("call_mimo", text)).toEqual(expected);
   });
 
+  test("an escaped terminal quote remains inside the repaired string", () => {
+    const expected = { code: 'print("ready")"' };
+    const text = JSON.stringify(expected).slice(0, -2) + suffix;
+    expect(functionCallArgumentsFromText("call_escaped", text)).toEqual(expected);
+  });
+
   test("valid JSON preserves embedded tags and escaped quotes", () => {
     const expected = { code: `print("${suffix}")` };
     expect(functionCallArgumentsFromText("call_valid", JSON.stringify(expected))).toEqual(expected);
