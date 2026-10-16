@@ -27,6 +27,7 @@ import { repoRoot } from "../helpers/repo-root";
  */
 const CORE_OFF_CYCLE = [
   "src/config.ts",
+  "src/router.ts",
   "src/server/lifecycle.ts",
   "src/server/responses/core.ts",
   "src/server/management-api.ts",
