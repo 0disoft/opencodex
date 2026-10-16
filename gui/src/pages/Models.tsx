@@ -78,6 +78,7 @@ import {
   freeOnlyInForce,
   modelPricingKnown,
   REASONING_EFFORT_LEVELS,
+  routedModelOptions,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -89,8 +90,9 @@ import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../suba
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 import { ModelCatalogDelivery } from "./models-catalog-state";
-import { CustomModelsSummary, InfoHint, ModelsSettingsPanel } from "./models-settings-panel";
+import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
+import { useAutoReviewSettings } from "./use-auto-review-settings";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -328,6 +330,13 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setStatus(message);
     setFeedbackGen(g => g + 1);
   }, []);
+  const { data: autoReview, saving: autoReviewSaving, load: loadAutoReview, save: saveAutoReview } =
+    useAutoReviewSettings(apiBase, t, publishFeedback);
+  useEffect(() => {
+    if (catalogActive) return;
+    // A hidden mounted panel may still hold the previous server's reviewer settings.
+    void loadAutoReview();
+  }, [apiBase, catalogActive, loadAutoReview]);
   // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
   // the workspace below (the old inline Notice pushed the whole model grid down by its
   // height on every apply). The timer itself just clears the status again.
@@ -480,6 +489,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       shadowCall?.sourceModels,
     );
   }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
+
+  const autoReviewOptions = useMemo(
+    () => [{ value: "", label: "—" }, ...routedModelOptions(shadowModelOptions, models, autoReview?.model)],
+    [models, shadowModelOptions, autoReview?.model],
+  );
 
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
@@ -736,6 +750,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (!catalogActive) return;
     const timeout = window.setTimeout(() => {
       void loadShadowCall();
+      void loadAutoReview();
       void loadV2();
       // Preset previews belong to the same tab. Loaded once rather than polled: the rules are
       // shipped code and the catalog poll above already refreshes the rows they describe.
@@ -761,7 +776,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // gui/.oxlintrc.json (override) and gui/doctor.config.json (ignore.overrides). An in-file
     // react-doctor-disable comment was tried and removed - it changed nothing, and
     // react/react-compiler penalises a component for carrying suppressions at all.
-  }, [catalogActive, loadShadowCall, loadV2]);
+  }, [catalogActive, loadShadowCall, loadAutoReview, loadV2]);
 
   const groups = useMemo(
     () => buildProviderModelGroups(models, providers),
@@ -1971,27 +1986,31 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     <>
       <div className="models-control-top-row">
         {modelDiscovery && (
-          <div className="models-shadow-row row muted text-control">
-            <span className="models-shadow-label">{t("models.newPolicyGlobal")}</span>
+          <SettingsRow label={t("models.newPolicyGlobal")}>
             <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
-          </div>
+          </SettingsRow>
         )}
-        <div className="row">
+        <SettingsRow label={t("models.useDefaultAliasesGlobal")}>
           <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
-        </div>
-        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
+        </SettingsRow>
+        <SettingsRow label={t("models.shadowCallIntercept")} hint={<Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip>} busy={!shadowCall}>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
           <div className="models-shadow-model-slot">
             <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
           </div>
-        </div>
+        </SettingsRow>
+
+        <SettingsRow label={t("models.autoReviewOverride")} hint={<Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip>} busy={!autoReview}>
+          <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
+          <div className="models-shadow-model-slot">
+            <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => void saveAutoReview({ model: v })} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+          </div>
+        </SettingsRow>
 
         {(v2Loading || v2) && (
-          <div className="models-v2-mode-row row">
-            <span className="muted text-control">{t("models.v2Label")}</span>
+          <SettingsRow label={t("models.v2Label")}>
             <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
               {(["v1", "default", "v2"] as const).map(mode => (
                 <button
@@ -2019,25 +2038,22 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             >
               <IconInfo width={14} height={14} aria-hidden="true" />
             </button>
-          </div>
+          </SettingsRow>
         )}
         {v2 && v2.multiAgentMode === "v2" && (
-          <div className="models-v2-keep-native-row">
-            <div className="models-v2-keep-native">
-              <span className="models-v2-keep-native-label text-caption">{t("models.keepNativeOnV1")}</span>
-              <Switch
-                on={v2.keepNativeChatGptOnV1 === true}
-                onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
-                disabled={v2Busy}
-                label={t("models.keepNativeOnV1")}
-              />
-              <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
-                <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
-                  <IconInfo width={13} height={13} aria-hidden="true" />
-                </span>
-              </Tooltip>
-            </div>
-          </div>
+          <SettingsRow label={t("models.keepNativeOnV1")} muted={false} caption>
+            <Switch
+              on={v2.keepNativeChatGptOnV1 === true}
+              onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
+              disabled={v2Busy}
+              label={t("models.keepNativeOnV1")}
+            />
+            <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
+              <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
+                <IconInfo width={13} height={13} aria-hidden="true" />
+              </span>
+            </Tooltip>
+          </SettingsRow>
         )}
         {pendingSurface && (
           <SubagentSurfaceWarningModal
@@ -2569,6 +2585,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
         summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2ThreadsChildren, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
           shadowEnabled: shadowCall?.enabled === true, shadowModel: shadowCall?.model, windowOn: allCapped, windowValue: contextCapValue, newModelsOff: modelDiscovery?.policy === "off", aliasesOn: aliases.defaults.global,
+          autoReviewEnabled: autoReview?.enabled === true, autoReviewModel: autoReview?.model,
           pickerMode: modelPickerOrderMode(pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode) })}>
         {controlsBlock}
       </ModelsSettingsPanel>
