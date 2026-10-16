@@ -1,3 +1,4 @@
+import { sameHomeRestartIo, absentHomeRestartIo } from "../helpers/update-home-fixtures";
 /**
  * Dashboard update worker: manager-first recovery after a failed service refresh (#7043), the
  * src/update/job.ts port of what #7074 did for `ocx update`. Every manager call is injected.
@@ -40,6 +41,7 @@ describe("restartServiceManagerAfterUpdate", () => {
   function deps(over: ManagerRestartDeps = {}): ManagerRestartDeps {
     let now = 0;
     return {
+      serviceHomeAuthorityFn: () => ({ kind: "same" }),
       hasManager: () => true,
       restartJob: () => ({ ok: true }),
       managerPid: () => 50,
@@ -118,6 +120,7 @@ describe("restartServiceManagerAfterUpdate", () => {
 describe("dashboard restart after a failed service refresh", () => {
   function managedIo(manager: "supervised" | "failed" | "unsettled", spawned: { count: number }): RestartIo {
     return {
+      ...sameHomeRestartIo,
       serviceInstalledFn: () => true,
       serviceViableFn: () => false,
       listListenPidsFn: () => [],
@@ -176,6 +179,7 @@ describe("dashboard restart after a failed service refresh", () => {
     const spawned = { count: 0 };
     const result = await restartAfterUpdateForTests(job, { port: 19103, hostname: "127.0.0.1" }, {
       ...managedIo("failed", spawned),
+      ...absentHomeRestartIo,
       serviceInstalledFn: () => false,
       restartServiceManagerFn: async () => { managerCalls++; return "failed"; },
     });
