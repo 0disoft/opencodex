@@ -8,6 +8,7 @@
  */
 import type { OcxProviderConfig } from "../types";
 import { providerUsesKeyAuthOverride, resolveProviderApiKey } from "./key-store";
+import { GCP_CREDENTIAL_MARKER_PREFIX } from "../lib/gcp-adc";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
@@ -98,6 +99,12 @@ function warnIfBaseUrlDiscarded(providerName: string, userBaseUrl: string, effec
 }
 
 function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
+  // A `gcp-sa:` marker must pass through UNCHANGED: it resolves to `undefined` here (it is not a
+  // keychain/env ref, and the marker itself is not a literal), and replacing it would silently
+  // drop the marker from the routed config — the vertex adapter would then read
+  // `gcpCredentialMarkerAccount(undefined)` and fall back to host ADC instead of the configured
+  // service account. Return the marker verbatim so the adapter passes its account per request.
+  if (typeof apiKey === "string" && apiKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return apiKey;
   const resolved = resolveProviderApiKey(apiKey);
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }
