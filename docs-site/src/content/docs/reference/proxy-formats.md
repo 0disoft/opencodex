@@ -878,3 +878,10 @@ An ordinary 400 and a 429 are never retried this way, and neither is a 5xx, with
 exception: a 502 whose body is the exact encrypted tool-output decrypt rejection, sent for a request
 that carries encrypted tool output, gets the same single resend. A second rejection reaches the
 client unchanged. If that happens, start a new conversation on the destination provider.
+
+### Malformed tool-call history
+
+Routed requests tolerate malformed serialized function arguments as an empty object.
+Two bounded history repairs preserve usable arguments: a missing JSON object prefix,
+and MiMo's trailing `</function></tool_call>` envelope with a missing closing quote or brace.
+A repair must decode to a JSON object. Valid JSON values containing those tags are preserved.

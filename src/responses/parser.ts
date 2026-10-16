@@ -77,34 +77,26 @@ function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undef
  */
 function repairMimoToolCallEnvelope(text: string): Record<string, unknown> | undefined {
   const suffix = "</function></tool_call>";
-  if (!text.includes(suffix)) return undefined;
-  const stripped = text.replace(/\s*<\/function><\/tool_call>\s*$/u, "").trimEnd();
+  if (!text.endsWith(suffix)) return undefined;
+  const stripped = text.slice(0, -suffix.length);
   if (!stripped.startsWith("{")) return undefined;
-  // The observed corruption replaces the JSON string's closing quote and the
-  // object's closing brace with the tags. Restore what is missing: an object
-  // that already closes keeps nothing, a closed string value needs only `}`,
-  // and an unterminated string value needs `"}`.
-  let candidate: string;
-  if (stripped.endsWith("}")) {
-    candidate = stripped;
-  } else if (stripped.endsWith('"')) {
-    candidate = `${stripped}}`;
-  } else {
-    candidate = `${stripped}"}`;
-  }
-  try {
-    const parsed: unknown = JSON.parse(candidate);
-    if (isObj(parsed)) return parsed;
-  } catch {
-    /* fall through to the tolerated-{} path */
+  // A trailing brace or quote can itself belong to the unterminated string.
+  // Try only the three observed envelope endings, accepting an object parse.
+  for (const candidate of [stripped, `${stripped}}`, `${stripped}"}`]) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (isObj(parsed)) return parsed;
+    } catch {
+      /* try the next bounded envelope ending */
+    }
   }
   return undefined;
 }
 
 /**
  * Decode a function call's serialized arguments the way history replay tolerates them: empty
- * or non-JSON text becomes `{}` instead of failing every later turn, and the one bounded
- * lost-brace corruption above is repaired. Shared with the direct Chat decoder
+ * or non-JSON text becomes `{}` instead of failing every later turn, and the bounded
+ * lost-brace and MiMo closing-tag corruptions above are repaired. Shared with the direct Chat decoder
  * (`src/protocols/codecs/chat-ir.ts`) so both decode the same call to the same object.
  */
 export function functionCallArgumentsFromText(callId: string, rawArguments: string | undefined): Record<string, unknown> {
@@ -129,10 +121,7 @@ export function functionCallArgumentsFromText(callId: string, rawArguments: stri
       // routed model can still see and retry, instead of replaying {} forever.
       const repaired = repairJsonObjectEnvelope(rawArgs);
       if (repaired === undefined) {
-        console.warn(
-          `[parser] function_call ${callId} has non-JSON arguments; defaulting to {}. ` +
-          `len=${rawArgs.length} head=${JSON.stringify(rawArgs.slice(0, 200))} tail=${JSON.stringify(rawArgs.slice(-100))}`
-        );
+        console.warn(`[parser] function_call ${callId} has non-JSON arguments; defaulting to {}`);
       } else {
         args = repaired;
         console.warn(`[parser] function_call ${callId} arguments lost the JSON opening brace; repaired from history`);
