@@ -1559,6 +1559,8 @@ export const de: Record<TKey, string> = {
   "integrations.tab.grok": "Grok Build",
   "integrations.tab.opencode": "OpenCode",
   "integrations.tab.pi": "Pi",
+  "integrations.tab.gentleShell": "Gentle Shell",
+  "integrations.semantics.gentleShell": "Gentle Shell neu starten, um den Katalog im gespeicherten Verzeichnis zu laden. Für Link-/gemeinsame Verzeichnisse die Pi-Integration verwenden.",
   "integrations.tab.omp": "OMP",
   "integrations.tab.hermes": "Hermes",
   "integrations.tab.openclaw": "OpenClaw",
