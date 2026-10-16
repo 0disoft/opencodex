@@ -306,6 +306,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setStatus(message);
     setFeedbackGen(g => g + 1);
   }, []);
+  // Reviewer override settings publish through the same toast channel.
   const { data: autoReview, saving: autoReviewSaving, load: loadAutoReview, save: saveAutoReview } =
     useAutoReviewSettings(apiBase, t, publishFeedback);
   useEffect(() => {
