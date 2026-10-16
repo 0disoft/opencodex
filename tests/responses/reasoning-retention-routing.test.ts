@@ -9,6 +9,8 @@ import { compactionRequest, completedPayload, drainCompactionResponseState,
   installCompactionRoutingAclFixture, jsonResponse, keyProviderConfig,
   removeCompactionFixture, sseResponse } from "../helpers/compaction-routing-fixtures";
 
+/** A path as it appears inside JSON text (Windows backslashes are escaped there). */
+const jsonText = (value: string) => JSON.stringify(value).slice(1, -1);
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
@@ -173,8 +175,8 @@ describe("retained reasoning public wire contracts", () => {
     expect(readFileSync(path, "utf-8")).toBe(original);
     expect(sent).not.toContain("large original reasoning");
     expect(sent).not.toContain("opaque-provider-secret");
-    expect(sent).toContain(path);
-    expect(JSON.stringify(body.output)).toContain(path);
+    expect(sent).toContain(jsonText(path));
+    expect(JSON.stringify(body.output)).toContain(jsonText(path));
     expect(JSON.stringify(body.output)).toContain("conclusions only");
     expect(JSON.stringify(body.output)).toContain("[reasoning retention notice]");
     expect(JSON.stringify(body.output)).not.toContain("large original reasoning");
@@ -193,7 +195,7 @@ describe("retained reasoning public wire contracts", () => {
       const archiveDir = join(home, "reasoning-archive");
       const previousFiles = readdirSync(archiveDir);
       expect(previousFiles).toHaveLength(1);
-      expect(summary).toContain(join(archiveDir, previousFiles[0]!));
+      expect(summary).toContain(jsonText(join(archiveDir, previousFiles[0]!)));
       // Repeated client attempts must not accumulate unreferenced files either.
       for (let attempt = 0; attempt < 2; attempt++) {
         const abort = new AbortController();
@@ -244,6 +246,6 @@ describe("retained reasoning public wire contracts", () => {
     expect(sentArchives[0]).toHaveLength(1);
     expect(sentArchives[1]).toEqual(sentArchives[0]);
     expect(readdirSync(archiveDir)).toEqual(successful ? sentArchives[0]! : []);
-    if (successful) expect(summary).toContain(join(archiveDir, sentArchives[0]![0]!));
+    if (successful) expect(summary).toContain(jsonText(join(archiveDir, sentArchives[0]![0]!)));
   });
 });
