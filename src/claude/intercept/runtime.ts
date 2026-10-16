@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { supportsDesktopPicker } from "../desktop-picker-platform";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
@@ -12,6 +13,7 @@ import { discardPickerCaKey } from "./picker-ca";
 import { preparePersistentPickerAuthority } from "./picker-ca-startup";
 import type { PickerCaStore } from "./picker-ca-store";
 import type { PickerRouteInput } from "./picker-models";
+import { CLAUDE_INTERCEPT_PORT_OFFSET, claudeInterceptEnabled, claudeInterceptProxyPort, claudePickerProxyPort } from "./port-policy";
 import { createPickerRuntime, pickerDesired, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
 import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "./proxy-auth";
@@ -28,7 +30,7 @@ import { buildClaudeInterceptEnv, migrateClaudeInterceptSettings } from "./setti
  * proxy. Desktop also hands that proxy to the Claude Code processes it spawns, so the choice is per
  * client: Claude Code (no User-Agent on CONNECT) trusts only the intercept CA and gets the
  * api.anthropic.com intercept and nothing else; the app itself (a browser User-Agent) trusts only
- * the login keychain and never meets the api.anthropic.com intercept, and only its claude.ai
+ * the OS root store and never meets the api.anthropic.com intercept, and only its claude.ai
  * tunnels may be terminated by the picker runtime (src/claude/intercept/picker-runtime.ts).
  */
 
@@ -41,25 +43,7 @@ const PICKER_AUTHORITY_ERROR_CODES = new Set([
   "picker_ca_unsupported_platform",
 ]);
 
-export const CLAUDE_INTERCEPT_PORT_OFFSET = 100;
-
-export function claudeInterceptEnabled(config: Pick<OcxConfig, "claudeCode" | "runtimeRole">): boolean {
-  if (config.runtimeRole === "client") return false;
-  if (config.claudeCode?.enabled === false) return false;
-  return config.claudeCode?.intercept?.enabled !== false;
-}
-
-export function claudeInterceptProxyPort(config: Pick<OcxConfig, "claudeCode">, publicPort: number): number {
-  const configured = config.claudeCode?.intercept?.port;
-  if (typeof configured === "number" && Number.isInteger(configured) && configured >= 1 && configured <= 65535) return configured;
-  return publicPort + CLAUDE_INTERCEPT_PORT_OFFSET;
-}
-
-/** Desktop's egress proxy for picker mode: the port after the intercept proxy (before it at 65535). */
-export function claudePickerProxyPort(config: Pick<OcxConfig, "claudeCode">, publicPort: number): number {
-  const interceptPort = claudeInterceptProxyPort(config, publicPort);
-  return interceptPort < 65535 ? interceptPort + 1 : interceptPort - 1;
-}
+export { CLAUDE_INTERCEPT_PORT_OFFSET, claudeInterceptEnabled, claudeInterceptProxyPort, claudePickerProxyPort } from "./port-policy";
 
 export type ClaudeInterceptOutcome = { ok: true; state: ClaudeInterceptState } | { ok: false; reason: "disabled" | "client_role" | "ephemeral_port" | "port_in_use" | "stopped" | "failed"; port?: number; message?: string };
 
@@ -144,7 +128,7 @@ export interface StartClaudeInterceptOptions<T> {
   createPicker?: (options: CreatePickerRuntimeOptions) => PickerRuntime;
   /** Test seam: bind real CONNECT handlers on kernel-assigned ports without probe-and-release races. */
   startProxy?: typeof startConnectProxy;
-  /** Test seams: the macOS `security` runner and platform for the picker runtime and controller. */
+  /** Test seams: the platform trust runner and platform for the picker runtime and controller. */
   pickerCaStore?: PickerCaStore;
   pickerSecurity?: SecurityRunner;
   pickerPlatform?: NodeJS.Platform;
@@ -167,18 +151,6 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const startProxy = options.startProxy ?? startConnectProxy;
   const authToken = ensureClaudeInterceptProxyToken(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
-  // Refresh an env we already own (e.g. a pre-auth proxy URL left by an upgrade) before the
-  // authenticated proxy takes over the port — a plain `ocx start` after an update would
-  // otherwise 407 every CONNECT until the next `ocx ensure` or apply. Only `stale` state is
-  // rewritten, so installs that never applied first-party are untouched.
-  try {
-    const proxyPort = claudeInterceptProxyPort(options.config, options.publicPort);
-    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxyPort, claudeInterceptCaCertPath(configDir), authToken));
-  } catch (error) {
-    // A skipped rewrite degrades to the pre-migration behaviour and ensure/apply retries it,
-    // but silence here leaves upgraded clients hitting 407 with no recorded cause.
-    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
-  }
   const listener = startClaudeInterceptListener<T>({
     leaf,
     dispatch: options.dispatch,
@@ -203,6 +175,15 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
     await listener.stop(true);
     throw new ClaudeInterceptProxyBindError(error, claudeInterceptProxyPort(options.config, options.publicPort));
   }
+  // Publish only a successfully bound endpoint, using the handle's actual port. A failed
+  // fixed-port bind leaves settings untouched; an ephemeral test binder never publishes :0
+  // or a probed port another process can steal. Only stale, owned env blocks are rewritten.
+  try {
+    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxy.port, claudeInterceptCaCertPath(configDir), authToken));
+  } catch (error) {
+    // Ensure/apply retries a skipped migration; upgraded clients otherwise keep hitting 407.
+    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
   // Widened on purpose: assignments happen in nested awaits the catch below must still see.
   let picker = null as PickerRuntime | null;
   let pickerProxy = null as ConnectProxyHandle | null;
@@ -211,7 +192,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   let pickerReason: ClaudeInterceptState["pickerReason"] = null;
   let pickerFailurePort: number | undefined;
   try {
-    if (options.loadPickerRoutes && (options.pickerPlatform ?? process.platform) === "darwin") {
+    if (options.loadPickerRoutes && supportsDesktopPicker(options.pickerPlatform ?? process.platform)) {
       // Remove any legacy plaintext key before inspecting or activating picker state.
       discardPickerCaKey(configDir);
       const { inspectDesktopPickerProfile } = await import("../desktop-picker-profile");
@@ -225,11 +206,15 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       });
       const pickerProfileApplied = pickerProfile.kind === "applied";
       let pickerBlocked = false;
+      let pickerWired = false;
       try {
         const { observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../desktop-first-party");
         const fresh = options.config;
         const platform = options.pickerPlatform ?? process.platform;
-        if (pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform)) {
+        const pickerRequired = pickerProfileApplied || pickerDesired(fresh, resolveClaudeDesktopMode(fresh, observeClaudeDesktopMode(fresh)), platform);
+        // Preserve macOS's dormant wiring; Windows binds only for intent or selected-profile recovery.
+        pickerWired = platform !== "win32" || pickerRequired;
+        if (pickerRequired) {
           await preparePersistentPickerAuthority({ configDir, store: options.pickerCaStore, security: options.pickerSecurity, platform });
         }
       } catch (error) {
@@ -260,7 +245,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
           }
         }
       }
-      picker = pickerBlocked ? null : (options.createPicker ?? createPickerRuntime)({
+      picker = pickerBlocked || !pickerWired ? null : (options.createPicker ?? createPickerRuntime)({
         config: options.config,
         configDir,
         persistentAuthority: { store: options.pickerCaStore },
