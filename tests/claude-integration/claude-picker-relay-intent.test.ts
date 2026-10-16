@@ -119,7 +119,9 @@ test("Windows with picker intent on binds the picker relay", async () => {
   await expectRelayBound();
 });
 
-test("Windows selected profile retains blind recovery with picker and Desktop intent off", async () => {
+// Applying the fixture takes the real lifecycle lock and hardens files with Windows
+// identity/ACL subprocesses. Match the existing picker restart tests' native-I/O budget.
+test("Windows selected profile retains blind recovery with picker and Desktop intent off", { timeout: 30_000 }, async () => {
   config.claudeCode!.intercept!.picker = false;
   config.clientIntegrations = { "claude-desktop": false };
   const library = join(root, "desktop");
@@ -128,7 +130,7 @@ test("Windows selected profile retains blind recovery with picker and Desktop in
     appliedId: "personal", entries: [{ id: "personal", name: "Personal" }],
   }));
   writeFileSync(join(library, "personal.json"), "{}\n");
-  expect(applyDesktopPickerProfile({ configDir: root, platform: "win32", proxyPort: 32123 }).ok).toBe(true);
+  expect(applyDesktopPickerProfile({ configDir: root, platform: "win32", proxyPort: 32123 })).toMatchObject({ ok: true });
   const selected = inspectDesktopPickerProfile({ configDir: root, platform: "win32" });
   expect(selected.kind).toBe("applied");
   const statePath = join(root, "claude-picker", "profile-state.json");
