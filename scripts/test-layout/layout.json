@@ -856,6 +856,8 @@
     "deepseek-responses-item-id-repair.test.ts": "providers",
     "management-desktop-compatibility-routes.test.ts": "server", "management-desktop-compatibility-runtime-routes.test.ts": "server", "server-desktop-compatibility-startup.test.ts": "server", "management-desktop-compatibility-settings.test.ts": "server",
     "optional-desktop-upstream.test.ts": "lib",
+    "opaque-proxy-tunnel.test.ts": "lib",
+    "opaque-proxy-tunnel-protocol.test.ts": "lib",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter-reset-wait.test.ts": "providers",
     "devin-adapter.test.ts": "providers",
