@@ -328,15 +328,15 @@ describe("Zed Hosted AI provider", () => {
 });
 
 describe("Zed OpenAI tool selection after filtering", () => {
-  const custom = { type: "custom", name: "synthetic_custom", format: { type: "text" } };
+  const custom = { type: "custom", name: "apply_patch", format: { type: "text" } };
   const web = { type: "web_search" };
   for (const [name, tools, choice, expectedTools, expectedChoice] of [
     ["custom is preserved", [custom, web], "required", [custom], "required"],
     ["all removed with auto", [web], "auto", [], "auto"],
     ["all removed with required", [web], "required", [], "none"],
     ["removed named built-in", [web], { type: "web_search" }, [], "none"],
-    ["mixed allowed tools", [custom, web], { type: "allowed_tools", mode: "auto", tools: [web, { type: "custom", name: "synthetic_custom" }] },
-      [custom], { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "synthetic_custom" }] }],
+    ["mixed allowed tools", [custom, web], { type: "allowed_tools", mode: "auto", tools: [web, { type: "custom", name: "apply_patch" }] },
+      [custom], { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "apply_patch" }] }],
     ["all allowed tools removed", [web], { type: "allowed_tools", mode: "auto", tools: [web] }, [], "none"],
   ] as const) test(name, async () => {
     const catalog = [jsonResponse({ default_organization_id: "org-1" }),
