@@ -337,6 +337,7 @@ export const providerConfigSchema = z.object({
   preserveResponsesReasoningContent: z.boolean().optional(),
   preserveResponsesInputItemIds: z.boolean().optional(),
   preserveResponsesMessageMetadata: z.boolean().optional(),
+  projectResponsesLiteHostedSearchHistory: z.boolean().optional(),
   dropResponsesReasoningItems: z.boolean().optional(),
   modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),

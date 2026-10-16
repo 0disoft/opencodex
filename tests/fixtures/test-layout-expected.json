@@ -1,4 +1,5 @@
 {
+<<<<<<< HEAD
   "gcp-credential-boundary.test.ts": "adapters/google", "gcp-sa-marker.test.ts": "adapters/google", "gcp-sa-adapter.test.ts": "adapters/google", "management-gcp-credential-input.test.ts": "server",
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
@@ -6,6 +7,10 @@
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",
   "explicit-empty-tool-catalog-history.test.ts": "responses",
+||||||| 7640a942b3
+=======
+ "openai-native-hosted-search-history.test.ts": "adapters/openai", "responses-native-compact-search-history.test.ts": "responses", "config-hosted-search-projection.test.ts": "config",
+>>>>>>> a4f8a347ae361e615db76b045ec5db39fb867045
   "codex-history-pending-wal.test.ts": "codex-integration",
   "compaction-history-framing.test.ts": "responses",
   "service-log.test.ts": "service",

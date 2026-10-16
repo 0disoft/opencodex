@@ -25,7 +25,7 @@ Selection and persistence semantics: [Anthropic account pause](providers/anthrop
 The provider management API validates `modelContextTiers` as a strict per-model map,
 merges PATCH entries, and preserves omitted entries on full provider saves. POST re-reads
 the live tier map after destination validation under the config mutation lock, so a concurrent
-PATCH clear is not restored. The CLI uses that API for GitHub Copilot tier edits. The dashboard has no tier control yet.
+PATCH clear is not restored. The CLI uses that API for GitHub Copilot tier edits. The dashboard has no tier control yet. `src/server/auth-cors.ts` classifies `projectResponsesLiteHostedSearchHistory` as an editor-visible provider field and validates supplied values as strict booleans. Its canonical `openai` seed comparison treats this validated, default-off request-content setting as an operator overlay; it does not change canonical authentication or transport identity. The setting still obeys the exact-destination and explicit-Lite [hosted-search history boundary](providers-and-adapters.md#hosted-search-continuation-binding).
 
 Automatic activation retains its existing settings controls; dashboard quota queries remain independent. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract).
 

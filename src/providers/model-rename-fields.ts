@@ -32,6 +32,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   preserveResponsesReasoningContent: "none",
   preserveResponsesInputItemIds: "none",
   preserveResponsesMessageMetadata: "none",
+  projectResponsesLiteHostedSearchHistory: "none",
   modelReasoningEffortsAuthoritative: "none",
   dropResponsesReasoningItems: "none",
   decodesNativeCompactionBlobs: "none",

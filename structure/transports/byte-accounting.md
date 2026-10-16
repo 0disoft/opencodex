@@ -279,6 +279,7 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
 
+<<<<<<< HEAD
 Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
 reasoning and tool ids before concatenation and reserves the previous string during replacement.
 Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
@@ -290,3 +291,7 @@ thinking/signature buffer before concatenation, replaces signatures rather than 
 releases reservations on completion, overflow and cancellation. Buffered response transformation
 charges each replacement event while its source batch remains retained; the bridge then owns
 the signed envelope and visible commentary pair through its existing output accounting.
+||||||| 7640a942b3
+=======
+Explicitly selected canonical Codex Lite ordinary unreferenced history notes reuse `src/adapters/openai-responses/compaction-search-history.ts` and its 65,536-byte projection cap, included in final passthrough serialization accounting; original raw history and all non-hosted input remain untouched. The budget counts only actually projected cells; same-input referenced hosted cells do not consume the ordinary notes budget. Top-level and action sources share the existing per-field/list allowlists and total bound.
+>>>>>>> a4f8a347ae361e615db76b045ec5db39fb867045
