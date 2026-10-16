@@ -77,6 +77,7 @@
     "minimax-combo-image-input.test.ts": "providers",
     "web-search-forced-declaration.test.ts": "web-search",
   "usage-partly-measured-cost.test.ts": "usage",
+  "claude-gateway-output-cap.test.ts": "claude-integration",
   "claude-client-refusal-status.test.ts": "claude-integration",
   "claude-translated-cache-ttl.test.ts": "claude-integration",
   "claude-translated-server-tools.test.ts": "claude-integration",
