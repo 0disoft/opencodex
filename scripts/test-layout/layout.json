@@ -2,7 +2,7 @@
   "version": 1,
   "root": "tests",
   "explicitShards": ["layout-clients.json"],
-  "explicit": {
+  "explicit": { "responses-call-id-linkage.test.ts": "responses",
     "bridge-terminal-refusal.test.ts": "adapters",
     "loop-terminal-refusal.test.ts": "images",
     "web-search-terminal-refusal.test.ts": "web-search",
