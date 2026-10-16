@@ -37,10 +37,12 @@ test.each(cases)("a refused image_gen iteration stops and meters usage: %j", asy
   const adapter: ProviderAdapter = {
     name: "mock-refusal",
     buildRequest: async () => {
-      routedRequests++;
       return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
     },
-    fetchResponse: async () => new Response("ok", { status: path === "rotated" && routedRequests === 2 ? 429 : 200 }),
+    fetchResponse: async () => {
+      routedRequests++;
+      return new Response("ok", { status: path === "rotated" && routedRequests === 2 ? 429 : 200 });
+    },
     async *parseStream() {
       yield { type: "tool_call_start", id: "call_1", name: "image_gen" } satisfies AdapterEvent;
       // Missing prompt gives the prior round a local tool error without sending a media request.
