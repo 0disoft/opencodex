@@ -3,13 +3,14 @@ import { sameHomeRestartIo, absentHomeRestartIo } from "../helpers/update-home-f
  * Dashboard update worker: manager-first recovery after a failed service refresh (#7043), the
  * src/update/job.ts port of what #7074 did for `ocx update`. Every manager call is injected.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   finishGuiUpdateRestart, readUpdateJob, restartAfterUpdateForTests, updateJobPath, type RestartIo, type UpdateJobState,
 } from "../../src/update/job";
+import * as managerRestart from "../../src/update/job-supervised-restart";
 import { restartServiceManagerAfterUpdate, type ManagerRestartDeps } from "../../src/update/job-supervised-restart";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -118,6 +119,30 @@ describe("restartServiceManagerAfterUpdate", () => {
 });
 
 describe("dashboard restart after a failed service refresh", () => {
+  test("the same-home fallback fixture releases its lease without consulting the host manager", async () => {
+    const events: string[] = [];
+    expect(sameHomeRestartIo.restartServiceManagerFn).toBeFunction();
+    const outcome = await sameHomeRestartIo.restartServiceManagerFn!(
+      { port: 19100, hostname: "127.0.0.1", release: () => { events.push("release"); } },
+      line => events.push(line),
+    );
+    expect(outcome).toBe("failed");
+    expect(events).toEqual(["release"]);
+    const hostManager = spyOn(managerRestart, "restartServiceManagerAfterUpdate").mockImplementation(async () => {
+      throw new Error("fallback fixture reached the host manager");
+    });
+    try {
+      const spawned = { count: 0 };
+      const job = freshJob("fixture-manager-isolated");
+      const result = await restartAfterUpdateForTests(job, { port: 19100, hostname: "127.0.0.1" }, {
+        ...managedIo("failed", spawned), ...sameHomeRestartIo,
+      });
+      expect(result).toBe("unsupervised");
+      expect(spawned.count).toBe(1);
+      expect(hostManager).not.toHaveBeenCalled();
+    } finally { hostManager.mockRestore(); }
+  });
+
   function managedIo(manager: "supervised" | "failed" | "unsettled", spawned: { count: number }): RestartIo {
     return {
       ...sameHomeRestartIo,
