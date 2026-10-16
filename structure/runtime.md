@@ -139,7 +139,7 @@ there. Feature code is grouped by responsibility:
 | Group | Directories |
 | --- | --- |
 | Data plane | `src/adapters/`, `src/responses/`, `src/chat/`, `src/claude/`, `src/grok/`, `src/images/`, `src/vision/`, `src/web-search/` |
-| Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
+| Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/`. Browser/device grants share unchanged credential helpers in the type-only-dependent `src/oauth/chatgpt-shared.ts` leaf; `src/oauth/chatgpt.ts` retains their exports and the bounded token-request logic. Management dispatch imports `src/codex/auth-api/routes.ts` directly, without an auth-api handler re-export; OAuth cache invalidation imports `src/codex/catalog/routed-gather.ts` directly. |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/` (Worker policy fixtures synchronize after loading the initial policy; `src/storage/policy.ts` bounds the test barrier at 10 seconds), `src/usage/`, `src/update/` (compiled executables report standalone update guidance rather than a source checkout; [package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
