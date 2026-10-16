@@ -229,3 +229,29 @@ test("402 credit refusals from every pool account still cool the combo target", 
   expect(sentTokens).toHaveLength(2);
   expect(isComboTargetInCooldown("pooled", TARGET)).toBe(true);
 }, 20_000);
+
+test("a 402 consumed after re-login cannot cool the replacement credential in the same account slot", async () => {
+  const ids = await seed(2);
+  const replacement = { ...credential(2), accountId: credential(0).accountId };
+  let replaced = false;
+  const config = configFor(() => new Response(new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      // Zero buffering starts this only when recovery reads the physically bound response body.
+      await saveCredential("anthropic", replacement);
+      replaced = true;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: "error", error: {
+        type: "billing_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      } })));
+      controller.close();
+    },
+  }, { highWaterMark: 0 }), { status: 402, headers: { "content-type": "application/json" } }));
+
+  expect((await post(config)).status).toBe(402);
+  expect(replaced).toBe(true);
+  expect(sentTokens).toEqual([`Bearer ${credential(0).access}`]);
+  const current = getAccountSet("anthropic")!.accounts.find(account => account.id === ids[0]);
+  expect(current?.credential.access).toBe(replacement.access);
+  expect(getAnthropicAccountHealthSnapshot(ids[0]!)).toBeNull();
+  expect(getAnthropicAccountHealthSnapshot(ids[1]!)).toBeNull();
+}, 20_000);
