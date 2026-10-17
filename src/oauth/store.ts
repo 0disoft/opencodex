@@ -19,6 +19,7 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
@@ -355,17 +356,23 @@ export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
 }
 
+/** Load and normalize the OAuth auth store with hardened permissions, and hand the result to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
 function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return { store: {}, hadLegacy: false };
+  if (!existsSync(path)) { notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
+  let result: { store: AuthStore; hadLegacy: boolean };
   try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     backupInvalidConfig(path);
+    notifyAuthStoreLoaded({});
     return { store: {}, hadLegacy: false };
   }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  notifyAuthStoreLoaded(result.store);
+  return result;
 }
 
 export function loadAuthStore(): AuthStore {
@@ -404,6 +411,7 @@ export function peekAuthStore(): AuthStore {
   return snapshot.kind === "ready" ? snapshot.store : {};
 }
 
+/** Atomically write the auth store with owner-only permissions, then hand it to the opt-in decision-quota slot. */
 function persist(store: AuthStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
@@ -414,6 +422,7 @@ function persist(store: AuthStore): void {
   }
   hardenConfigDir();
   atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  notifyAuthStoreLoaded(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }

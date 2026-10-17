@@ -459,7 +459,8 @@
       "documents": [
         "src/combos/",
         "src/server/",
-        "src/usage/"
+        "src/usage/",
+        "src/lib/decision-quota-sink.ts"
       ]
     },
     {

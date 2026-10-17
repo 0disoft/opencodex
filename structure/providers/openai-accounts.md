@@ -586,6 +586,8 @@ expire at reset or six hours after detection. Main-card/settings DTOs and live C
 only window kind, previous/current percentage and observation time; the notice says possible usage
 outside opencodex because a long-running request can also explain the rise.
 
+**JEV advisory publication.** Codex account-store load/persist, native-main cache transitions and accepted quota producers feed [loaded advisory quota](jev-decision.md#loaded-advisory-quota) only through the opt-in slot `src/lib/decision-quota-sink.ts`, a no-op unless a live JEV combo enables signals; these owner-observed generations stay separate from display caches and serving-account selection, and Codex header/WHAM parsers keep an explicit invalid reset invalid without changing display, durable history or hard-policy parsing.
+
 ## Permanent refusal auto-pause
 
 The opt-in `providers.openai.accountAutoPause` observer in

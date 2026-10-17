@@ -462,6 +462,16 @@ than a promise that a route is eligible; explicit rollout opt-outs still apply.
 
 The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.
 
+## JEV advisory publication
+
+While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
+boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
+which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
+are separate from display caches and serving-account selection. Request decisions consume only
+loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+
 ## Permanent refusal auto-pause
 
 The separate `providers.<instance>.accountAutoPause` policy is default off. Physical

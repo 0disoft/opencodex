@@ -546,6 +546,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     pendingDistributedFailure = undefined;
     record?.();
   };
+  /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
@@ -661,7 +662,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
