@@ -51,8 +51,10 @@ test("a device resumes after a server restart, but not on another origin or brow
   const restarted = initializeManagementAuthState(config);
   const resumed = issueGuiSession(request("/opencodex-session", cookie, { "X-OpenCodex-Device-Proof": proof }, "GET"), config, restarted);
   expect(resumed?.token).toStartWith("ocx_session_");
-  expect(issueGuiSession(request("/", cookie, { "User-Agent": "another-device" }, "GET"), config, restarted)).toBeNull();
-  const other = new Request("https://other.example.test/", { headers: { Host: "other.example.test", Cookie: cookie, "User-Agent": "Safari-PWA-fixture" } });
+  // Valid cookie and proof: only the browser identity differs, so the User-Agent binding is what refuses.
+  expect(issueGuiSession(request("/opencodex-session", cookie, { "X-OpenCodex-Device-Proof": proof, "User-Agent": "another-device" }, "GET"), config, restarted)).toBeNull();
+  expect(issueGuiSession(request("/opencodex-session", cookie, { "X-OpenCodex-Device-Proof": proof }, "GET"), config, restarted)?.issuance).toBe("remembered-admin");
+  const other = new Request("https://other.example.test/opencodex-session", { headers: { Host: "other.example.test", Cookie: cookie, "User-Agent": "Safari-PWA-fixture", "X-OpenCodex-Device-Proof": proof } });
   expect(issueGuiSession(other, config, restarted)).toBeNull();
 });
 

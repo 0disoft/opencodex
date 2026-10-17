@@ -159,13 +159,20 @@ export default function App() {
 
   useEffect(() => {
     const unavailable = (event: Event) => {
-      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared") {
-        setSharedSessionReady(hasApiSession("shared"));
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared" && !hasApiSession("shared")) {
+        setSharedSessionReady(false);
+      }
+    };
+    // A change only ever reveals a session (Remember/Forget controls). Target discovery clears the
+    // session transiently, and dropping readiness there would cancel the requests that recover it.
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared" && hasApiSession("shared")) {
+        setSharedSessionReady(true);
       }
     };
     window.addEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
-    window.addEventListener(SESSION_CHANGED_EVENT, unavailable);
-    return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, unavailable); };
+    window.addEventListener(SESSION_CHANGED_EVENT, changed);
+    return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); };
   }, []);
 
   useEffect(() => {
