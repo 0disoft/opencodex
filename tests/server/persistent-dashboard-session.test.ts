@@ -34,26 +34,33 @@ test("remember exchanges the admin token for a device cookie and a server-issued
   const body = await response!.json();
   expect(body.session.token).toStartWith("ocx_session_");
   expect(body.session.issuance).toBe("remembered-admin");
+  expect(body.device.proof).toMatch(/^ocx_proof_[A-Za-z0-9_-]{43}$/);
+  expect(response!.headers.get("Cache-Control")).toBe("no-store");
+  expect(cookie).not.toContain(body.device.proof);
   const disk = readFileSync(join(home, "dashboard-sessions.json"), "utf8");
+  expect(disk).not.toContain(body.device.proof);
+  expect(Object.keys(JSON.parse(disk)[0]).sort()).toEqual(["credential", "digest", "expiresAt", "proof", "serverOrigin", "userAgent"]);
   expect(disk).not.toContain("ocx_admin_fixture");
   expect(disk).not.toContain(cookie.split(";")[0]!.split("=")[1]!);
 });
 
-test("a device resumes after a server restart, but not on another origin or browser", () => {
+test("a device resumes after a server restart, but not on another origin or browser", async () => {
   const { response } = login(); expect(response?.status).toBe(200);
   const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const proof = (await response!.json()).device.proof;
   const restarted = initializeManagementAuthState(config);
-  const resumed = issueGuiSession(request("/opencodex-session", cookie, {}, "GET"), config, restarted);
+  const resumed = issueGuiSession(request("/opencodex-session", cookie, { "X-OpenCodex-Device-Proof": proof }, "GET"), config, restarted);
   expect(resumed?.token).toStartWith("ocx_session_");
   expect(issueGuiSession(request("/", cookie, { "User-Agent": "another-device" }, "GET"), config, restarted)).toBeNull();
   const other = new Request("https://other.example.test/", { headers: { Host: "other.example.test", Cookie: cookie, "User-Agent": "Safari-PWA-fixture" } });
   expect(issueGuiSession(other, config, restarted)).toBeNull();
 });
 
-test("expiry is absolute and rotating the admin token invalidates persistent devices", () => {
+test("expiry is absolute and rotating the admin token invalidates persistent devices", async () => {
   const { response } = login(); expect(response?.status).toBe(200);
   const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
-  const req = request("/", cookie, {}, "GET");
+  const proof = (await response!.json()).device.proof;
+  const req = request("/", cookie, { "X-OpenCodex-Device-Proof": proof }, "GET");
   expect(issueGuiSession(req, config, initializeManagementAuthState(config), { trustedTailscaleIngress: false, now: Date.now() + 31 * 86400_000 })).toBeNull();
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_rotated";
   expect(issueGuiSession(req, config, initializeManagementAuthState(config))).toBeNull();
@@ -62,8 +69,9 @@ test("expiry is absolute and rotating the admin token invalidates persistent dev
 test("logout durably forgets this device and revokes all resumed sessions", async () => {
   const { state, response } = login(); expect(response?.status).toBe(200);
   const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
-  const resumed = issueGuiSession(request("/", cookie, {}, "GET"), config, state)!;
-  const session = (await response!.json()).session;
+  const body = await response!.json();
+  const resumed = issueGuiSession(request("/", cookie, { "X-OpenCodex-Device-Proof": body.device.proof }, "GET"), config, state)!;
+  const session = body.session;
   const req = request("/api/session/logout", cookie, { "X-OpenCodex-API-Key": session.token, "X-OpenCodex-GUI-Origin": origin, "X-OpenCodex-CSRF-Token": session.csrfToken });
   const result = handleSessionRoutes({ req, url: new URL(req.url), config, principal: "gui-session", sessionControl: createManagementSessionControl(state) } as ManagementContext);
   expect(result?.status).toBe(200); expect(result!.headers.get("set-cookie")).toContain("Max-Age=0");

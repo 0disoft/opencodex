@@ -7,7 +7,7 @@ export function handleSessionRoutes(ctx: ManagementContext): Response | null {
     try {
       const remembered = ctx.sessionControl?.rememberDevice?.(ctx.req, ctx.config);
       if (!remembered) return jsonResponse({ error: "Remember requires a direct HTTPS dashboard (or loopback) and matching Origin" }, 403, ctx.req, ctx.config);
-      const response = jsonResponse({ session: remembered.session }, 200, ctx.req, ctx.config);
+      const response = jsonResponse({ session: remembered.session, device: remembered.device }, 200, ctx.req, ctx.config);
       response.headers.set("Set-Cookie", remembered.cookie);
       response.headers.set("Cache-Control", "no-store");
       return response;
