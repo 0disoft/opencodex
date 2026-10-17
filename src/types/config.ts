@@ -1769,6 +1769,8 @@ export interface CodexLowQuotaProtectionConfig {
   actions: {
     pause: boolean;
     notify: boolean;
+    /** Opt-in: also hand each notice to this host's OS notifier (macOS, Linux). Requires notify. */
+    desktop?: boolean;
   };
   windows: {
     short: boolean;
