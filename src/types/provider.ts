@@ -1,4 +1,5 @@
 import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
+import type { AccountAutoPausePolicy, AccountPauseDetails } from "./account-auto-pause";
 import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
 /**
@@ -567,7 +568,9 @@ export interface OcxProviderConfig {
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare
    * `apiKey` seeds a one-entry pool on first management touch.
    */
-  apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number }>;
+  apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
+  /** Explicit opt-in permanent account refusal policy; default off. */
+  accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already
    * cooling. Deliberately NOT named like the OAuth `accountPoolStrategy`: an API key
