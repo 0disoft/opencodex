@@ -11,6 +11,8 @@ export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 export const SESSION_CHANGED_EVENT = "opencodex:session-changed";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+const DEVICE_PROOF_KEY = "opencodex.dashboard-device-proof";
+const DEVICE_PROOF_PATTERN = /^ocx_proof_[A-Za-z0-9_-]{43}$/;
 // Any guarded route answers 401 for a bad token; this one is a cheap config read. /api/settings
 // also resolves the Codex runtime and startup health, which made the token prompt hang.
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/combos";
@@ -192,6 +194,9 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
     if (!response.ok) return false;
     barrier.completed = true;
     if (runtimes.get(plane) === state && state.logoutBarrier === barrier) {
+      if (canRememberDashboardDevice(plane)) {
+        try { window.localStorage.removeItem(DEVICE_PROOF_KEY); } catch { /* storage may be disabled */ }
+      }
       updateSession(state, blankSession());
       state.promptCancelled = false;
     }
@@ -375,7 +380,14 @@ async function reBootstrapSessionToken(recovery: RecoveryAttempt, caller?: Abort
   const send = rawFetch;
   try {
     return await withFetchDeadline<RebootstrapResult>(deadlineMs, caller, async signal => {
-      const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", signal }, null);
+      const headers = new Headers();
+      if (canRememberDashboardDevice(plane) && new URL(state.target.bootstrapPath, window.location.href).origin === window.location.origin) {
+        try {
+          const proof = window.localStorage.getItem(DEVICE_PROOF_KEY);
+          if (proof && DEVICE_PROOF_PATTERN.test(proof)) headers.set("X-OpenCodex-Device-Proof", proof);
+        } catch { /* ordinary session bootstrap still works without browser storage */ }
+      }
+      const [input, init] = withAuth(plane, state.target.bootstrapPath, { cache: "no-store", redirect: "error", signal, headers }, null);
       const response = await send(input, init);
       if (signal.aborted || !isCurrentRecovery(recovery)) return { kind: "failed" };
       if (!response.ok) return response.status >= 400 && response.status < 500 ? { kind: "unavailable" } : { kind: "failed" };
@@ -412,6 +424,14 @@ async function verifyAdminToken(recovery: RecoveryAttempt, token: string, rememb
         const body = await response.json();
         if (signal.aborted || !isCurrentRecovery(recovery) || !storeSession(plane, body?.session?.token,
           body?.session?.csrfToken, body?.session?.browserOrigin, body?.session?.serverOrigin, recovery)) return "unavailable";
+        try {
+          const proof = body?.device?.proof;
+          if (typeof proof !== "string" || !DEVICE_PROOF_PATTERN.test(proof)) throw new Error("Invalid device proof");
+          window.localStorage.setItem(DEVICE_PROOF_KEY, proof);
+        } catch {
+          invalidateSession(state, recovery);
+          return "unavailable";
+        }
       }
       return "accepted";
     });
