@@ -68,6 +68,7 @@ export const RESPONSES_CORE_MODULES = [
   "antigravity-validation-refusal.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
