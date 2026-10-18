@@ -9,6 +9,8 @@ import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiT
 export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 /** Token identity changed; contains only the plane, never credential material. */
 export const SESSION_CHANGED_EVENT = "opencodex:session-changed";
+/** The remembered-device proof was stored or cleared; contains only the plane. */
+export const DEVICE_PROOF_CHANGED_EVENT = "opencodex:device-proof-changed";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
 const DEVICE_PROOF_KEY = "opencodex.dashboard-device-proof";
@@ -196,6 +198,7 @@ export async function logoutApiSession(plane: ApiPlane): Promise<boolean> {
     if (runtimes.get(plane) === state && state.logoutBarrier === barrier) {
       if (canRememberDashboardDevice(plane)) {
         try { window.localStorage.removeItem(DEVICE_PROOF_KEY); } catch { /* storage may be disabled */ }
+        reportSessionEvent(plane, DEVICE_PROOF_CHANGED_EVENT);
       }
       updateSession(state, blankSession());
       state.promptCancelled = false;
@@ -309,6 +312,13 @@ export function canRememberDashboardDevice(plane: ApiPlane): boolean {
   const target = runtime(plane).target;
   return target.transport !== "relay" && target.serverOrigin === window.location.origin
     && (window.location.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname));
+}
+
+/** Enrollment, not capability: the Forget control exists only once a proof is stored. */
+export function hasRememberedDashboardDevice(plane: ApiPlane): boolean {
+  if (!canRememberDashboardDevice(plane)) return false;
+  try { return DEVICE_PROOF_PATTERN.test(window.localStorage.getItem(DEVICE_PROOF_KEY) ?? ""); }
+  catch { return false; }
 }
 
 function targetAbsoluteBase(target: ApiTarget): URL {
@@ -428,6 +438,7 @@ async function verifyAdminToken(recovery: RecoveryAttempt, token: string, rememb
           const proof = body?.device?.proof;
           if (typeof proof !== "string" || !DEVICE_PROOF_PATTERN.test(proof)) throw new Error("Invalid device proof");
           window.localStorage.setItem(DEVICE_PROOF_KEY, proof);
+          reportSessionEvent(plane, DEVICE_PROOF_CHANGED_EVENT);
         } catch {
           invalidateSession(state, recovery);
           return "unavailable";

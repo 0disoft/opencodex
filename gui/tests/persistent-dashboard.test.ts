@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { promptForAdminToken } from "../src/admin-token-dialog";
-import { bootstrapApiSession, configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, setRebootstrapTimeoutForTests } from "../src/api";
+import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, resetApiAuthFetchForTests, setRebootstrapTimeoutForTests } from "../src/api";
 
 const PROOF_KEY = "opencodex.dashboard-device-proof";
 const PROOF = `ocx_proof_${"A".repeat(43)}`;
@@ -76,6 +76,28 @@ test("obsolete remembered bearer tokens are removed without reading or migrating
   expect(getter("opencodex.remembered-admin-token:https://server|same-origin")).toBeNull();
   expect(getter("opencodex.remembered-admin-token-decoy")).toBe("unrelated");
   expect(getter(PROOF_KEY)).toBe(PROOF);
+});
+
+test("Forget visibility follows stored proof enrollment and refreshes on the proof event", async () => {
+  const events: string[] = [];
+  window.addEventListener(DEVICE_PROOF_CHANGED_EVENT, event => events.push((event as CustomEvent<{ plane?: string }>).detail?.plane ?? ""));
+  installApiAuthFetch();
+  expect(hasRememberedDashboardDevice("shared")).toBe(false);
+  resetApiAuthFetchForTests(async (verify, allowed) => allowed && await verify("ocx_admin_fixture", true) === "accepted" ? "ocx_admin_fixture" : null);
+  window.fetch = (async (input, init) => {
+    const path = String(input);
+    if (path.endsWith("/api/session/remember")) return Response.json({ device: { proof: PROOF }, session: { token: "ocx_session_enrolled", csrfToken: "csrf", browserOrigin: window.location.origin, serverOrigin: window.location.origin } });
+    if (path.endsWith("/api/session/logout")) return Response.json({ ok: true });
+    if (path === "/api/config" && new Headers(init?.headers).get("X-OpenCodex-API-Key") === "ocx_session_enrolled") return Response.json({ ok: true });
+    return new Response(null, { status: 401 });
+  }) as typeof fetch;
+  installApiAuthFetch();
+  expect((await window.fetch("/api/config")).status).toBe(200);
+  expect(hasRememberedDashboardDevice("shared")).toBe(true);
+  expect(events).toEqual(["shared"]);
+  expect(await logoutApiSession("shared")).toBe(true);
+  expect(hasRememberedDashboardDevice("shared")).toBe(false);
+  expect(events).toEqual(["shared", "shared"]);
 });
 
 test("a hung Remember response body is aborted and cannot install a session", async () => {

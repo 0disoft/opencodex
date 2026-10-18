@@ -22,7 +22,7 @@ import { NAV_GROUPS, groupForPage, visibleGroupPages } from "./nav-groups";
 import { SectionSwitcher } from "./components/SectionSwitcher";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
-import { bootstrapApiSession, canRememberDashboardDevice, configureApiTargets, hasApiSession, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
+import { bootstrapApiSession, configureApiTargets, DEVICE_PROOF_CHANGED_EVENT, hasApiSession, hasRememberedDashboardDevice, installApiAuthFetch, logoutApiSession, SESSION_CHANGED_EVENT, SESSION_UNAVAILABLE_EVENT } from "./api";
 import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { validateRemoteLinkSession } from "./connect-pairing-transport";
@@ -172,7 +172,11 @@ export default function App() {
     };
     window.addEventListener(SESSION_UNAVAILABLE_EVENT, unavailable);
     window.addEventListener(SESSION_CHANGED_EVENT, changed);
-    return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); };
+    const proofChanged = (event: Event) => {
+      if ((event as CustomEvent<{ plane?: string }>).detail?.plane === "shared") setSharedSessionEpoch(epoch => epoch + 1);
+    };
+    window.addEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged);
+    return () => { window.removeEventListener(SESSION_UNAVAILABLE_EVENT, unavailable); window.removeEventListener(SESSION_CHANGED_EVENT, changed); window.removeEventListener(DEVICE_PROOF_CHANGED_EVENT, proofChanged); };
   }, []);
 
   useEffect(() => {
@@ -367,9 +371,9 @@ export default function App() {
     const loggedOut = await logoutApiSession("shared");
     setSessionLoggingOut(false);
     if (loggedOut) setSharedSessionReady(false);
-    else report(t(canRememberDashboardDevice("shared") ? "connection.forgetDeviceFailed" : "connection.sessionLogoutFailed"), "err");
+    else report(t(hasRememberedDashboardDevice("shared") ? "connection.forgetDeviceFailed" : "connection.sessionLogoutFailed"), "err");
   };
-  const deviceForgetAvailable = canRememberDashboardDevice("shared");
+  const deviceForgetAvailable = hasRememberedDashboardDevice("shared");
   const endSessionLabel = t(deviceForgetAvailable ? "connection.forgetDevice" : "connection.sessionLogout");
 
   /*

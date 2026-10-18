@@ -140,7 +140,10 @@ export function forgetGuiDevice(req: Request, config: OcxConfig, state: State): 
   const digest = deviceDigest(req, origin);
   if (digest) withConfigMutationLockSync(() => {
     const rows = readRecords();
-    const found = rows.find(row => row.digest === digest && matches(row, req, origin, state, Date.now()));
+    // User-Agent and expiry protect resumption, not deletion: a browser update between
+    // Remember and Forget must still remove the record Forget was reached through.
+    const found = rows.find(row => row.digest === digest && row.serverOrigin === origin
+      && row.credential === hash(state.token));
     if (found) atomicWriteFileNoFollowStreamed(storePath(), fd => writeFileSync(fd, JSON.stringify(rows.filter(row => row !== found))));
     for (const [token, session] of state.sessions) if (session.persistentDigest === digest) state.sessions.delete(token);
   });

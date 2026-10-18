@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { initializeManagementAuthState, createManagementSessionControl, issueGuiSession, requireManagementAuth } from "../../src/server/management-auth";
 import { handleSessionRoutes } from "../../src/server/management/session-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { remoteConfig } from "../helpers/management-auth-fixture";
+import { createTempHome, type TempHome } from "../helpers/temp-home";
 
-const previousHome = process.env.OPENCODEX_HOME;
-const previousToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-let home: string;
+let home: TempHome;
+let previousToken: string | undefined;
 const config = remoteConfig();
 const origin = "https://dashboard.example.test";
 function request(path = "/api/session/remember", cookie?: string, overrides: HeadersInit = {}, method = "POST") {
@@ -23,8 +22,10 @@ function login() {
     sessionControl: createManagementSessionControl(state) } as ManagementContext);
   return { state, response };
 }
-beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-persistent-dashboard-")); process.env.OPENCODEX_HOME = home; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_fixture"; });
-afterEach(() => { process.env.OPENCODEX_HOME = previousHome; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousToken; rmSync(home, { recursive: true, force: true }); });
+beforeEach(() => { home = createTempHome("ocx-persistent-dashboard-"); previousToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN; process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx_admin_fixture"; });
+// Assigning undefined to process.env stores the literal string "undefined" and poisons later
+// tests in this process; absence is restored by deleting the key (the fixture restores homes).
+afterEach(() => { if (previousToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousToken; home.remove(); });
 
 test("remember exchanges the admin token for a device cookie and a server-issued session", async () => {
   const { response } = login();
@@ -37,7 +38,7 @@ test("remember exchanges the admin token for a device cookie and a server-issued
   expect(body.device.proof).toMatch(/^ocx_proof_[A-Za-z0-9_-]{43}$/);
   expect(response!.headers.get("Cache-Control")).toBe("no-store");
   expect(cookie).not.toContain(body.device.proof);
-  const disk = readFileSync(join(home, "dashboard-sessions.json"), "utf8");
+  const disk = readFileSync(join(home.root, "dashboard-sessions.json"), "utf8");
   expect(disk).not.toContain(body.device.proof);
   expect(Object.keys(JSON.parse(disk)[0]).sort()).toEqual(["credential", "digest", "expiresAt", "proof", "serverOrigin", "userAgent"]);
   expect(disk).not.toContain("ocx_admin_fixture");
@@ -82,6 +83,24 @@ test("logout durably forgets this device and revokes all resumed sessions", asyn
   expect(requireManagementAuth(replay, state, config)?.status).toBe(401);
 });
 
+test("logout still removes the record after a browser User-Agent change", async () => {
+  const { state, response } = login(); expect(response?.status).toBe(200);
+  const cookie = response!.headers.get("set-cookie")!.split(";")[0]!;
+  const session = (await response!.json()).session;
+  const req = request("/api/session/logout", cookie, { "User-Agent": "Safari-PWA-upgraded",
+    "X-OpenCodex-API-Key": session.token, "X-OpenCodex-GUI-Origin": origin, "X-OpenCodex-CSRF-Token": session.csrfToken });
+  const result = handleSessionRoutes({ req, url: new URL(req.url), config, principal: "gui-session", sessionControl: createManagementSessionControl(state) } as ManagementContext);
+  expect(result?.status).toBe(200);
+  expect(JSON.parse(readFileSync(join(home.root, "dashboard-sessions.json"), "utf8"))).toEqual([]);
+  expect(issueGuiSession(request("/", cookie, {}, "GET"), config, initializeManagementAuthState(config))).toBeNull();
+});
+
+test("the surrounding test process keeps its environment after each round", () => {
+  // The fixture's beforeEach/afterEach pair runs around this test too, so a passing
+  // round here exercises restoration rather than asserting the helpers in isolation.
+  expect(existsSync(join(home.root, "dashboard-sessions.json"))).toBe(false);
+});
+
 test("remember rejects cross-origin, plaintext remote and unauthenticated issuance", () => {
   const state = initializeManagementAuthState(config); const control = createManagementSessionControl(state);
   for (const req of [request(undefined, undefined, { Origin: "https://attacker.test" }), new Request("http://dashboard.example.test/api/session/remember", { method: "POST", headers: { Host: "dashboard.example.test", Origin: "http://dashboard.example.test" } })]) {
@@ -106,8 +125,8 @@ test("the persistent cookie alone grants no management access, and a derived tok
 });
 
 test("an unreadable or malformed device store fails closed without issuing a cookie or overwriting it", () => {
-  writeFileSync(join(home, "dashboard-sessions.json"), "not-json", { mode: 0o600 });
+  writeFileSync(join(home.root, "dashboard-sessions.json"), "not-json", { mode: 0o600 });
   const { response } = login(); expect(response?.status).toBe(503);
   expect(response!.headers.get("set-cookie")).toBeNull();
-  expect(readFileSync(join(home, "dashboard-sessions.json"), "utf8")).toBe("not-json");
+  expect(readFileSync(join(home.root, "dashboard-sessions.json"), "utf8")).toBe("not-json");
 });
