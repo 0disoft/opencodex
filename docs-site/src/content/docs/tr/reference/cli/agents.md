@@ -200,8 +200,9 @@ garantisini atlar ve ortamı değiştirmeden geçirir — shim'in argv dilbilgis
 
 Başlatmadan önce yönlendirme değerlendirilir. Yazılmış yönlendirme yoksa bilgilendirme yazılır ve
 `codex` garanti olmadan başlatılır; yabancı bir ağ geçidi (custom-local/custom-remote) uyarı yazar
-ve o yola dokunmadan geçer; doğrulanamayan yönlendirme uyarı yazar ama garanti yine de gerçekleşir,
-böylece yönlendirilmiş bir oturum ölü bir porta kalmaz. Daha sonra düz `codex` başlatmak tam
+ve o yola dokunmadan geçer; doğrulanamayan yönlendirme uyarı yazar ama garanti yine de denenir.
+Deneme başarısız olursa stderr'e tek satır yazılır ve `codex` yine de başlatılır. `codex` otomatik
+başlatma shim'ine çözülürse, shim garantiyi tekrarlamasın diye arkasındaki Codex doğrudan başlatılır. Daha sonra düz `codex` başlatmak tam
 olarak eskisi gibi davranır.
 
 ### `ocx opencode [opencode argumanlari...]`

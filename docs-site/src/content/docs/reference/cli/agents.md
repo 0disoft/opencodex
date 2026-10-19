@@ -948,9 +948,10 @@ grammar.
 
 Routing is examined before exec: no injected routing prints an informational notice and launches
 `codex` with no ensure; a foreign gateway (custom-local/custom-remote) prints a warning and passes
-through without touching that route; unverifiable routing prints a warning and still ensures, so a
-routed session is not stranded on a dead port. Launching plain `codex` later behaves exactly as
-before.
+through without touching that route; unverifiable routing prints a warning and still attempts the ensure. If the ensure fails, one stderr
+line is printed and `codex` launches anyway. When `codex` resolves to the autostart shim, the
+launcher runs the backing Codex directly so the shim does not repeat the ensure. Launching plain
+`codex` later behaves exactly as before.
 
 ### `ocx opencode [opencode args...]`
 

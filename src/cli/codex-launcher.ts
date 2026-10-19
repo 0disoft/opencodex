@@ -9,8 +9,7 @@
  * file. What the launcher owns instead is the two add-ons `plain codex` lacks:
  *
  *  - launch-time autostart: the same detached `ocx start` + health poll that
- *    `ocx ensure` gives service- and shim-less setups, so a routed launch is never
- *    stranded on a dead proxy;
+ *    `ocx ensure` gives service- and shim-less setups, attempted before every routed launch;
  *  - an honest route verdict before exec: native and foreign-gateway configs are
  *    announced (and NOT ensured) instead of silently benefiting or fighting them,
  *    reusing the routing classification the shim and doctor share
@@ -25,12 +24,14 @@
 import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { getCodexRoutingKind, type CodexRoutingKind } from "../codex/inject";
+import { inspectCodexShimBackingForCommand } from "../codex/shim";
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS, CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC } from "../codex/shim-templates";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { commandInvocation } from "../lib/win-exec";
+import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 
 export interface CodexLaunchEnv {
@@ -84,8 +85,8 @@ export type CodexLaunchPlan =
  *
  *  - `opencodex-local` → ensure + exec (the config this launcher exists for);
  *  - `native` / `custom-*` → exec unchanged, no proxy side effects;
- *  - `unknown` (unreadable/ambiguous config) → name it out loud, still ensure,
- *    because a routed session that starts without its proxy falls back to the
+ *  - `unknown` (unreadable/ambiguous config) → name it out loud and still attempt
+ *    the ensure, because a routed session that starts without its proxy hits the
  *    configured URL's dead port and every request fails.
  */
 export function codexLaunchPlan(routingKind: CodexRoutingKind): CodexLaunchPlan {
@@ -189,10 +190,38 @@ export function codexNotFoundHint(
   return platform === "win32" && code === 9009 && !signal ? CODEX_INSTALL_HINT : null;
 }
 
+export type CodexLaunchCommandDeps = {
+  findOnPath?: (name: string) => string | null;
+  inspectShim?: typeof inspectCodexShimBackingForCommand;
+};
+
+export type CodexLaunchCommand = { command: string; env: CodexLaunchEnv };
+
+/**
+ * The launcher has already made the ensure decision, so the generated autostart shim
+ * must not make it again: on a passthrough plan it would start the proxy and load the
+ * admission token anyway. When `codex` resolves to a recorded shim wrapper, exec its
+ * backing Codex directly. When the shim state cannot be read (always on win32, where
+ * inspection is deferred), keep `codex` and set OCX_SHIM_BYPASS so at least the shim's
+ * ensure is skipped.
+ */
+export function resolveCodexLaunchCommand(
+  env: CodexLaunchEnv,
+  deps: CodexLaunchCommandDeps = {},
+): CodexLaunchCommand {
+  const selected = (deps.findOnPath ?? findExecutableOnPath)("codex");
+  if (!selected) return { command: "codex", env };
+  const shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected);
+  if (shim.status === "matched" && shim.selectedRole === "wrapper") return { command: shim.backingPath, env };
+  if (shim.status === "unknown") return { command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } };
+  return { command: "codex", env };
+}
+
 function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<number> {
   return new Promise<number>(resolve => {
-    const inv = commandInvocation("codex", args);
-    const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });
+    const launch = resolveCodexLaunchCommand(env);
+    const inv = commandInvocation(launch.command, args);
+    const child = spawn(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
         console.error(CODEX_INSTALL_HINT);

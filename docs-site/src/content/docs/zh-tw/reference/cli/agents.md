@@ -141,7 +141,8 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 ensure 並原樣傳遞環境，與 shim 的 argv 語法保持一致。
 
 執行前會先判定路由：沒有注入路由時輸出提示訊息，並不做 ensure 直接啟動 `codex`；外部閘道（custom-local/custom-remote）
-會輸出警告並原樣通過、不觸碰該路由；無法驗證的路由會輸出警告但仍執行 ensure，避免被路由的工作階段卡在失效連接埠上。
+會輸出警告並原樣通過、不觸碰該路由；無法驗證的路由會輸出警告但仍嘗試 ensure；ensure 失敗時會在 stderr 輸出一行，並仍然啟動 `codex`。
+當 `codex` 指向自動啟動 shim 時，啟動器會直接執行其背後的 Codex，避免 shim 重複 ensure。
 之後啟動普通 `codex` 的行為與之前完全相同。
 
 ### `ocx opencode [opencode args...]`

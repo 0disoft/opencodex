@@ -184,8 +184,10 @@ grammaire d'arguments du shim.
 Le routage est examiné avant exécution : sans routage injecté, un message informatif s'affiche et
 `codex` est lancé sans assurance du proxy ; une passerelle étrangère (custom-local/custom-remote)
 provoque un avertissement et un passage sans toucher à cette route ; un routage invérifiable
-provoque un avertissement tout en assurant quand même le proxy, pour qu'une session routée ne
-reste pas sur un port mort. Un lancement ultérieur de `codex` sans opencodex se comporte
+provoque un avertissement et tente quand même d'assurer le proxy. Si cette tentative échoue, une
+ligne s'affiche sur stderr et `codex` est lancé malgré tout. Lorsque `codex` correspond au shim de
+démarrage automatique, le lanceur exécute directement le Codex sous-jacent pour que le shim ne
+répète pas l'assurance. Un lancement ultérieur de `codex` sans opencodex se comporte
 exactement comme auparavant.
 
 ### `ocx opencode [opencode args...]`

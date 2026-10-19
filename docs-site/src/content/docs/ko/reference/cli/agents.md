@@ -173,7 +173,9 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 실행 전에 라우팅을 확인합니다. 주입된 라우팅이 없으면 안내 메시지를 출력하고 ensure 없이 `codex`를 실행하고,
 다른 로컬/원격 게이트웨이(custom-local/custom-remote)는 경고를 출력한 뒤 해당 경로를 건드리지 않고 전달하며,
-확인 불가능한 라우팅은 경고하더라도 ensure를 수행해 라우팅 세션이 죽은 포트에 남지 않게 합니다. 이후 plain
+확인 불가능한 라우팅은 경고를 출력하고 ensure를 시도합니다. ensure가 실패하면 stderr에 한 줄을 출력하고
+그래도 `codex`를 실행합니다. `codex`가 자동 시작 shim을 가리키면 shim이 ensure를 반복하지 않도록 그 뒤의 Codex를
+직접 실행합니다. 이후 plain
 `codex`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
 
 ### `ocx opencode [opencode args...]`

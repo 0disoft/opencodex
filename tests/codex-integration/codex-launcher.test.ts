@@ -24,6 +24,7 @@ import {
   codexNotFoundHint,
   codexProxyStartEnv,
   ensureProxyForCodex,
+  resolveCodexLaunchCommand,
 } from "../../src/cli/codex-launcher";
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS } from "../../src/codex/shim-templates";
 import { SIBLING_HANDOFF_NONCE_ENV, SIBLING_OF_PORT_ENV } from "../../src/codex/sibling-start";
@@ -95,7 +96,7 @@ describe("codex launcher plan", () => {
     });
   });
 
-  test("unverifiable routing still ensures so a routed session is not stranded on a dead port", () => {
+  test("unverifiable routing still attempts the proxy ensure", () => {
     expect(codexLaunchPlan("unknown")).toEqual({
       kind: "passthrough",
       ensureProxy: true,
@@ -183,5 +184,38 @@ describe("codex launcher not-found hints", () => {
     expect(codexNotFoundHint(127, null, "linux")).toBeNull();
     expect(codexNotFoundHint(1, "SIGINT", "win32")).toBeNull();
     expect(codexNotFoundHint(null, null, "linux")).toBeNull();
+  });
+});
+
+describe("codex launcher shim handoff", () => {
+  const env = { PATH: "/usr/bin" };
+  const onPath = () => "/home/test/.local/bin/codex";
+
+  test("a recorded autostart shim is skipped in favour of its backing Codex", () => {
+    const launch = resolveCodexLaunchCommand(env, {
+      findOnPath: onPath,
+      inspectShim: () => ({ status: "matched", selectedRole: "wrapper", backingPath: "/opt/codex/bin/codex.real", backingKind: "backup" }),
+    });
+    expect(launch).toEqual({ command: "/opt/codex/bin/codex.real", env });
+  });
+
+  test("an unreadable shim state keeps `codex` but bypasses the shim's ensure", () => {
+    const launch = resolveCodexLaunchCommand(env, {
+      findOnPath: onPath,
+      inspectShim: () => ({ status: "unknown", reason: "binding_unavailable" }),
+    });
+    expect(launch.command).toBe("codex");
+    expect(launch.env.OCX_SHIM_BYPASS).toBe("1");
+    expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
+  });
+
+  test("an untracked or backing codex launches unchanged", () => {
+    expect(resolveCodexLaunchCommand(env, { findOnPath: onPath, inspectShim: () => ({ status: "not-tracked" }) }))
+      .toEqual({ command: "codex", env });
+    expect(resolveCodexLaunchCommand(env, {
+      findOnPath: onPath,
+      inspectShim: () => ({ status: "matched", selectedRole: "backing", backingPath: "/home/test/.local/bin/codex", backingKind: "real" }),
+    })).toEqual({ command: "codex", env });
+    expect(resolveCodexLaunchCommand(env, { findOnPath: () => null })).toEqual({ command: "codex", env });
   });
 });
