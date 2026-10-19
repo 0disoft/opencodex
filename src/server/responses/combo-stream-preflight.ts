@@ -115,12 +115,14 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
     type?: unknown;
-    response?: { incomplete_details?: { reason?: unknown } };
+    response?: { incomplete_details?: { reason?: unknown }; output?: unknown };
   };
   if (bareErrorIsRetryable(event)) return true;
   if (event.type === "response.failed") return true;
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
+  // A terminal-only upstream can carry output without preceding delta/item events.
+  if (reason === undefined) return !Array.isArray(event.response?.output) || event.response.output.length === 0;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 
