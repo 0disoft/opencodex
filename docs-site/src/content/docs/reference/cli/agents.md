@@ -935,6 +935,23 @@ native-mode flags are rejected; failed runtime save has no local fallback. Apply
 is a separate existing Desktop action on its machine, so verify host/context
 before choosing it. Rendered models are not proof of native application.
 
+### `ocx codex [codex args...]`
+
+Ensure the proxy is running, then launch `codex` unchanged. Codex routing stays config-owned —
+the injected `openai_base_url` in `~/.codex/config.toml` — so a launch never rewrites a config
+file. A missing `OPENCODEX_API_AUTH_TOKEN` is filled from `~/.opencodex/service-api-token`,
+the same injection the Codex autostart shim performs.
+
+`--help`/`-h`, `--version`/`-V`, and Codex-internal subcommands (`login`, `doctor`, `exec`, ...)
+skip the proxy ensure and pass the environment through unchanged, matching the shim's argv
+grammar.
+
+Routing is examined before exec: no injected routing prints an informational notice and launches
+`codex` with no ensure; a foreign gateway (custom-local/custom-remote) prints a warning and passes
+through without touching that route; unverifiable routing prints a warning and still ensures, so a
+routed session is not stranded on a dead port. Launching plain `codex` later behaves exactly as
+before.
+
 ### `ocx opencode [opencode args...]`
 
 Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
