@@ -449,8 +449,9 @@ export interface OcxProviderConfig {
    */
   preserveResponsesMessageMetadata?: boolean;
   /**
-   * Opt in to lossy hosted-search history notes on ordinary canonical Codex Lite requests.
-   * Default off; only literal true enables it, and non-Lite/native compact stay unchanged.
+   * Opt in to lossy hosted-search history notes on canonical Codex Lite ordinary turns and
+   * native v2 compaction triggers, even when search is declared. Default off; only literal true
+   * enables it. History without a search declaration is always projected, independent of this.
    */
   projectResponsesLiteHostedSearchHistory?: boolean;
   /**
