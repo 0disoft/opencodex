@@ -26,9 +26,9 @@ test("desktop HTTP and WS choose explicit NO_PROXY, supported proxies, or a clos
   expect(() => desktopProxyFor(url, { HTTPS_PROXY: "http://127.0.0.1:4444/path" })).toThrow("proxy_invalid");
 });
 
-for (const kind of ["http", "https", "socks5", "socks5h"] as const) test(`verified TLS through authenticated ${kind} proxy preserves raw request and response`, async () => {
+for (const hostname of ["chatgpt.com", "ws.chatgpt.com"] as const) for (const kind of ["http", "https", "socks5", "socks5h"] as const) test(`verified ${hostname} TLS through authenticated ${kind} proxy preserves raw request and response`, async () => {
   const ca = createCertificateAuthority({ commonName: "egress-fixture", validityDays: 1 });
-  const leaf = issueServerLeaf(ca, "egress-fixture", ["chatgpt.com"]), proxyLeaf = issueServerLeaf(ca, "egress-fixture", ["localhost"]);
+  const leaf = issueServerLeaf(ca, "egress-fixture", [hostname]), proxyLeaf = issueServerLeaf(ca, "egress-fixture", ["localhost"]);
   let cookie: string | undefined, leaked: string | undefined;
   const upstream = createHttps({ cert: leaf.certPem, key: leaf.keyPem }, (req, res) => {
     cookie = req.headers.cookie; leaked = req.headers["proxy-authorization"] as string | undefined;
@@ -38,14 +38,14 @@ for (const kind of ["http", "https", "socks5", "socks5h"] as const) test(`verifi
   const origin = await listenFixture(upstream), proxy = await forwardProxy(transport, origin.port, proxyLeaf);
   let socket: Awaited<ReturnType<typeof dialDesktopUpstream>> | undefined;
   try {
-    socket = await dialDesktopUpstream({ proxy: proxy.url.replace(/^socks5:/, `${kind}:`), ca: ca.certPem, proxyCa: ca.certPem, target: { host: "chatgpt.com", port: 443 } });
+    socket = await dialDesktopUpstream({ host: hostname, proxy: proxy.url.replace(/^socks5:/, `${kind}:`), ca: ca.certPem, proxyCa: ca.certPem });
     assert.equal(socket.authorized, true);
     const response = new Promise<string>((resolve, reject) => {
       let text = ""; socket!.on("data", bytes => { text += bytes.toString(); }); socket!.once("end", () => resolve(text)); socket!.once("error", reject);
     });
-    socket.write("GET /fixture HTTP/1.1\r\nHost: chatgpt.com\r\nCookie: fixture=session\r\nConnection: close\r\n\r\n");
+    socket.write(`GET /fixture HTTP/1.1\r\nHost: ${hostname}\r\nCookie: fixture=session\r\nConnection: close\r\n\r\n`);
     expect(await response).toContain("fixture-response"); expect(cookie).toBe("fixture=session"); expect(leaked).toBeUndefined();
-    expect(proxy.seen).toHaveLength(1); expect(proxy.seen[0]!.authority).toBe("chatgpt.com:443");
+    expect(proxy.seen).toHaveLength(1); expect(proxy.seen[0]!.authority).toBe(`${hostname}:443`);
     expect(proxy.seen[0]!.auth).toBe(transport === "socks5" ? "fixture:secret" : "Basic " + Buffer.from("fixture:secret").toString("base64"));
   } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
 }, 15000);
@@ -63,6 +63,15 @@ for (const kind of ["http", "https", "socks5"] as const) test(`${kind} fixture p
     expect(socket.authorized).toBe(true);
   } finally { socket?.destroy(); await proxy.close(); await origin.close(); }
 }, 10000);
+
+test("desktop host selection is closed and NO_PROXY is evaluated against the selected host", async () => {
+  for (const host of ["localhost", "chatgpt.com:444", "chatgpt.com.evil", "ws.chatgpt.com."]) {
+    await expect(dialDesktopUpstream({ host: host as "chatgpt.com", proxy: false })).rejects.toThrow("desktop_upstream_connection_failed");
+  }
+  const env = { HTTPS_PROXY: "http://127.0.0.1:4444", NO_PROXY: "ws.chatgpt.com" };
+  expect(desktopProxyFor(new URL("https://ws.chatgpt.com"), env)).toBe(false);
+  expect(desktopProxyFor(new URL("https://chatgpt.com"), env)).toBe("http://127.0.0.1:4444");
+});
 
 for (const kind of ["http", "https", "socks5", "http-all", "https-all"] as const) test(`desktop HTTP fetch uses the same authenticated ${kind} egress and validates upstream TLS`, async () => {
   const ca = createCertificateAuthority({ commonName: "fetch-egress-fixture", validityDays: 1 });

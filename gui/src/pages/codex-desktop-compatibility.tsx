@@ -9,6 +9,7 @@ import DesktopCompatibilityStartupSetting from "./desktop-compatibility-startup-
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
 const errorLabel = { build_unverified: "desktopCompat.blockedByBuild", egress_proxy_invalid: "desktopCompat.blockedByProxy",
+  activation_lifetime_unsupported: "desktopCompat.sessionUnavailable", invalid_lifetime: "desktopCompat.sessionUnavailable",
   renewal_required: "desktopCompat.renew",
   native_routing_unverified: "desktopCompat.routingChanged",
   connection_unavailable: "desktopCompat.connectionUnavailable", connection_invalid: "desktopCompat.connectionUnavailable", connection_changed: "desktopCompat.connectionUnavailable",
@@ -24,6 +25,8 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   const certificate = useClientResource(certificateKey, signal => readCompatibilityCertificate(apiBase, signal), { enabled: active, deadlineMs: 15000, staleAfterMs: 0 });
   const runtime = useClientResource(runtimeKey, signal => readCompatibilityRuntime(apiBase, signal), { enabled: active, deadlineMs: 10000, staleAfterMs: 0, pollMs: 5000 });
   const snapshot: CompatibilitySnapshot | null = certificate.data && runtime.data ? { certificate: certificate.data, runtime: runtime.data } : null;
+  const sessionSupported = runtime.data?.supportedActivationLifetimes?.includes("runtime-session") === true;
+  const sessionChoice = choice?.target === "runtime" && choice.action === "apply" && choice.lifetime === "runtime-session";
   const fresh = !needsRefresh && certificate.lastAttemptOk && runtime.lastAttemptOk && !certificate.refreshing && !runtime.refreshing;
   const busy = mutating || certificate.loading || runtime.loading;
   const readError = certificate.error ?? runtime.error;
@@ -40,6 +43,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     setMutating(true); setActionError(null); setDone(false); setNeedsRefresh(true);
     const op = createBoundedFetch(action ? 140000 : 15000); current.operations.add(op);
     try {
+      if (action?.target === "runtime" && action.action === "apply" && action.lifetime === "runtime-session" && !sessionSupported) throw new CompatibilityApiError("activation_lifetime_unsupported");
       if (action) await runCompatibilityAction(apiBase, action, op.signal);
       const value = await readCompatibilitySnapshot(apiBase, op.signal);
       if (current.alive && current.generation === generation) {
@@ -52,7 +56,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       current.operations.delete(op); op.clear();
       if (current.generation === generation) { current.pending = false; if (current.alive) setMutating(false); }
     }
-  }, [apiBase, certificateKey, runtimeKey]);
+  }, [apiBase, certificateKey, runtimeKey, sessionSupported]);
 
   const available = !!snapshot?.certificate.supported && !!snapshot.runtime.supported;
   const idle = snapshot?.runtime.phase === "off" && !snapshot.certificate.busy;
@@ -69,6 +73,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     }
     if (idle && cert.state === "trusted") actions.push({ target: "runtime", action: "start" });
     if (running) actions.push({ target: "runtime", action: "launch" }, { target: "runtime", action: "observe" }, { target: "runtime", action: "apply" });
+    if (running && sessionSupported) actions.push({ target: "runtime", action: "apply", lifetime: "runtime-session" });
     if (running || snapshot.runtime.phase === "cleanup-required") actions.push({ target: "runtime", action: "stop" });
   }
   return <section className="panel">
@@ -86,14 +91,17 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
         {snapshot.certificate.fingerprint && <dd className="mono text-label" style={{ overflowWrap: "anywhere" }}>{snapshot.certificate.fingerprint}</dd>}
         {snapshot.certificate.expiresAt !== undefined && <><dt>{t("desktopCompat.expiry")}</dt><dd>{new Date(snapshot.certificate.expiresAt).toLocaleString(locale)}</dd></>}
         <dt>{t("desktopCompat.runtime")}</dt><dd><code>{snapshot.runtime.phase}</code>{snapshot.runtime.usage && <> · <code>{snapshot.runtime.usage.mode}</code></>}</dd>
+        {snapshot.runtime.safetyDeadline !== undefined && <><dt>{t("desktopCompat.safetyDeadline")}</dt><dd>{new Date(snapshot.runtime.safetyDeadline).toLocaleString(locale)}</dd></>}
         {snapshot.runtime.buildAssessment && <>
           <dt>{t("desktopCompat.assessedPackage")}</dt><dd><code>{snapshot.runtime.buildAssessment.assessedVersion}</code></dd>
           <dt>{t("desktopCompat.observedPackage")}</dt><dd><code>{snapshot.runtime.buildAssessment.observedVersion ?? t("desktopCompat.noObservedPackage")}</code></dd>
           <dt>{t("desktopCompat.lastObservedAt")}</dt><dd>{new Date(snapshot.runtime.buildAssessment.completedAt).toLocaleString(locale)}</dd>
         </>}
       </dl>
+      {snapshot.runtime.buildAssessment?.verificationBasis === "package-identity" && <p className="muted text-control" role="status">{t(snapshot.runtime.buildAssessment.verified ? "desktopCompat.packageIdentityVerified" : "desktopCompat.packageIdentityUnverified")}</p>}
       {snapshot.certificate.renewalDue && <p className="notice-warn">{t("desktopCompat.renewalDue")}</p>}
-      {snapshot.runtime.usage?.mode === "apply" && <p className="notice-warn">{t("desktopCompat.trialRisk")}</p>}
+      {snapshot.runtime.usage?.mode === "apply" && <p className="notice-warn">{t(snapshot.runtime.usage.activationLifetime === "runtime-session" ? "desktopCompat.sessionRisk" : "desktopCompat.trialRisk")}</p>}
+      {snapshot.runtime.usage?.phase === "session-awaiting-eligible-usage" && <p className="notice-warn" role="status">{t("desktopCompat.sessionWaiting")}</p>}
       {snapshot.runtime.usage?.mode === "observe" && snapshot.runtime.usage.phase.endsWith("awaiting-original-response") && <p className="notice-warn" role="status">{t("desktopCompat.cacheRefreshHint")}</p>}
       {snapshot.runtime.contextFailure && <p className="notice-warn" role="status">{t(errorLabel[snapshot.runtime.contextFailure])}</p>}
       {running && <p className="muted text-control">{t("desktopCompat.reconnectHint")}</p>}
@@ -103,20 +111,21 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       })}</p>}
     </>}
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--space-2)" }}>
-      {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh}
+      {actions.map(action => <button key={action.action + (action.action === "apply" ? action.lifetime ?? "trial" : "")} type="button" className="btn btn-ghost" disabled={busy || !fresh}
         onClick={() => {
           if (["trust", "remove-trust", "renew", "apply"].includes(action.action)) { setChoice(action); setAcknowledged(false); setDone(false); }
           else void execute(action);
-        }}>{t(label[action.action])}</button>)}
+        }}>{t(action.action === "apply" && action.lifetime === "runtime-session" ? "desktopCompat.sessionApply" : label[action.action])}</button>)}
     </div>
     {choice && <fieldset disabled={busy}>
-      <legend>{t(label[choice.action])}</legend>
-      <p className="notice-warn">{t(choice.action === "apply" ? "desktopCompat.trialRisk" : "desktopCompat.risk")}</p>
+      <legend>{t(sessionChoice ? "desktopCompat.sessionApply" : label[choice.action])}</legend>
+      <p className="notice-warn">{t(choice.action === "apply" ? sessionChoice ? "desktopCompat.sessionRisk" : "desktopCompat.trialRisk" : "desktopCompat.risk")}</p>
+      {sessionChoice && !sessionSupported && <p role="alert">{t("desktopCompat.sessionUnavailable")}</p>}
       {choice.action === "apply" && <p className="muted text-control">{t("desktopCompat.cacheRefreshHint")}</p>}
       {choice.target === "certificate" && choice.fingerprint && <code style={{ overflowWrap: "anywhere" }}>{choice.fingerprint}</code>}
       <label className="row"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />{t("desktopCompat.acknowledge")}</label>
       <div className="row" style={{ gap: "var(--space-2)" }}>
-        <button type="button" className="btn btn-primary" disabled={!acknowledged || !fresh} onClick={() => void execute(choice)}>{t("desktopCompat.confirm")}</button>
+        <button type="button" className="btn btn-primary" disabled={!acknowledged || !fresh || sessionChoice && !sessionSupported} onClick={() => void execute(choice)}>{t("desktopCompat.confirm")}</button>
         <button type="button" className="btn btn-ghost" onClick={() => { setChoice(null); setAcknowledged(false); }}>{t("common.cancel")}</button>
       </div>
     </fieldset>}

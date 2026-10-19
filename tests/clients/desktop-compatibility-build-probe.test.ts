@@ -6,15 +6,38 @@ const installed = (version = DESKTOP_COMPATIBILITY_ASSESSED_VERSION): DesktopApp
   id: DESKTOP_COMPATIBILITY_ASSESSED_FAMILY, root: `C:\\Program Files\\WindowsApps\\OpenAI.Codex_${version}_x64__2p2nqsd0c76g0`, relaunch: `${DESKTOP_COMPATIBILITY_ASSESSED_FAMILY}!App`,
 });
 
-test("matching version text cannot qualify a foreign package family, publisher or app entry", async () => {
-  const original = installed();
-  for (const candidate of [{ ...original, id: "Foreign.Codex_2p2nqsd0c76g0" },
-    { ...original, relaunch: `${original.id}!Other` },
-    { ...original, root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
-    { ...original, id: "OpenAI.Codex_foreign", relaunch: "OpenAI.Codex_foreign!App", root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
-    { ...original, root: original.root + "_extra" }]) {
-    const probe = createInstalledBuildProbe(async () => candidate);
-    expect(await probe.check()).toBe(false); await probe.close();
+for (const version of [DESKTOP_COMPATIBILITY_ASSESSED_VERSION, "26.1013.4894.0", "99.1.1.0"]) {
+  test(`package identity admits ${version} without a version allowlist`, async () => {
+    const probe = createInstalledBuildProbe(async () => installed(version));
+    expect(await probe.check()).toBe(true);
+    expect(probe.lastResult()).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION,
+      observedVersion: version, verificationBasis: "package-identity", verified: true });
+    await probe.close();
+  });
+
+  test(`version ${version} cannot qualify a foreign package family, publisher or app entry`, async () => {
+    const original = installed(version);
+    for (const candidate of [{ ...original, id: "Foreign.Codex_2p2nqsd0c76g0" },
+      { ...original, relaunch: `${original.id}!Other` },
+      { ...original, root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
+      { ...original, id: "OpenAI.Codex_foreign", relaunch: "OpenAI.Codex_foreign!App", root: original.root.replace("__2p2nqsd0c76g0", "__foreign") },
+      { ...original, root: original.root + "_extra" }]) {
+      const probe = createInstalledBuildProbe(async () => candidate);
+      expect(await probe.check()).toBe(false);
+      expect(probe.lastResult()).toMatchObject({ observedVersion: null, verificationBasis: "package-identity", verified: false });
+      await probe.close();
+    }
+  });
+}
+
+test("malformed package basenames remain unverified regardless of version text", async () => {
+  for (const root of [installed("26.1013.4894").root, installed("26.1013.4894.0.1").root,
+    installed("not-a-version").root, installed().root.replace("_x64_", "_unknown_"),
+    installed().root.replace("OpenAI.Codex_", "Foreign.Codex_")]) {
+    const probe = createInstalledBuildProbe(async () => ({ ...installed(), root }));
+    expect(await probe.check()).toBe(false);
+    expect(probe.lastResult()).toMatchObject({ observedVersion: null, verificationBasis: "package-identity", verified: false });
+    await probe.close();
   }
 });
 
@@ -25,7 +48,9 @@ test("concurrent build checks share only the pending query and refresh after it 
   await Bun.sleep(0); expect(calls).toBe(1);
   release(installed()); expect(await first).toBe(true); expect(await second).toBe(true);
   const changed = probe.check(); await Bun.sleep(0); expect(calls).toBe(2);
-  release(installed("99.1.1.0")); expect(await changed).toBe(false);
+  release(installed("99.1.1.0")); expect(await changed).toBe(true);
+  const foreign = probe.check(); await Bun.sleep(0); expect(calls).toBe(3);
+  release({ ...installed("99.1.1.0"), relaunch: "Foreign.Codex!App" }); expect(await foreign).toBe(false);
   await probe.close();
 });
 
@@ -53,11 +78,12 @@ test("build assessment exposes only the last completed public package metadata",
   const probe = createInstalledBuildProbe(async () => (++calls, install));
   expect(probe.lastResult()).toBeNull();
   install = installed("26.1007.9446.0");
-  expect(await probe.check()).toBe(false);
-  const unverified = probe.lastResult();
-  expect(unverified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, observedVersion: "26.1007.9446.0", verified: false });
-  expect(unverified!.completedAt).toBeGreaterThan(0);
-  expect(JSON.stringify(unverified)).not.toContain("WindowsApps");
+  expect(await probe.check()).toBe(true);
+  const identified = probe.lastResult();
+  expect(identified).toMatchObject({ assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION,
+    observedVersion: "26.1007.9446.0", verificationBasis: "package-identity", verified: true });
+  expect(identified!.completedAt).toBeGreaterThan(0);
+  expect(JSON.stringify(identified)).not.toContain("WindowsApps");
   install = installed();
   expect(await probe.check()).toBe(true);
   expect(probe.lastResult()).toMatchObject({ observedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, verified: true });
@@ -93,6 +119,6 @@ test("a completed probe failure reports unverified instead of retaining a stale 
   const probe = createInstalledBuildProbe(async () => (++calls === 1 ? installed() : Promise.reject(new Error("fixture failure"))));
   expect(await probe.check()).toBe(true);
   expect(await probe.check()).toBe(false);
-  expect(probe.lastResult()).toMatchObject({ observedVersion: null, verified: false });
+  expect(probe.lastResult()).toMatchObject({ observedVersion: null, verificationBasis: "package-identity", verified: false });
   await probe.close();
 });

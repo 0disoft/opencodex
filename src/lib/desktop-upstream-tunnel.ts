@@ -5,11 +5,13 @@ import { dialTunnel, type OpaqueProxyRoute } from "./opaque-proxy-tunnel";
 
 // The shared opaque dialer owns proxy framing; this caller owns fixed-target
 // TLS and bounds the entire connection, including the target TLS handshake.
+export type DesktopUpstreamHost = "chatgpt.com" | "ws.chatgpt.com";
 export interface DesktopTunnelOptions {
+  host?: DesktopUpstreamHost;
   proxy?: string | false;
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** Isolated test peers; production always uses verified TLS to chatgpt.com:443. */
+  /** Isolated test peers; production always uses verified TLS to the closed host enum on port 443. */
   target?: { host: string; port: number };
   ca?: string;
   proxyCa?: string;
@@ -26,6 +28,8 @@ function waitConnected(socket: Socket, event: "connect" | "secureConnect", signa
 }
 /** Fixed-destination TLS dial for native desktop upgraded sockets. No logs or direct fallback. */
 export async function dialDesktopUpstream(options: DesktopTunnelOptions = {}): Promise<TLSSocket> {
+  const hostname = options.host ?? "chatgpt.com";
+  if (hostname !== "chatgpt.com" && hostname !== "ws.chatgpt.com") throw fail();
   const timeout = options.timeoutMs ?? 10000;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 30000) throw fail();
   const cancel = new AbortController(), timer = setTimeout(() => cancel.abort(), timeout);
@@ -36,8 +40,8 @@ export async function dialDesktopUpstream(options: DesktopTunnelOptions = {}): P
   signal.addEventListener("abort", destroy, { once: true });
   try {
     if (signal.aborted) throw fail();
-    const proxy = options.proxy === undefined ? desktopProxyFor(new URL("https://chatgpt.com")) : options.proxy;
-    const target = options.target ?? { host: "chatgpt.com", port: 443 };
+    const proxy = options.proxy === undefined ? desktopProxyFor(new URL(`https://${hostname}`)) : options.proxy;
+    const target = options.target ?? { host: hostname, port: 443 };
     let raw: Socket;
     if (proxy === false) {
       raw = own(tcpConnect(target)); await waitConnected(raw, "connect", signal);
@@ -60,7 +64,7 @@ export async function dialDesktopUpstream(options: DesktopTunnelOptions = {}): P
     // This consumer historically closes its writable side after peer EOF. The
     // shared opaque transport preserves half-closes for callers that need them.
     raw.allowHalfOpen = false;
-    const secured = own(tlsConnect({ socket: raw, servername: "chatgpt.com", ca: options.ca, rejectUnauthorized: true, ALPNProtocols: ["http/1.1"] }));
+    const secured = own(tlsConnect({ socket: raw, servername: hostname, ca: options.ca, rejectUnauthorized: true, ALPNProtocols: ["http/1.1"] }));
     // The CONNECT reader paused its stream before handing buffered bytes back. Bun's
     // TLS-over-TLS path needs the outer TLS stream explicitly resumed for the new handshake.
     raw.resume();

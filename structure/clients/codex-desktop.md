@@ -110,10 +110,12 @@ compatibility integration owner; it currently has an authenticated HTTP contract
 `src/codex/desktop-compatibility/runtime.ts` owns an explicit, default-off runtime.
 Construction and status do not start listeners, load credentials or enroll trust. Start
 loads an existing DPAPI key, verifies CurrentUser trust and a fresh native file-login
-identity, then creates only loopback TLS/CONNECT/PAC listeners. The currently assessed
-Windows package version is declared in the module. Unknown builds refuse activation.
-The assessed family/publisher, full package basename and App entry must also agree;
-matching the version prefix alone does not qualify a foreign package identity.
+identity, then creates only loopback TLS/CONNECT/PAC listeners. Windows package identity
+is checked independently of its version: the fixed family/publisher, canonical full
+package basename and App entry must agree. A version change alone does not refuse
+activation. Version metadata is diagnostic, not proof that a native UI consumed a response.
+Each response must separately satisfy the supported usage contract; unknown payloads
+remain unchanged. There is no per-version model call or installed-source analysis at runtime.
 HTTP, identity verification and upgraded sockets use the explicit desktop egress policy
 described in the [transport inventory](../transports/inventory.md#native-desktop-proxy-egress).
 Invalid proxy routes refuse rather than falling back to direct egress.
@@ -121,11 +123,20 @@ Native routing verification binds both the actual listener address family and po
 is IPv4-only. Ambiguous localhost aliases cannot qualify, and listener identity changes revoke observation.
 
 `relay-listener.ts` forwards HTTP with the existing upstream-header filter, cookies and
-streaming bodies, and pipes upgraded TLS sockets without decoding their frames. The
-upstream is fixed to chatgpt.com; request Host cannot select another destination. CONNECT
-allows only chatgpt.com:443. PAC has a certificate-relative deadline and `DIRECT` fallback.
-HTTP and upgraded requests accept the case-insensitive DNS spelling of that exact Host,
-with optional port443, while other hosts, ports and non-origin request targets remain refused.
+streaming bodies. Only the exact realtime-broker usage pathname is decoded by
+`usage-websocket-relay.ts`; other upgrades retain the raw TLS pipe. The two allowed upgrade
+hosts are chatgpt.com and ws.chatgpt.com on port 443; HTTP remains chatgpt.com-only. Query
+strings are forwarded without logging and do not alter pathname-based topic registration.
+CONNECT and PAC use that fixed host set, a certificate-relative deadline and `DIRECT` fallback.
+Case-insensitive DNS spelling and optional port 443 are accepted; other hosts, ports and
+non-origin request targets remain refused. Request Host never selects an arbitrary destination.
+The broker relay uses the statically aliased `desktop-ws` package because Bun's built-in ws
+shim does not supply the required custom TLS-dial contract. Compression is not negotiated.
+Messages retain ordering, binary/text kind and bounded send backpressure; ping/pong and close
+are forwarded. The transport ceiling is 100 MiB, independently of the 256 KiB correction cap.
+Larger supported messages pass unchanged below that ceiling; over-ceiling messages close with
+1009. Only known usage message arrays and recovered subscription catchups can be rewritten.
+An acknowledgement without catchups and a timestamp-less usage event do not taint the stream.
 The package launcher uses only the runtime-owned PAC and never kills an existing app.
 
 `connection-store.ts` preserves the PAC nonce and two public loopback ports in a bounded,
@@ -138,25 +149,38 @@ authority and endpoints; correction always restarts in Observe. Certificate rene
 requires a closed app, so its next launch fetches the new certificate-relative PAC deadline.
 If both publication and temporary-file cleanup fail, the cleanup-required error retains both causes; cleanup never throws from a `finally` block or reports the residue as removed.
 
-`usage-controller.ts`, `usage-activation.ts` and `usage-policy.ts` implement a maximum
-three-minute, explicitly confirmed account-UI trial after a fresh supported exhaustion
-snapshot. They cannot assert selected-provider isolation. Two usage gate booleans may
+`usage-controller.ts`, `usage-activation.ts` and `usage-policy.ts` require a fresh supported
+exhaustion snapshot and explicit account-wide UI consent. The default `trial` lifetime is
+limited to three minutes. The separately requested `runtime-session` lifetime lasts only
+within the running compatibility service and its safety deadline; it is never persisted.
+Neither lifetime asserts selected-provider isolation. Only two usage gate booleans may
 change; quota windows, credits, spending limits and other responses remain original.
-An original available or protected usage record disarms Apply and advances its generation.
-Available credits, unlimited credits and active Luna Reserve are ineligible for correction even
-when the ordinary rate limit is exhausted. Their original snapshots disarm Apply too; unknown
-Reserve schemas pass unchanged. Neither observation nor correction changes entitlement state.
-Later exhaustion does not resume that trial; it requires another explicit activation.
-Pending response checks from the previous generation cannot emit a correction after recovery.
+Available credits, unlimited credits and active Luna Reserve are ineligible. Unknown schemas
+also pass unchanged. These observations invalidate pending response generations: a trial
+disarms, while a runtime-session retains consent and waits for a new eligible response.
+Recovery followed by exhaustion therefore needs fresh consent for a trial but does not
+trigger another activation or stream refresh in a runtime-session. Consent generation is
+separate from response generation so an initial refresh cannot erase a concurrent withdrawal.
+Observe, stop, native identity or routing failure and the safety deadline revoke session consent.
+The `activationLifetime` status field distinguishes both lifetimes from no active consent.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
 records over its default 256 KiB cap pass through unchanged until the record delimiter,
 after which framing resumes for later records.
 `usage-refresh.ts` closes only usage streams bound by validated original account records.
+For a shared broker connection this reconnects the socket, including its other topics; the
+client owns resubscription and offset catchup. Unrelated-topic-only or tainted sockets are not
+refresh targets. Session recovery/re-exhaustion does not initiate another socket close.
 `usage-controlled-fetch.ts` removes stale validators from changed JSON and controlled SSE.
 Response production is reported separately from app-cache or UI confirmation.
-Observation counters distinguish validated JSON/SSE snapshots from merely registered streams;
+GET/SSE and POST `/backend-api/wham/usage/subscriptions` use complete snapshots. The POST
+also validates and preserves subscription renewal and generation metadata. Known WebSocket
+usage snapshots are partial: absent retained credit/spending fields are not reconstructed,
+explicit protections remain original, and any incoming available Reserve allowance is skipped
+without guessing the renderer's retained upsell. Exact native account/user/plan binding is
+required; a missing account ID does not acquire authority from the socket or topic.
+Observation counters distinguish validated JSON and streaming snapshots from merely registered streams;
 only identity-bound, untainted active streams count as `validatedActiveStreams`. Counts and the
 last snapshot time describe this relay's lifetime, including responses sent by diagnostic clients.
 They never establish a source PID, authoritative gate coverage or composer recovery. Both
@@ -175,26 +199,31 @@ OpenCodex preferences, TOML formatting, object-key order and the native root `mc
 table do not invalidate the routing snapshot. Desktop refreshes that tool-transport table
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
-Each record that would be corrected checks routing and the assessed installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
-the Windows adapter's discovery parser, coalesces concurrent probes without caching a positive
-result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
-unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
-every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
-disarm Apply. Native update/routing failures are
+Each record that would be corrected checks routing and package identity, then rechecks native
+identity and the response generation before emitting it. `installed-build.ts` shares the Windows
+discovery parser and coalesces probes. The runtime reuses only its own completed successful
+package proof for at most sixty seconds; diagnostic metadata alone never grants that lease.
+Start, launch and activation request a fresh check; concurrent consumers join it rather than
+using the previous proof. Failure, cancellation, clock rollback, stop and new start revoke it.
+The bounded discovery child is aborted/reaped on cleanup. Observe and unchanged responses do
+not query Windows. Periodic checks run once a minute in Observe or runtime-session, and every
+ten seconds in a trial; probing stops after the safety deadline. Failed checks disarm Apply.
+Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
-`assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
+`assessedVersion`, `observedVersion`, `verified`, `completedAt` and
+`verificationBasis: "package-identity"`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never
 replaces the last completed assessment, including across stop/start probe replacement and early
 routing failures. A newly completed failed probe supersedes that prior observation; retained
 metadata is diagnostic only and never authorizes a new start or Apply. `observedVersion` is reported only when the discovered
 package matches the assessed family, App entry and canonical basename, so a foreign or unidentifiable
-install reports `null` rather than raw discovery data, an identified newer build reports its own
-version with `verified` false, and a failed or missing read is unverified rather
-than a stale success. The allowlist stays pinned to one exact package version because the
-correction contract is verified per build, which is why a newer installed client is reported
-unverified instead of treated as covered.
+install reports `null` rather than raw discovery data. An identified newer build reports its own
+version with `verified` true; a failed or missing read is unverified rather than a stale success.
+`assessedVersion` retains the historical reference version for old consumers. New consumers
+accept a differing observed version only with the explicit package-identity basis, and never
+accept a verified assessment without an observed version. This identity result does not claim
+all current or future response schemas, renderer caches or composer behavior are verified.
 
 `runtime-ownership.ts` serializes certificate mutations against active/starting runtimes.
 The existing sibling guard blocks all runtime mutations in sibling instances. Core shutdown
@@ -203,7 +232,9 @@ a failed cleanup retains ownership and reports `cleanup-required`, never a false
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
 local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
-separate account-wide consent for apply. No setting, login, quota, automatic startup or
+separate account-wide consent for apply. `lifetime` is accepted only for apply and must be
+`trial` or `runtime-session`; omission retains the trial contract. The runtime advertises
+`supportedActivationLifetimes`. No setting, login, quota, automatic startup or
 dashboard preference is changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
 
@@ -221,7 +252,10 @@ response; a fresh status read is required. Changing the API target remounts the 
 pending consent. `useClientResource` owns bounded, visibility-aware reads and invalidates earlier
 reads when a mutation result is published. Certificate status is not repeatedly polled; runtime
 status polls only while the tab is active. Consent copy exists in all locale catalogs.
-Trial consent and pending withdrawal distinguish stopped response correction from unconfirmed native cache refresh; the panel never reports cache rollback as confirmed.
+Trial and service-session choices have separate consent text. An older server that does not
+advertise the service-session lifetime offers only the trial; a failed request never silently
+downgrades to trial. Consent and pending withdrawal distinguish stopped response correction
+from unconfirmed native cache refresh; the panel never reports cache rollback as confirmed.
 The panel offers renewal only for prepared, trusted, expired or renewal-required identities. Unknown trust permits fingerprint-verified removal but not renewal; invalid keys expose neither action.
 Running-state help distinguishes a listening service from a connected native app: ordinary app launches or updates can omit the managed PAC argument. It points to explicit package launch after the user closes Codex and states that a certificate reinstall cannot authorize an unassessed build.
 

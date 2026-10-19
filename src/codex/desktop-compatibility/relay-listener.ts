@@ -2,27 +2,35 @@ import { createServer } from "node:https";
 import { Readable, type Duplex } from "node:stream";
 import type { PemKeyPair } from "../../claude/intercept/local-ca";
 import { forwardHeadersForUpstream } from "../../claude/intercept/listener";
-import { dialDesktopUpstream, type DesktopTunnelOptions } from "../../lib/desktop-upstream-tunnel";
+import { dialDesktopUpstream, type DesktopTunnelOptions, type DesktopUpstreamHost } from "../../lib/desktop-upstream-tunnel";
+import { isUsageWebSocketPath, relayUsageWebSocket, type UsagePushController } from "./usage-websocket-relay";
 
 const ORIGIN = "https://chatgpt.com";
 const STRIP = new Set(["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length", "alt-svc", "proxy-authenticate"]);
 export interface DesktopRelayOptions {
   leaf: PemKeyPair;
   fetchImpl: typeof fetch;
+  usageController?: UsagePushController;
   /** Test-only TLS peer; the production destination is fixed, never taken from a request. */
   websocketPeer?: { host: string; port: number; ca: string };
   websocketTransport?: Pick<DesktopTunnelOptions, "proxy" | "proxyCa" | "timeoutMs">;
 }
 
-/** Transparent HTTP and raw upgraded-socket relay. Only fetchImpl owns usage policy. */
+/** HTTP and opaque upgrades stay transparent; only exact broker messages enter usage policy. */
 export async function startDesktopRelay(options: DesktopRelayOptions) {
   const sockets = new Set<Duplex>(), requests = new Set<AbortController>();
+  const upgrades = new Set<Promise<void>>();
   const server = createServer({ cert: options.leaf.certPem, key: options.leaf.keyPem, ALPNProtocols: ["http/1.1"] });
   server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
-  const valid = (host: string | undefined, path: string | undefined) =>
-    (host?.toLowerCase() === "chatgpt.com" || host?.toLowerCase() === "chatgpt.com:443") && !!path && path.startsWith("/") && !path.startsWith("//");
+  const destination = (host: string | undefined, path: string | undefined): DesktopUpstreamHost | null => {
+    if (!path || !/^\/[^\\\x00-\x20\x7f#]*$/.test(path) || path.startsWith("//")) return null;
+    const name = host?.toLowerCase();
+    if (name === "chatgpt.com" || name === "chatgpt.com:443") return "chatgpt.com";
+    if (name === "ws.chatgpt.com" || name === "ws.chatgpt.com:443") return "ws.chatgpt.com";
+    return null;
+  };
   server.on("request", (req, res) => {
-    if (!valid(req.headers.host, req.url)) { res.writeHead(421); res.end(); return; }
+    if (destination(req.headers.host, req.url) !== "chatgpt.com") { res.writeHead(421); res.end(); return; }
     const abort = new AbortController(); requests.add(abort);
     const finish = () => { requests.delete(abort); abort.abort(); };
     res.once("close", finish); req.once("error", finish);
@@ -50,12 +58,24 @@ export async function startDesktopRelay(options: DesktopRelayOptions) {
     });
   });
   server.on("upgrade", (req, client, head) => {
-    if (!valid(req.headers.host, req.url)) { client.end("HTTP/1.1 421 Misdirected Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
+    const host = destination(req.headers.host, req.url);
+    if (!host) { client.end("HTTP/1.1 421 Misdirected Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return; }
     const peer = options.websocketPeer;
     const abort = new AbortController(); requests.add(abort);
+    const dial = (signal: AbortSignal) => dialDesktopUpstream({ ...options.websocketTransport, host,
+      ...(peer ? { target: { host: peer.host, port: peer.port }, ca: peer.ca } : {}), signal });
+    // Inspect the raw origin-form pathname without decoding or URL normalization;
+    // query bytes remain untouched on the authenticated upstream request.
+    const pathname = req.url!.split("?", 1)[0]!;
+    if (isUsageWebSocketPath(pathname)) {
+      const pending = relayUsageWebSocket(req, client, head, { host, pathname, controller: options.usageController, signal: abort.signal, dial })
+        .catch(() => { client.destroy(); }).finally(() => { upgrades.delete(pending); requests.delete(abort); abort.abort(); });
+      upgrades.add(pending);
+      return;
+    }
     client.once("close", () => { requests.delete(abort); abort.abort(); });
     client.once("error", () => abort.abort());
-    void dialDesktopUpstream({ ...options.websocketTransport, ...(peer ? { target: { host: peer.host, port: peer.port }, ca: peer.ca } : {}), signal: abort.signal }).then(upstream => {
+    void dial(abort.signal).then(upstream => {
       requests.delete(abort);
       if (client.destroyed || abort.signal.aborted) { upstream.destroy(); return; }
       sockets.add(upstream);
@@ -87,7 +107,9 @@ export async function startDesktopRelay(options: DesktopRelayOptions) {
     if (closing) return closing;
     for (const abort of requests) abort.abort();
     for (const socket of sockets) socket.destroy();
-    closing = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    const pending = [...upgrades];
+    closing = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      .then(async () => { await Promise.all(pending); });
     server.closeAllConnections(); return closing;
   } };
 }

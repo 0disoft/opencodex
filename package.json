@@ -83,10 +83,12 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@napi-rs/keyring": "1.3.0",
     "bun": "1.4.2",
+    "desktop-ws": "npm:ws@8.22.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
+    "@types/desktop-ws": "npm:@types/ws@8.18.2",
     "typescript": "7.0.2"
   },
   "optionalDependencies": {

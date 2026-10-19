@@ -75,26 +75,26 @@ test("an unreadable intermediate login cannot recover an old credential generati
   upstream.verify([]);
 });
 
-test("a trial disarms on native credential replacement and a fresh runtime can bind the replacement", async () => {
+for (const lifetime of ['trial', 'runtime-session'] as const) test(`${lifetime} disarms on native credential replacement and a fresh runtime can bind the replacement`, async () => {
   const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch), account = (await reader.verifyFreshIdentity())!;
   const controller = new UsageRelayController(account, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000);
-  await controller.rewriteJson(JSON.stringify(usage), exchange); expect((await controller.activate(consent)).accepted).toBe(true);
+  await controller.rewriteJson(JSON.stringify(usage), exchange); expect((await controller.activate({ ...consent, lifetime })).accepted).toBe(true);
   io.write("fixture-A", "synthetic-access-new");
   expect(await controller.rewriteJson(JSON.stringify(usage), exchange)).toBeNull();
-  expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().outputs).toBe(0);
+  expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().activationLifetime).toBeNull(); expect(controller.snapshot().outputs).toBe(0);
   const replacement = new UsageRelayController((await reader.verifyFreshIdentity())!, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000);
   await replacement.rewriteJson(JSON.stringify(usage), exchange); expect((await replacement.activate(consent)).accepted).toBe(true);
   upstream.verify(["synthetic-access-A", "synthetic-access-A", "synthetic-access-new", "synthetic-access-new"]);
 });
 
-test("A to B to A during the async build check cannot publish a corrected old response", async () => {
+for (const lifetime of ['trial', 'runtime-session'] as const) test(`A to B to A during the async build check cannot publish a corrected ${lifetime} response`, async () => {
   const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch); let waiting = false, entered!: () => void, release!: (value: boolean) => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
   const controller = new UsageRelayController((await reader.verifyFreshIdentity())!, reader.readCurrentIdentity, reader.verifyFreshIdentity, Date.now, Date.now() + 600000, 180000,
     () => waiting ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
-  await controller.rewriteJson(JSON.stringify(usage), exchange); await controller.activate(consent);
+  await controller.rewriteJson(JSON.stringify(usage), exchange); await controller.activate({ ...consent, lifetime });
   waiting = true; const correcting = controller.rewriteJson(JSON.stringify(usage), exchange); await started;
   io.write("fixture-B", "synthetic-access-B"); io.write(); release(true);
-  expect(await correcting).toBeNull(); expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().outputs).toBe(0);
+  expect(await correcting).toBeNull(); expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().activationLifetime).toBeNull(); expect(controller.snapshot().outputs).toBe(0);
   upstream.verify(["synthetic-access-A", "synthetic-access-A"]);
 });

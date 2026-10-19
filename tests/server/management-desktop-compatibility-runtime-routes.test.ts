@@ -39,3 +39,28 @@ test("runtime failures report safe codes and never leak subprocess or credential
   const response = await handleDesktopCompatibilityRuntimeRoutes(io.ctx);
   expect(response?.status).toBe(409); expect(await response!.text()).not.toContain("synthetic-private-data");
 });
+
+for (const lifetime of [undefined, "trial", "runtime-session"] as const) test(`apply lifetime ${lifetime ?? "omitted"} is explicit and legacy defaults to trial`, async () => {
+  const io = fixture("POST", { action: "apply", confirmed: true, accountWideConsent: true, lifetime });
+  const received: unknown[] = [];
+  io.runtime.apply = async (consent, selected) => {
+    received.push(consent, selected);
+    return { accepted: true, reason: "awaiting-new-response", mode: "apply", phase: "awaiting-fresh-usage", generation: 1,
+      outputs: 0, activationLifetime: selected ?? "trial", appCacheConfirmed: false, requestedUiScope: "account-wide", providerIsolationAvailable: false,
+      trackedStreams: 0, expired: false, observation: { jsonSnapshots: 0, streamSnapshots: 0, validatedActiveStreams: 0,
+        lastSnapshotAt: null, sourceProcessVerified: false, composerRecoveryVerified: false } };
+  };
+  expect((await handleDesktopCompatibilityRuntimeRoutes(io.ctx))?.status).toBe(202);
+  expect(received).toEqual([true, lifetime ?? "trial"]);
+});
+
+test("lifetime is strictly validated and never accepted on a different action", async () => {
+  for (const body of [{ action: "apply", confirmed: true, accountWideConsent: true, lifetime: "persistent" },
+    { action: "apply", confirmed: true, accountWideConsent: true, lifetime: null },
+    { action: "apply", confirmed: true, accountWideConsent: true, lifetime: ["runtime-session"] },
+    { action: "observe", confirmed: true, lifetime: "runtime-session" }]) {
+    const io = fixture("POST", body);
+    expect((await handleDesktopCompatibilityRuntimeRoutes(io.ctx))?.status).toBe(400);
+    expect(io.calls).toEqual([]);
+  }
+});

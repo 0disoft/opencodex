@@ -2,6 +2,7 @@ import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
+import type { ApplyLifetime } from "../../codex/desktop-compatibility/usage-activation";
 
 const PATH = "/api/codex/desktop-compatibility/runtime";
 const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_invalid",
@@ -13,15 +14,20 @@ export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementCon
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
   if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   let action: "start" | "stop" | "observe" | "apply" | "launch" | undefined;
+  let lifetime: ApplyLifetime = "trial";
   if (ctx.req.method === "POST") {
     let body: unknown;
     try { body = await readManagementJsonBody(ctx.req); }
     catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid_json" }, 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) return jsonResponse({ error: "invalid_request" }, 400);
     const value = body as Record<string, unknown>;
-    if (Object.keys(value).some(key => !["action", "confirmed", "accountWideConsent"].includes(key)) || value.confirmed !== true
+    if (Object.keys(value).some(key => !["action", "confirmed", "accountWideConsent", "lifetime"].includes(key)) || value.confirmed !== true
       || typeof value.action !== "string" || !["start", "stop", "observe", "apply", "launch"].includes(value.action)) return jsonResponse({ error: "invalid_request" }, 400);
     if (value.action === "apply" ? value.accountWideConsent !== true : value.accountWideConsent !== undefined) return jsonResponse({ error: "invalid_consent_scope" }, 400);
+    if (value.lifetime !== undefined) {
+      if (value.action !== "apply" || value.lifetime !== "trial" && value.lifetime !== "runtime-session") return jsonResponse({ error: "invalid_lifetime" }, 400);
+      lifetime = value.lifetime;
+    }
     action = value.action as typeof action;
   }
   const module = ctx.deps.desktopCompatibilityRuntime ? null : await import("../../codex/desktop-compatibility/service");
@@ -29,7 +35,7 @@ export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementCon
   if (module) ctx.deps.onDesktopCompatibilityShutdown?.(module.shutdownDesktopCompatibility);
   try {
     if (action === "apply") {
-      const result = await service.apply(true);
+      const result = await service.apply(true, lifetime);
       return jsonResponse({ ok: result.accepted, activation: result, runtime: service.status() }, result.accepted ? 202 : 409);
     }
     if (action === "launch") {

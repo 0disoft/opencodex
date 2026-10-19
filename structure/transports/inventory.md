@@ -428,18 +428,22 @@ never falls through to ALL_PROXY. Present but unsupported proxy configuration
 refuses. A failed selected route never retries directly. Identity verification uses this same
 HTTP path, while provider inference retains its separate existing provider-egress policy.
 
-`src/lib/desktop-upstream-tunnel.ts` dials fixed chatgpt.com TLS through HTTP/HTTPS CONNECT
+`src/lib/desktop-upstream-tunnel.ts` dials TLS to the closed chatgpt.com/ws.chatgpt.com host set through HTTP/HTTPS CONNECT
 or authenticated SOCKS5. Its selected-proxy branch delegates handshake framing to
 `src/lib/opaque-proxy-tunnel.ts` with one explicit route;
 its direct branch and final target TLS handshake remain locally owned. It bounds
 the whole connection setup, rejects proxy EOF, abort and
 oversized handshake heads, and verifies both proxy and upstream certificate identities.
-Only the proxy handshake carries proxy credentials. The raw upgraded socket remains opaque;
-the relay does not decode WebSocket payloads. After CONNECT the paused outer stream resumes
+Only the proxy handshake carries proxy credentials. Other upgraded paths remain opaque;
+the exact usage broker path follows the [desktop usage contract](../clients/codex-desktop.md#optional-compatibility-runtime).
+The selected hostname controls the existing proxy lookup and verified TLS server name;
+request input cannot expand the fixed destination set. After CONNECT the paused outer stream resumes
 before TLS-over-TLS negotiation. Test fixture CA trust is confined to child processes or
 injected test socket options, never the user's OS trust store.
 `tests/lib/optional-desktop-upstream.test.ts` exercises the production dialer; `tests/clients/desktop-compatibility-relay.test.ts`
-preserves the real relay’s fixed-target and opaque upgrade contracts.
+preserves the real relay’s fixed-target and opaque upgrade contracts. The decoded usage path
+is covered by `tests/clients/desktop-compatibility-websocket.test.ts`, including ordered async
+rewrite, unrelated and oversized pass-through, cancellation, heartbeat and cleanup.
 
 ## Single-route opaque proxy transport
 

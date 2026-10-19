@@ -39,7 +39,33 @@ test("only the deliberate apply action carries account-wide consent", async () =
   await runCompatibilityAction("", { target: "runtime", action: "apply" }, new AbortController().signal);
   expect(bodies).toEqual([{ action: "start", confirmed: true }, { action: "apply", confirmed: true, accountWideConsent: true }]);
 });
-test("build assessment projection is strict, optional and never marks another version verified", () => {
+test("session activation carries the explicit lifetime and never silently falls back to a trial", async () => {
+  const bodies: unknown[] = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init!.body)));
+    return Response.json({ ok: false, error: "invalid_lifetime" }, { status: 400 });
+  }) as typeof fetch;
+  await expect(runCompatibilityAction("", { target: "runtime", action: "apply", lifetime: "runtime-session" }, new AbortController().signal)).rejects.toThrow("invalid_lifetime");
+  expect(bodies).toEqual([{ action: "apply", confirmed: true, accountWideConsent: true, lifetime: "runtime-session" }]);
+});
+test("runtime activation capabilities, lifetime and certificate deadline stay optional and strictly typed", () => {
+  const base = { supported: true, phase: "running", running: true };
+  const usage = { mode: "apply", phase: "session-awaiting-eligible-usage", outputs: 0, appCacheConfirmed: false };
+  expect(parseCompatibilityRuntime(base)).toEqual(base);
+  const status = { ...base, supportedActivationLifetimes: ["trial", "runtime-session"], safetyDeadline: 1770000000000,
+    usage: { ...usage, activationLifetime: "runtime-session" } };
+  expect(parseCompatibilityRuntime(status)).toEqual(status);
+  expect(parseCompatibilityRuntime({ ...base, supportedActivationLifetimes: ["trial"] }).supportedActivationLifetimes).toEqual(["trial"]);
+  for (const activationLifetime of ["trial", "runtime-session", null])
+    expect(parseCompatibilityRuntime({ ...base, usage: { ...usage, activationLifetime } }).usage?.activationLifetime).toBe(activationLifetime);
+  for (const supportedActivationLifetimes of [null, "runtime-session", ["permanent"], ["trial", "trial"], [true], ["trial", "runtime-session", "next"]])
+    expect(() => parseCompatibilityRuntime({ ...base, supportedActivationLifetimes })).toThrow("invalid_runtime_status");
+  for (const activationLifetime of ["permanent", true, ["runtime-session"]])
+    expect(() => parseCompatibilityRuntime({ ...base, usage: { ...usage, activationLifetime } })).toThrow("invalid_runtime_status");
+  for (const safetyDeadline of [null, "1770000000000", -1, 1.5, Infinity, 8.64e15 + 1])
+    expect(() => parseCompatibilityRuntime({ ...base, safetyDeadline })).toThrow("invalid_runtime_status");
+});
+test("legacy build assessment projection is strict, optional and requires the assessed version", () => {
   const base = { supported: true, phase: "off", running: false };
   expect(parseCompatibilityRuntime(base).buildAssessment).toBeUndefined();
   expect(parseCompatibilityRuntime({ ...base, buildAssessment: null }).buildAssessment).toBeNull();
@@ -48,8 +74,24 @@ test("build assessment projection is strict, optional and never marks another ve
   expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessed, observedVersion: "26.924.2738.0", verified: true } }).buildAssessment?.verified).toBe(true);
   for (const invalid of [{ ...assessed, verified: true }, { ...assessed, assessedVersion: "26.924" }, { ...assessed, observedVersion: "C:\\path" },
     { ...assessed, verified: "true" }, { ...assessed, completedAt: 1.5 }, { ...assessed, completedAt: Infinity },
-    { ...assessed, observedVersion: undefined }, "C:\\Program Files\\WindowsApps", 42])
+    { ...assessed, observedVersion: undefined }, { ...assessed, observedVersion: null, verified: true }, "C:\\Program Files\\WindowsApps", 42])
     expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: invalid })).toThrow("invalid_runtime_status");
+});
+test("package identity assessments retain diagnostic versions without claiming response or composer verification", () => {
+  const base = { supported: true, phase: "off", running: false };
+  const assessment = { assessedVersion: "26.924.2738.0", observedVersion: "26.1007.9446.0", verified: true,
+    completedAt: 1770000000000, verificationBasis: "package-identity" };
+  for (const observedVersion of [assessment.observedVersion, assessment.assessedVersion]) {
+    const expected = { ...assessment, observedVersion };
+    expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...expected, privatePath: "fixture-secret", composerRecoveryVerified: true } }).buildAssessment).toEqual(expected);
+  }
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessment, verified: false } }).buildAssessment?.verified).toBe(false);
+  expect(parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessment, observedVersion: null, verified: false } }).buildAssessment)
+    .toEqual({ ...assessment, observedVersion: null, verified: false });
+  expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessment, observedVersion: null } })).toThrow("invalid_runtime_status");
+  for (const verificationBasis of ["version", "package-identity-v2", "", null, true, ["package-identity"]])
+    expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessment, observedVersion: assessment.assessedVersion, verificationBasis } })).toThrow("invalid_runtime_status");
+  expect(() => parseCompatibilityRuntime({ ...base, buildAssessment: { ...assessment, observedVersion: "not-a-version" } })).toThrow("invalid_runtime_status");
 });
 test("every supported locale contains the complete compatibility consent namespace", () => {
   const keys = Object.keys(DICTS.en).filter(key => key.startsWith("desktopCompat."));

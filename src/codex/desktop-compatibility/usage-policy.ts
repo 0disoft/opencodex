@@ -3,7 +3,9 @@ export interface UsageRewriteContext {
   enabled: boolean;
   mode: 'observe' | 'apply';
   status: number;
-  pathname: string;
+  pathname?: string;
+  /** Push payloads omit fields retained by the receiving renderer's cache. */
+  snapshotKind?: 'complete' | 'partial-push';
   account: {
     id: string;
     userId: string;
@@ -18,7 +20,7 @@ function record(value: unknown): value is RecordValue {
 }
 
 /**
- * Transform only a complete, matched personal-account usage snapshot.
+ * Transform only a matched personal-account usage snapshot.
  * Account context must come from a trusted live integration; this module does not
  * discover it or prove provider isolation. Never persist the adjusted snapshot as
  * actual provider/account capacity. Unknown or protected states pass unchanged.
@@ -27,28 +29,37 @@ export function evaluateUsageRewrite(value: unknown, context: UsageRewriteContex
   const unchanged = (reason: string) => ({ value, changed: false, eligible: false, reason });
   if (!context.enabled) return unchanged('off');
   if (context.status !== 200) return unchanged('non-success-response');
-  if (!['/backend-api/wham/usage', '/backend-api/wham/usage/stream'].includes(context.pathname)) return unchanged('unowned-path');
+  const partial = context.snapshotKind === 'partial-push';
+  if (!partial && !['/backend-api/wham/usage', '/backend-api/wham/usage/stream',
+    '/backend-api/wham/usage/subscriptions'].includes(context.pathname ?? '')) return unchanged('unowned-path');
   const account = context.account;
   if (!account || !account.id || !account.userId || account.structure !== 'personal' || !['plus', 'pro'].includes(account.plan)) return unchanged('unsupported-account');
   if (!record(value) || value.account_id !== account.id || value.user_id !== account.userId || value.plan_type !== account.plan) return unchanged('identity-mismatch');
   const rate = value.rate_limit;
   if (!record(rate) || rate.allowed !== false || rate.limit_reached !== true) return unchanged('not-explicitly-exhausted');
   const spend = value.spend_control;
-  // Absence is unknown, not evidence that no protected spending restriction exists.
-  if (!record(spend) || spend.reached !== false) return unchanged('protected-or-unknown-spend');
+  // Full snapshots must establish the spending state. Push omissions do not
+  // authorize constructing or replacing the renderer's retained protection data.
+  if (!(partial && spend === undefined) && (!record(spend)
+    || (partial ? spend.reached != null && spend.reached !== false : spend.reached !== false))) return unchanged('protected-or-unknown-spend');
   const reason = value.rate_limit_reached_type;
   if (reason != null && (!record(reason) || reason.type !== 'rate_limit_reached')) return unchanged('protected-or-unknown-reason');
   const credits = value.credits;
-  if (!record(credits) || typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean') return unchanged('unknown-credit-schema');
-  if (credits.overage_limit_reached != null && credits.overage_limit_reached !== false) return unchanged('overage-restriction');
+  if (!(partial && credits === undefined) && (!record(credits)
+    || (partial ? credits.has_credits !== undefined && typeof credits.has_credits !== 'boolean'
+      || credits.unlimited !== undefined && typeof credits.unlimited !== 'boolean'
+      : typeof credits.has_credits !== 'boolean' || typeof credits.unlimited !== 'boolean'))) return unchanged('unknown-credit-schema');
+  if (record(credits) && credits.overage_limit_reached != null && credits.overage_limit_reached !== false) return unchanged('overage-restriction');
   // These entitlements already keep the native gate open. Rewriting the ordinary
   // rate limit would unnecessarily change the app's Reserve activation predicate.
-  if (credits.has_credits || credits.unlimited) return unchanged('credits-available');
+  if (record(credits) && (credits.has_credits || credits.unlimited)) return unchanged('credits-available');
   const upsell = value.rate_limit_upsell, additional = value.additional_rate_limits;
   if (upsell != null && !record(upsell)) return unchanged('unknown-reserve-schema');
   if (additional != null && (!Array.isArray(additional) || additional.some(limit => !record(limit)
     || limit.limit_name === 'gpt-reserve' && (!record(limit.rate_limit) || typeof limit.rate_limit.allowed !== 'boolean')))) return unchanged('unknown-reserve-schema');
-  if (record(upsell) && upsell.banner_type === 'luna_reserve' && Array.isArray(additional)
+  // A push can inherit a Reserve upsell from its renderer's prior cache. Any
+  // incoming Reserve allowance must stay intact without guessing that cache.
+  if ((partial || record(upsell) && upsell.banner_type === 'luna_reserve') && Array.isArray(additional)
     && additional.some(limit => record(limit) && limit.limit_name === 'gpt-reserve'
       && record(limit.rate_limit) && limit.rate_limit.allowed === true)) return unchanged('reserve-active');
   if (context.mode !== 'apply') return { value, changed: false, eligible: true, reason: 'observe-only' };

@@ -9,8 +9,9 @@ export function createUsageControlledFetch(controller: UsageRelayController, ups
     const pathname = new URL(input instanceof Request ? input.url : String(input)).pathname;
     const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
     const exchange = { pathname, method, status: upstream.status };
-    if (method !== 'GET' || upstream.status !== 200 || !upstream.body
-      || !['/backend-api/wham/usage', '/backend-api/wham/usage/stream'].includes(pathname)) return upstream;
+    const owned = method === 'GET' && ['/backend-api/wham/usage', '/backend-api/wham/usage/stream'].includes(pathname)
+      || method === 'POST' && pathname === '/backend-api/wham/usage/subscriptions';
+    if (!owned || upstream.status !== 200 || !upstream.body) return upstream;
     const contentType = upstream.headers.get('content-type') ?? '';
     const headers = new Headers(upstream.headers);
     const output = (body: BodyInit, transformed = false) => {

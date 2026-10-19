@@ -2,20 +2,24 @@ export type CertificateState = "missing" | "invalid" | "expired" | "renewal-requ
 export interface CompatibilityCertificate {
   supported: boolean; state: CertificateState; fingerprint?: string; expiresAt?: number; renewalDue: boolean; busy: string | null;
 }
+export type CompatibilityActivationLifetime = "trial" | "runtime-session";
 export interface CompatibilityRuntime {
   supported: boolean; phase: "off" | "starting" | "running" | "stopping" | "cleanup-required"; running: boolean;
+  supportedActivationLifetimes?: CompatibilityActivationLifetime[]; safetyDeadline?: number;
   contextFailure?: "build_unverified" | "native_routing_unverified" | null;
   buildAssessment?: CompatibilityBuildAssessment | null;
   usage?: { mode: "observe" | "apply"; phase: string; outputs: number; appCacheConfirmed: false;
+    activationLifetime?: CompatibilityActivationLifetime | null;
     observation?: { jsonSnapshots: number; streamSnapshots: number; validatedActiveStreams: number; lastSnapshotAt: number | null;
       sourceProcessVerified: false; composerRecoveryVerified: false } };
 }
-export interface CompatibilityBuildAssessment { assessedVersion: string; observedVersion: string | null; verified: boolean; completedAt: number }
+export interface CompatibilityBuildAssessment { assessedVersion: string; observedVersion: string | null; verified: boolean; completedAt: number; verificationBasis?: "package-identity" }
 export interface CompatibilitySnapshot { certificate: CompatibilityCertificate; runtime: CompatibilityRuntime }
 export interface CompatibilityStartupSettings { startOnProxyStart: boolean; revision: string }
 export type CompatibilityAction =
   | { target: "certificate"; action: "prepare" | "trust" | "remove-trust" | "renew"; fingerprint?: string }
-  | { target: "runtime"; action: "start" | "stop" | "observe" | "apply" | "launch" };
+  | { target: "runtime"; action: "apply"; lifetime?: CompatibilityActivationLifetime }
+  | { target: "runtime"; action: "start" | "stop" | "observe" | "launch" };
 const ROOT = "/api/codex/desktop-compatibility/";
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 export class CompatibilityApiError extends Error {
@@ -57,6 +61,16 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
     || typeof value.phase !== "string" || !["off", "starting", "running", "stopping", "cleanup-required"].includes(value.phase)
     || value.phase === "running" && !value.running || (value.phase === "off" || value.phase === "starting") && value.running) throw new CompatibilityApiError("invalid_runtime_status");
   const runtime: CompatibilityRuntime = { supported: value.supported, running: value.running, phase: value.phase as CompatibilityRuntime["phase"] };
+  if (value.supportedActivationLifetimes !== undefined) {
+    if (!Array.isArray(value.supportedActivationLifetimes) || value.supportedActivationLifetimes.length > 2
+      || new Set(value.supportedActivationLifetimes).size !== value.supportedActivationLifetimes.length
+      || value.supportedActivationLifetimes.some(lifetime => lifetime !== "trial" && lifetime !== "runtime-session")) throw new CompatibilityApiError("invalid_runtime_status");
+    runtime.supportedActivationLifetimes = [...value.supportedActivationLifetimes] as CompatibilityActivationLifetime[];
+  }
+  if (value.safetyDeadline !== undefined) {
+    if (!Number.isSafeInteger(value.safetyDeadline) || Number(value.safetyDeadline) < 0 || Number(value.safetyDeadline) > 8.64e15) throw new CompatibilityApiError("invalid_runtime_status");
+    runtime.safetyDeadline = value.safetyDeadline as number;
+  }
   if (value.contextFailure !== undefined) {
     if (value.contextFailure !== null && value.contextFailure !== "build_unverified" && value.contextFailure !== "native_routing_unverified") throw new CompatibilityApiError("invalid_runtime_status");
     runtime.contextFailure = value.contextFailure;
@@ -68,12 +82,15 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
       const version = (candidate: unknown) => typeof candidate === "string" && /^\d{1,5}(\.\d{1,5}){3}$/.test(candidate);
       if (!object(assessment) || !version(assessment.assessedVersion)
         || !(assessment.observedVersion === null || version(assessment.observedVersion))
+        || assessment.verificationBasis !== undefined && assessment.verificationBasis !== "package-identity"
         || typeof assessment.verified !== "boolean"
         || !Number.isSafeInteger(assessment.completedAt) || Number(assessment.completedAt) < 0 || Number(assessment.completedAt) > 8.64e15
-        || assessment.verified === true && assessment.observedVersion !== assessment.assessedVersion) throw new CompatibilityApiError("invalid_runtime_status");
+        || assessment.verified === true && (assessment.observedVersion === null
+          || assessment.verificationBasis === undefined && assessment.observedVersion !== assessment.assessedVersion)) throw new CompatibilityApiError("invalid_runtime_status");
       runtime.buildAssessment = { assessedVersion: assessment.assessedVersion as string,
         observedVersion: assessment.observedVersion === null ? null : assessment.observedVersion as string,
-        verified: assessment.verified as boolean, completedAt: assessment.completedAt as number };
+        verified: assessment.verified as boolean, completedAt: assessment.completedAt as number,
+        ...(assessment.verificationBasis === undefined ? {} : { verificationBasis: assessment.verificationBasis as "package-identity" }) };
     }
   }
   if (value.usage !== undefined) {
@@ -81,6 +98,10 @@ export function parseCompatibilityRuntime(value: unknown): CompatibilityRuntime 
       || !/^[a-z-]{1,80}$/.test(value.usage.phase) || !Number.isSafeInteger(value.usage.outputs) || Number(value.usage.outputs) < 0
       || value.usage.appCacheConfirmed !== false) throw new CompatibilityApiError("invalid_runtime_status");
     runtime.usage = { mode: value.usage.mode as "observe" | "apply", phase: value.usage.phase, outputs: value.usage.outputs as number, appCacheConfirmed: false };
+    if (value.usage.activationLifetime !== undefined) {
+      if (value.usage.activationLifetime !== null && value.usage.activationLifetime !== "trial" && value.usage.activationLifetime !== "runtime-session") throw new CompatibilityApiError("invalid_runtime_status");
+      runtime.usage.activationLifetime = value.usage.activationLifetime;
+    }
     if (value.usage.observation !== undefined) {
       const observed = value.usage.observation;
       if (!object(observed) || ![observed.jsonSnapshots, observed.streamSnapshots, observed.validatedActiveStreams].every(n => Number.isSafeInteger(n) && Number(n) >= 0)
@@ -112,6 +133,7 @@ export async function runCompatibilityAction(apiBase: string, action: Compatibil
   await reply(await fetch(apiBase + ROOT + action.target, { method: "POST", signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ action: action.action, confirmed: true,
       ...(action.target === "certificate" && action.action !== "prepare" ? { fingerprint: action.fingerprint } : {}),
-      ...(action.target === "runtime" && action.action === "apply" ? { accountWideConsent: true } : {}) }),
+      ...(action.target === "runtime" && action.action === "apply" ? { accountWideConsent: true,
+        ...(action.lifetime === undefined ? {} : { lifetime: action.lifetime }) } : {}) }),
   }));
 }

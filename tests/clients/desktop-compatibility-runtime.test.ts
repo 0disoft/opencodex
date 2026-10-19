@@ -1,6 +1,6 @@
 import { UsageActivation } from "../../src/codex/desktop-compatibility/usage-activation";
 import { evaluateUsageRewrite } from "../../src/codex/desktop-compatibility/usage-policy";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
 import { createDesktopCompatibilityRuntime, type DesktopRuntimeIo } from "../../src/codex/desktop-compatibility/runtime";
@@ -173,16 +173,17 @@ describe("bounded compatibility usage controller", () => {
   });
 });
 
-function fixture(trusted = true, connectionStore?: DesktopConnectionStore, buildProbe?: () => boolean | Promise<boolean>,
+function fixture(trusted = true, connectionStore?: DesktopConnectionStore, buildProbe?: DesktopRuntimeIo['buildSupported'],
   probeFactory?: DesktopRuntimeIo["testOnlyBuildProbe"]) {
   const authority = createCertificateAuthority({ commonName: "runtime-fixture", validityDays: 1 });
   const cert = new X509Certificate(authority.certPem);
-  const identity = { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account };
+  let currentIdentity: UsageIdentity | null = account, identityReads = 0;
+  const identity = { readCurrentIdentity: async () => (++identityReads, currentIdentity), verifyFreshIdentity: async () => currentIdentity };
   const calls: { path: string; method: string; bytes: number; cookie: string | null }[] = [];
   let streamSequence = 0, cancelledStreams = 0, buildSupported = true, routingSupported = true;
   let connection: DesktopConnectionIdentity | null = null;
   const runtimeIo: DesktopRuntimeIo = { platform: "win32", testOnly: true, identity,
-    ...(probeFactory ? { testOnlyBuildProbe: probeFactory } : { buildSupported: () => buildProbe ? buildProbe() : buildSupported }),
+    ...(probeFactory ? { testOnlyBuildProbe: probeFactory } : { buildSupported: (signal: AbortSignal) => buildProbe ? buildProbe(signal) : buildSupported }),
     routingSupported: () => routingSupported,
     connectionStore: connectionStore ?? { read: () => connection, publish: async value => (connection ??= value) },
     loadAuthority: async () => ({ authority, commonName: "runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""),
@@ -202,13 +203,84 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
   };
   const runtime = createDesktopCompatibilityRuntime(runtimeIo);
   stopped.push(() => runtime.stop());
-  return { runtime, runtimeIo, authority, calls, cancelledStreams: () => cancelledStreams, setBuildSupported: (value: boolean) => { buildSupported = value; }, setRoutingSupported: (value: boolean) => { routingSupported = value; } };
+  return { runtime, runtimeIo, authority, calls, cancelledStreams: () => cancelledStreams, identityReads: () => identityReads,
+    setIdentity: (value: UsageIdentity | null) => { currentIdentity = value; },
+    setBuildSupported: (value: boolean) => { buildSupported = value; }, setRoutingSupported: (value: boolean) => { routingSupported = value; } };
+}
+
+async function sessionReader(io: ReturnType<typeof fixture>) {
+  await io.runtime.start();
+  const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+  const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+    proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+  }).then(res => res.json());
+  await read(); expect((await io.runtime.apply(true, "runtime-session")).accepted).toBe(true);
+  return read;
+}
+
+function suspendRuntimeTimer() {
+  const original = globalThis.setInterval;
+  return spyOn(globalThis, "setInterval").mockImplementation(((...args: Parameters<typeof setInterval>) => {
+    const timer = original(...args); clearInterval(timer); return timer;
+  }) as typeof setInterval);
 }
 
 describe("optional native compatibility runtime", () => {
   const assessedInstall = (): DesktopAppInstall => ({ id: DESKTOP_COMPATIBILITY_ASSESSED_FAMILY,
     root: `C:\\Program Files\\WindowsApps\\OpenAI.Codex_${DESKTOP_COMPATIBILITY_ASSESSED_VERSION}_x64__2p2nqsd0c76g0`,
     relaunch: `${DESKTOP_COMPATIBILITY_ASSESSED_FAMILY}!App` });
+
+  for (const seam of ["injected", "installed-probe"] as const) test(`${seam} package proof is leased for outputs but start, apply, launch, TTL and clock rollback check fresh`, async () => {
+    let checks = 0, now = Date.now();
+    const io = seam === "injected" ? fixture(true, undefined, () => (++checks, true))
+      : fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => (++checks, assessedInstall())));
+    const clock = spyOn(Date, "now").mockImplementation(() => now), timer = suspendRuntimeTimer();
+    try {
+      const read = await sessionReader(io); expect(checks).toBe(2);
+      const identityReads = io.identityReads();
+      for (let index = 0; index < 5; index++) expect((await read()).rate_limit.allowed).toBe(true);
+      expect(checks).toBe(2); expect(io.identityReads()).toBeGreaterThan(identityReads);
+      expect((await io.runtime.launch()).status).toBe("refused"); expect(checks).toBe(3);
+      now += 59999; expect((await read()).rate_limit.allowed).toBe(true); expect(checks).toBe(3);
+      now++; expect((await read()).rate_limit.allowed).toBe(true); expect(checks).toBe(4);
+      now--; expect((await read()).rate_limit.allowed).toBe(true); expect(checks).toBe(5);
+      io.setIdentity({ ...account, credentialGeneration: "replacement" });
+      expect(await read()).toEqual(usage); expect(checks).toBe(5);
+      expect(io.runtime.status().usage).toMatchObject({ mode: "observe", activationLifetime: null });
+    } finally { await io.runtime.stop(); timer.mockRestore(); clock.mockRestore(); }
+  });
+
+  for (const failure of ["false", "throw"] as const) test(`a fresh ${failure} result cannot reuse an old positive lease and concurrent output joins the injected check`, async () => {
+    let checks = 0, hold = false, entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const io = fixture(true, undefined, () => {
+      checks++; if (!hold) return true;
+      entered(); return new Promise<boolean>((resolve, reject) => { release = () => failure === "false" ? resolve(false) : reject(new Error("fixture failure")); });
+    });
+    const read = await sessionReader(io); hold = true;
+    const applying = io.runtime.apply(true, "runtime-session").catch(error => error as Error);
+    await waiting; let settled = false;
+    const output = read().then(value => { settled = true; return value; });
+    await Bun.sleep(10); expect(settled).toBe(false); expect(checks).toBe(3);
+    release(); expect(await applying).toBeInstanceOf(Error); expect(await output).toEqual(usage);
+    expect(io.runtime.status().usage).toMatchObject({ mode: "observe", activationLifetime: null });
+    hold = false; await read(); expect((await io.runtime.apply(true, "runtime-session")).accepted).toBe(true);
+    expect(checks).toBe(4); expect((await read()).rate_limit.allowed).toBe(true); expect(checks).toBe(4);
+  });
+
+  test("stop aborts and drains the injected fresh check and a new start cannot inherit its lease", async () => {
+    let checks = 0, hold = false, aborted = false, entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const io = fixture(true, undefined, signal => {
+      checks++; if (!hold) return true;
+      entered(); return new Promise<boolean>(resolve => { signal.addEventListener("abort", () => { aborted = true; resolve(true); }, { once: true }); });
+    });
+    await sessionReader(io); hold = true;
+    const applying = io.runtime.apply(true, "runtime-session").catch(error => error as Error);
+    await waiting; await io.runtime.stop(); expect(aborted).toBe(true); expect(await applying).toBeInstanceOf(Error);
+    hold = false; const read = await sessionReader(io);
+    expect(checks).toBe(5); expect((await read()).rate_limit.allowed).toBe(true); expect(checks).toBe(5);
+  });
 
   test("stop/start retains a completed assessment through routing failure and replacement probe pending", async () => {
     let created = 0, queries = 0, hold = false, entered!: () => void, release!: (install: DesktopAppInstall | null) => void;
@@ -236,10 +308,54 @@ describe("optional native compatibility runtime", () => {
     expect(io.runtime.status().buildAssessment).toEqual(completed);
     io.runtime.status().buildAssessment!.verified = false;
     expect(io.runtime.status().buildAssessment).toEqual(completed);
-    release({ ...assessedInstall(), root: assessedInstall().root.replace(DESKTOP_COMPATIBILITY_ASSESSED_VERSION, "99.1.1.0") });
+    release({ ...assessedInstall(), relaunch: `${DESKTOP_COMPATIBILITY_ASSESSED_FAMILY}!Foreign` });
     await expect(starting).rejects.toThrow("build_unverified");
-    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: "99.1.1.0", verified: false });
+    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: null, verified: false });
     expect(io.runtime.status().phase).toBe("off");
+  });
+
+  test("identified future packages can start and runtime-session consent never survives stop/start", async () => {
+    const io = fixture(true, undefined, undefined, () => createInstalledBuildProbe(async () => ({ ...assessedInstall(),
+      root: assessedInstall().root.replace(DESKTOP_COMPATIBILITY_ASSESSED_VERSION, "99.1.1.0") })));
+    await io.runtime.start();
+    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: "99.1.1.0", verified: true, verificationBasis: "package-identity" });
+    expect(io.runtime.status().supportedActivationLifetimes).toEqual(["trial", "runtime-session"]);
+    const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+    await fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+    expect((await io.runtime.apply(true, "runtime-session")).accepted).toBe(true);
+    expect(io.runtime.status().usage?.activationLifetime).toBe("runtime-session");
+    await io.runtime.stop(); await io.runtime.start();
+    expect(io.runtime.status().usage).toMatchObject({ mode: "observe", activationLifetime: null });
+  });
+
+  test("session idle probes stay at sixty seconds and routing failure revokes consent without another response", async () => {
+    let checks = 0, now = Date.now();
+    const io = fixture(true, undefined, () => (++checks, true));
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await io.runtime.start();
+      const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+      await fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+      expect((await io.runtime.apply(true, "runtime-session")).accepted).toBe(true);
+      const afterActivation = checks;
+      now += 10001; await Bun.sleep(1100); expect(checks).toBe(afterActivation);
+      now += 50000; await Bun.sleep(1100); expect(checks).toBe(afterActivation + 1);
+      io.setRoutingSupported(false); now += 60001; await Bun.sleep(1100);
+      expect(io.runtime.status().usage).toMatchObject({ mode: "observe", activationLifetime: null });
+    } finally { await io.runtime.stop(); clock.mockRestore(); }
+  });
+
+  test("CA safety deadline revokes a runtime session even when no new usage arrives", async () => {
+    let now = Date.now(); const io = fixture();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await io.runtime.start();
+      const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+      await fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
+      expect((await io.runtime.apply(true, "runtime-session")).accepted).toBe(true);
+      now = io.runtime.status().safetyDeadline!; await Bun.sleep(1100);
+      expect(io.runtime.status().usage).toMatchObject({ mode: "observe", activationLifetime: null });
+    } finally { await io.runtime.stop(); clock.mockRestore(); }
   });
 
   test("completed failures replace prior observations and runtime stop abort preserves the latest completion", async () => {
@@ -330,7 +446,7 @@ describe("optional native compatibility runtime", () => {
     const io = fixture();
     await io.runtime.start(); expect(io.runtime.status().phase).toBe("running"); expect(io.runtime.status().usage?.mode).toBe("observe");
     const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text());
-    expect(pac).toContain("; DIRECT"); expect(pac).toContain('host.toLowerCase() === "chatgpt.com"');
+    expect(pac).toContain("; DIRECT");
     const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
     const send = (path: string, init: RequestInit = {}) => fetch("https://chatgpt.com" + path, {
       ...init, proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
@@ -371,14 +487,16 @@ describe("optional native compatibility runtime", () => {
     io.setBuildSupported(true); await io.runtime.start(); io.setBuildSupported(false);
     await expect(io.runtime.apply(true)).rejects.toThrow("build_unverified"); expect(io.runtime.status().usage?.mode).toBe("observe");
   });
-  test("an active trial disarms on an app update or routing change before returning the next usage response", async () => {
+  test("an active trial disarms on failed package lease renewal or an immediate routing change", async () => {
     for (const failure of ["build", "routing"] as const) {
       const io = fixture(); await io.runtime.start();
       const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text()), port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
       const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", { proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem } }).then(res => res.json());
       await read(); expect((await io.runtime.apply(true)).accepted).toBe(true); expect((await read()).rate_limit.allowed).toBe(true);
       if (failure === "build") io.setBuildSupported(false); else io.setRoutingSupported(false);
-      expect(await read()).toEqual(usage); expect(io.runtime.status().usage?.mode).toBe("observe");
+      const clock = failure === "build" ? spyOn(Date, "now").mockReturnValue(Date.now() + 60000) : null;
+      try { expect(await read()).toEqual(usage); } finally { clock?.mockRestore(); }
+      expect(io.runtime.status().usage?.mode).toBe("observe");
       expect(io.runtime.status().contextFailure).toBe(failure === "build" ? "build_unverified" : "native_routing_unverified");
       await io.runtime.stop();
     }

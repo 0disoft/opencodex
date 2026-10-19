@@ -3,10 +3,17 @@ export class UsageRefreshRegistry {
   private entries = new Set<{ binding: string | null; tainted: boolean; close: () => Promise<void> }>();
   register(method: string, pathname: string, close: () => Promise<void>) {
     if (method !== 'GET' || pathname !== '/backend-api/wham/usage/stream') return null;
+    return this.add(close);
+  }
+  registerPush(pathname: string, close: () => Promise<void>) {
+    if (!/^\/backend-api\/pages\/realtime-broker\/u[0-9]+\/ws$/.test(pathname)) return null;
+    return this.add(close);
+  }
+  private add(close: () => Promise<void>) {
     const entry = { binding: null as string | null, tainted: false, close };
     this.entries.add(entry);
     return {
-      // Caller must invoke only after validating a complete upstream snapshot's identity.
+      // Caller must invoke only after validating an original usage snapshot's identity.
       // A connection that changes account identity never becomes a refresh target again.
       bind: (verifiedBinding: string) => {
         if (!verifiedBinding || entry.tainted || !this.entries.has(entry)) return false;

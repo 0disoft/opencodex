@@ -5,6 +5,7 @@ import { resolveTrustedWindowsPowerShellExe } from "../../lib/windows-elevation"
 import { parseWindowsDesktopPackage, WINDOWS_PACKAGE_DISCOVERY_SCRIPT } from "../desktop-app/windows";
 import type { DesktopAppInstall } from "../desktop-app/types";
 
+/** Legacy reference build for diagnostics; admission is based on package identity. */
 export const DESKTOP_COMPATIBILITY_ASSESSED_VERSION = "26.924.2738.0";
 export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0";
 
@@ -12,6 +13,8 @@ export const DESKTOP_COMPATIBILITY_ASSESSED_FAMILY = "OpenAI.Codex_2p2nqsd0c76g0
 export interface DesktopBuildAssessment {
   assessedVersion: string;
   observedVersion: string | null;
+  /** Identifies the check performed, including failed checks; not composer/E2E verification. */
+  verificationBasis: "package-identity";
   verified: boolean;
   completedAt: number;
 }
@@ -22,7 +25,7 @@ function assessInstalledPackage(install: DesktopAppInstall): { observedVersion: 
   const identified = install.id === DESKTOP_COMPATIBILITY_ASSESSED_FAMILY && install.relaunch === `${install.id}!App`
     && !!parts && `OpenAI.Codex_${parts[4]}` === install.id;
   const observedVersion = identified ? parts![1] : null;
-  return { observedVersion, verified: identified && observedVersion === DESKTOP_COMPATIBILITY_ASSESSED_VERSION };
+  return { observedVersion, verified: identified };
 }
 
 /** Resolve only after the exact asynchronous child has closed, including abort/timeout. */
@@ -47,7 +50,8 @@ export function createInstalledBuildProbe(query: (signal: AbortSignal) => Promis
   let lastResult: DesktopBuildAssessment | null = null;
   const record = (install: DesktopAppInstall | null) => {
     const outcome = install ? assessInstalledPackage(install) : { observedVersion: null, verified: false };
-    lastResult = { assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, ...outcome, completedAt: Date.now() };
+    lastResult = { assessedVersion: DESKTOP_COMPATIBILITY_ASSESSED_VERSION, ...outcome,
+      verificationBasis: "package-identity", completedAt: Date.now() };
     return outcome.verified;
   };
   return {

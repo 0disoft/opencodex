@@ -268,6 +268,35 @@ project's signed updater public key before installation. On macOS, in-app update
 The release manifest is generated only when the updater key secret is configured and then
 requires all four platforms to be signed.
 
+## Windows Codex composer compatibility
+
+The experimental **Codex Set → Desktop compatibility** integration addresses the native
+composer's main-account usage gate when OpenCodex can route a request through its account
+pool or another provider. It preserves the Codex login. It does not grant additional quota
+or change the account/provider limits applied to the actual request.
+
+An official Windows package is identified independently of its version. Updating Codex
+does not by itself disable compatibility. Supported usage responses are checked individually;
+unknown formats remain unchanged and can still require a compatibility update.
+
+Prepare and trust the dedicated certificate, start observation, then launch Codex through
+the compatibility controls after closing the app yourself. Ordinary launches may omit this
+connection. Automatic observation at proxy startup never activates correction.
+
+After a fresh eligible exhaustion is observed, choose either the existing three-minute
+trial or **Use until the compatibility service stops**. Each requires explicit consent to
+account-wide UI correction; the relay cannot identify the selected model of each conversation.
+The service-session choice keeps that consent through recovery and later exhaustion. It
+ends on withdrawal, service stop, native account or routing changes, failed identity checks,
+or the certificate safety deadline. Restarting the service returns to observation.
+
+Only the two usage gate booleans may change. Usage numbers, reset times, credits, spending
+restrictions and unrelated messages remain original. GET/SSE, subscription responses and
+the known usage WebSocket topic are covered. Initial activation and withdrawal may reconnect
+a bound shared usage socket; other topics resume through the client's normal reconnect flow.
+Response counters show what the relay observed or changed, not proof that the native cache
+updated or a message was submitted. Verify the original composer and the connections you use.
+
 ## Widget
 
 The macOS app includes the OpenCodex WidgetKit extension. See the
