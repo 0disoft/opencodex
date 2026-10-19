@@ -47,7 +47,7 @@ export function relayUsageWebSocket(request: IncomingMessage, client: Duplex, he
     let upstream: WebSocket | undefined, downstream: WebSocket | undefined, transport: TLSSocket | undefined;
     let response: IncomingMessage | undefined, registration: Registration = null;
     let dialing: Promise<void> | undefined;
-    let finished = false, closing = false, rejected = false;
+    let finished = false, closing = false, rejected = false, policyFailed = false;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let toClient = Promise.resolve(), toUpstream = Promise.resolve();
     const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, clientTracking: false, autoPong: false,
@@ -129,8 +129,13 @@ export function relayUsageWebSocket(request: IncomingMessage, client: Duplex, he
         if (finished || closing || destination.readyState !== WebSocket.OPEN) return;
         const original = bytes(data);
         let corrected: string | null = null;
-        if (rewrite && !binary && options.controller) {
-          try { corrected = await options.controller.rewritePushMessage(original.toString("utf8"), registration); } catch {}
+        if (rewrite && !binary && !policyFailed && options.controller) {
+          try { corrected = await options.controller.rewritePushMessage(original.toString("utf8"), registration); }
+          catch {
+            // A policy failure makes this connection observe-only: preserve the
+            // original bytes and prevent later messages from rebinding refresh.
+            policyFailed = true; registration?.exclude();
+          }
         }
         if (finished || closing || destination.readyState !== WebSocket.OPEN) return;
         await new Promise<void>((sent, failed) => destination.send(corrected ?? original, { binary }, error => error ? failed(error) : sent()));

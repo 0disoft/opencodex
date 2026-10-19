@@ -8,6 +8,7 @@ import { createCertificateAuthority, issueServerLeaf } from "../../src/claude/in
 import { startDesktopRelay } from "../../src/codex/desktop-compatibility/relay-listener";
 import { isUsageWebSocketPath, USAGE_WEBSOCKET_MAX_MESSAGE_BYTES, type UsagePushController } from "../../src/codex/desktop-compatibility/usage-websocket-relay";
 import { UsageRelayController } from "../../src/codex/desktop-compatibility/usage-controller";
+import { UsageRefreshRegistry } from "../../src/codex/desktop-compatibility/usage-refresh";
 import { listenFixture } from "../helpers/desktop-egress-fixture";
 
 const broker = "/backend-api/pages/realtime-broker/u123/ws";
@@ -151,12 +152,49 @@ test("a shared-topic message larger than the rewrite ceiling remains byte-identi
   } finally { await f.close(); }
 }, 10000);
 
-test("closing during an awaited rewrite releases registration and never sends its late result", async () => {
+test("a policy exception preserves original bytes, excludes refresh and disables only its connection", async () => {
+  const networkHandles = () => (process as typeof process & { _getActiveHandles(): { constructor: { name: string } }[] })._getActiveHandles()
+    .filter(handle => ![process.stdin, process.stdout, process.stderr].includes(handle as never)
+      && ["Server", "Socket", "TLSSocket"].includes(handle.constructor.name));
+  const before = new Set(networkHandles());
+  const registry = new UsageRefreshRegistry(), calls: string[] = [];
+  const original = ' \n{"fixture":"policy-error","text":"한글"}\r\n';
+  const owner: UsagePushController = {
+    registerPushStream: (path, close) => registry.registerPush(path, close),
+    async rewritePushMessage(text, stream) {
+      calls.push(text); stream?.bind("fixture");
+      if (text === original) throw new Error("fixture-policy-failure");
+      return text.toUpperCase();
+    },
+  };
+  const f = await fixture(owner);
+  try {
+    const failed = f.connect(), raw = collect(failed);
+    await until(() => f.peers.length === 1 && failed.readyState === WebSocket.OPEN);
+    f.peers[0]!.send(original); await until(() => raw.length === 1);
+    expect(raw[0]).toEqual({ data: Buffer.from(original), binary: false }); expect(registry.boundSize).toBe(0);
+    f.peers[0]!.send("would-rewrite"); f.peers[0]!.send(Buffer.from([0, 255, 42])); await until(() => raw.length === 3);
+    expect(raw.slice(1)).toEqual([{ data: Buffer.from("would-rewrite"), binary: false }, { data: Buffer.from([0, 255, 42]), binary: true }]);
+    expect(calls).toEqual([original]); expect(registry.boundSize).toBe(0);
+    const healthy = f.connect(), corrected = collect(healthy);
+    await until(() => f.peers.length === 2 && healthy.readyState === WebSocket.OPEN);
+    f.peers[1]!.send("healthy"); await until(() => corrected.length === 1);
+    expect(corrected[0]).toEqual({ data: Buffer.from("HEALTHY"), binary: false }); expect(registry.boundSize).toBe(1);
+    expect(await registry.refresh("fixture")).toEqual({ requested: 1, closed: 1, failed: 0 });
+    await until(() => healthy.readyState === WebSocket.CLOSED); expect(failed.readyState).toBe(WebSocket.OPEN);
+  } finally { await f.close(); }
+  expect(registry.size).toBe(0);
+  await until(() => networkHandles().every(handle => before.has(handle)));
+  expect(networkHandles().filter(handle => !before.has(handle))).toHaveLength(0);
+}, 10000);
+
+for (const outcome of ["resolve", "reject"] as const) test(`closing during an awaited rewrite releases registration and never sends its late ${outcome}`, async () => {
   let unlock!: () => void, entered = false, releases = 0;
   const gate = new Promise<void>(resolve => unlock = resolve);
   const owner: UsagePushController = {
     registerPushStream: () => ({ bind: () => true, exclude() {}, release() { releases++; } }),
-    async rewritePushMessage() { entered = true; await gate; return "late-correction"; },
+    async rewritePushMessage() { entered = true; await gate;
+      if (outcome === "reject") throw new Error("fixture-late-policy-failure"); return "late-correction"; },
   };
   const f = await fixture(owner);
   try {
