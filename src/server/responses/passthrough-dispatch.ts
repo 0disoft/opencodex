@@ -1,4 +1,4 @@
-import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
+import { recoverAutoPausedAccount, rotatePassthroughKeyOn429 } from "./passthrough-key-rotation";
 import { adoptCodexWsStage, capturePassthroughAffinity } from "./passthrough-observations";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { requestPacingOverloadResponse } from "./pacing-overload";
@@ -1606,6 +1606,7 @@ export async function preparePassthroughExchange(
         return transportFailureResponse(err);
       }
     }
+    const keyRotation = await rotatePassthroughKeyOn429({ config, route, parsed, response: upstreamResponse, adapterName: transportState.adapter.name, budgetSpent: () => sendBudgetExhausted(transientSendAttempts()), refetch: () => rebuildAndRefetch("key-429") }); if (keyRotation) { if ("failed" in keyRotation) return keyRotation.failed; upstreamResponse = keyRotation; continue passthroughRecovery; }
     const captureAffinityResponse = (
       response: Response,
       captureAuthCtx: CodexAuthContext = admissionState.authCtx,
