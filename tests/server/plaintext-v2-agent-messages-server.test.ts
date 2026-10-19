@@ -181,7 +181,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     expect(JSON.stringify(replay)).not.toContain("start_delegated_task");
   });
 
-  test("rewrites the canonical request and restores every SSE response snapshot", async () => {
+  test.each(["legacy-flag", "v2-plaintext"] as const)("rewrites the canonical request and restores every SSE response snapshot (%s)", async selection => {
     takeInheritedSpendHome();
     const sentBodies: string[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -209,7 +209,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
 
     const response = await handleResponses(
       collaborationRequest(),
-      config(true),
+      selection === "v2-plaintext" ? { ...config(false), multiAgentMode: selection } : config(true),
       { model: "", provider: "" },
     );
     const clientBody = await response.text();
