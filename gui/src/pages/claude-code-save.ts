@@ -139,8 +139,23 @@ export function acknowledgeSave(current: ClaudeCodeEditState | null, submitted: 
   const baseline = savedCopy(current.baseline.state, submitted);
   const rows = baseline.rows;
   const unchanged = claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted);
-  // Untouched since submission: show what was stored. Edited meanwhile: keep the edits, dirty.
-  return { draft: unchanged ? { state: { ...current.draft.state,
-    visionSidecar: baseline.state.visionSidecar, webSearchSidecar: baseline.state.webSearchSidecar,
-  }, rows } : current.draft, baseline, adoptNextRead: unchanged };
+  if (unchanged) {
+    // Untouched since submission: show what was stored.
+    return { draft: { state: { ...current.draft.state,
+      visionSidecar: baseline.state.visionSidecar, webSearchSidecar: baseline.state.webSearchSidecar,
+    }, rows }, baseline, adoptNextRead: true };
+  }
+  /*
+   * Edited while the PUT was out: keep the edits, dirty. A sidecar is still confirmed —
+   * ending its draft-only activation provenance — when its serialized shape is exactly what
+   * the Save stored; one edited after submission keeps its marker until its own save lands.
+   */
+  let draft = current.draft;
+  for (const key of ["visionSidecar", "webSearchSidecar"] as const) {
+    const stored = JSON.stringify(serializeSidecarOverride(submitted.state[key]));
+    if (JSON.stringify(serializeSidecarOverride(draft.state[key])) !== stored) continue;
+    const confirmed = confirmSidecarOverride(draft.state[key]);
+    if (confirmed !== draft.state[key]) draft = { ...draft, state: { ...draft.state, [key]: confirmed } };
+  }
+  return { draft, baseline, adoptNextRead: false };
 }

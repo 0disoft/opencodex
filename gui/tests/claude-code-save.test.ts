@@ -11,6 +11,7 @@ import {
 } from "../src/pages/claude-code-save";
 import { normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "../src/pages/claude-code-types";
 import { applySidecarBackendChange, applySidecarModelChange, applySidecarPoolChange } from "../src/pages/claude-code-sidecar";
+import type { SidecarOverride } from "../src/pages/claude-manual-env";
 
 const STATE = {
   enabled: true,
@@ -168,4 +169,50 @@ test("context accounting is saved, dirties the draft, and older states read as t
   expect(normalizeContextAccounting(undefined)).toBe("1m");
   expect(normalizeContextAccounting("bogus")).toBe("1m");
   expect(normalizeContextAccounting("200k")).toBe("200k");
+});
+
+const sidecarTyped = (disabled: SidecarOverride | undefined, model: string) =>
+  applySidecarBackendChange(applySidecarModelChange(disabled, model), "openai");
+
+test("a stored sidecar is confirmed even when an unrelated field was edited while the PUT was out", () => {
+  const base = editable({ visionSidecar: { enabled: false }, webSearchSidecar: { enabled: false } });
+  const vision = sidecarTyped(base.state.visionSidecar, "gpt-5.6-luna");
+  const web = sidecarTyped(base.state.webSearchSidecar, "claude-haiku-4-5");
+  const submitted = editable({ visionSidecar: vision, webSearchSidecar: web });
+  // Only an unrelated field changed mid-flight; the sidecars the server stored are unchanged.
+  const pending = editable({ visionSidecar: vision, webSearchSidecar: web, authMode: "proxy" });
+  const acked = acknowledgeSave({ draft: pending, baseline: base, adoptNextRead: false, savePending: true }, submitted)!;
+  expect(acked.adoptNextRead).toBe(false);
+  expect(acked.draft.state.authMode).toBe("proxy");
+  // Confirmed enabled=true: clearing the model afterwards keeps the saved activation.
+  expect(applySidecarModelChange(acked.draft.state.visionSidecar, "").enabled).toBe(true);
+  expect(applySidecarModelChange(acked.draft.state.webSearchSidecar, "").enabled).toBe(true);
+});
+
+test("a sidecar edited after submission keeps its disabled-start marker until its own save", () => {
+  const base = editable({ visionSidecar: { enabled: false } });
+  const typed = sidecarTyped(base.state.visionSidecar, "gpt-5.6-luna");
+  const submitted = editable({ visionSidecar: typed });
+  // Cleared mid-flight: the serialized shape no longer matches what the PUT stored.
+  const cleared = applySidecarModelChange(typed, "");
+  const acked = acknowledgeSave({ draft: editable({ visionSidecar: cleared }), baseline: base, adoptNextRead: false }, submitted)!;
+  // The post-submit edit itself is preserved, not overwritten by the confirmed copy.
+  expect(acked.draft.state.visionSidecar).toBe(cleared);
+  expect(isClaudeCodeDraftDirty(acked.draft, acked.baseline)).toBe(true);
+  // Retyping and clearing again still returns to disabled: this draft never reached the server.
+  expect(applySidecarModelChange(applySidecarModelChange(acked.draft.state.visionSidecar, "gpt-5.6-luna"), "").enabled).toBe(false);
+});
+
+test("stored and post-submit-edited sidecars are confirmed independently", () => {
+  const base = editable({ visionSidecar: { enabled: false }, webSearchSidecar: { enabled: false } });
+  const vision = sidecarTyped(base.state.visionSidecar, "gpt-5.6-luna");
+  const web = sidecarTyped(base.state.webSearchSidecar, "claude-haiku-4-5");
+  const submitted = editable({ visionSidecar: vision, webSearchSidecar: web });
+  // Vision's model changed mid-flight (still enabled), webSearch did not: each is decided on its own.
+  const visionRetyped = applySidecarModelChange(vision, "gpt-5.6-astra");
+  const acked = acknowledgeSave({ draft: editable({ visionSidecar: visionRetyped, webSearchSidecar: web }), baseline: base, adoptNextRead: false }, submitted)!;
+  expect(applySidecarModelChange(acked.draft.state.webSearchSidecar, "").enabled).toBe(true);
+  // Vision stays enabled in the draft, so only its retained marker turns a clear back into disabled.
+  expect(acked.draft.state.visionSidecar).toBe(visionRetyped);
+  expect(applySidecarModelChange(acked.draft.state.visionSidecar, "").enabled).toBe(false);
 });

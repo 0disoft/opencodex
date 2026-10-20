@@ -12,9 +12,9 @@ export type SidecarSelectValue = "inherit" | "auto" | VisionOverrideBackend;
 const modelEditStartedDisabled = Symbol("modelEditStartedDisabled");
 type SidecarDraft = SidecarOverride & { [modelEditStartedDisabled]?: true };
 
-/** A confirmed save starts a new editing baseline. */
+/** A confirmed save starts a new editing baseline; drafts without a pending marker keep their identity. */
 export function confirmSidecarOverride(override?: SidecarOverride): SidecarOverride | undefined {
-  if (!override) return undefined;
+  if (!override || !(override as SidecarDraft)[modelEditStartedDisabled]) return override;
   const next = { ...override } as SidecarDraft;
   delete next[modelEditStartedDisabled];
   return next;
