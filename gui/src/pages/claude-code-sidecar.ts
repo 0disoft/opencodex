@@ -1,7 +1,7 @@
 /**
  * Claude Code sidecar override helpers — keep Auto as an in-memory draft so
  * users can enter a model before persist. Empty Auto persists only when it
- * carries an explicit pool edit.
+ * carries an explicit activation state or pool edit.
  */
 
 import type { AnthropicInstanceId, SidecarOverride, VisionOverrideBackend } from "./claude-manual-env";
@@ -9,8 +9,9 @@ import type { AnthropicInstanceId, SidecarOverride, VisionOverrideBackend } from
 export type SidecarSelectValue = "inherit" | "auto" | VisionOverrideBackend;
 
 export type PersistedSidecarOverride = {
-  backend: VisionOverrideBackend | null;
-  model: string;
+  enabled?: boolean;
+  backend?: VisionOverrideBackend | null;
+  model?: string;
   anthropicInstance?: AnthropicInstanceId | null;
 };
 
@@ -38,28 +39,29 @@ export function applySidecarPoolChange(override: SidecarOverride | undefined, va
   return next;
 }
 
-/** Model typing updates the draft in place; empty Auto stays selectable until save. */
+/** An explicit model edit can re-enable a disabled draft; clearing its target keeps it off. */
 export function applySidecarModelChange(
   override: SidecarOverride | undefined,
   model: string,
 ): SidecarOverride {
-  return { ...override, model };
+  return { ...override, model, ...(override?.enabled !== undefined ? { enabled: model.trim().length > 0 } : {}) };
 }
 
 /**
  * Persist shape for PUT /api/claude-code.
- * Empty Auto drafts ({ backend: undefined } / blank model) become null → reload as Inherit.
+ * Empty Auto drafts become null → Inherit unless an explicit activation state must survive.
  */
 export function serializeSidecarOverride(
   override?: SidecarOverride,
 ): PersistedSidecarOverride | null {
   if (!override) return null;
   const trimmed = (override.model ?? "").trim();
+  const activation = override.enabled === undefined ? {} : { enabled: override.enabled };
   if (!override.backend) {
-    if (!trimmed && override.anthropicInstance === undefined) return null;
-    return { backend: null, model: trimmed,
+    if (!trimmed && override.anthropicInstance === undefined) return override.enabled === undefined ? null : { ...activation, backend: null, model: "" };
+    return { ...activation, backend: null, model: trimmed,
       ...(override.anthropicInstance !== undefined ? { anthropicInstance: override.anthropicInstance } : {}) };
   }
-  return { backend: override.backend, model: trimmed,
+  return { ...activation, backend: override.backend, model: trimmed,
     ...(override.anthropicInstance !== undefined ? { anthropicInstance: override.anthropicInstance } : {}) };
 }

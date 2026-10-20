@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../../src/config";
+import { getConfigPath, saveConfig } from "../../src/config";
 import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
+import { settleBackgroundWork } from "../../src/lib/background-work";
 import { routeModel } from "../../src/router";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -13,7 +14,7 @@ import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const GLM = "zai-glm-5-3";
 const NATIVE = "mistral-large-4-0";
@@ -25,6 +26,11 @@ let home = "";
 let codexHome: IsolatedCodexHome;
 let sidecarCalls: Array<Record<string, unknown>>;
 let mainCalls: Array<Record<string, unknown>>;
+let proxy: ReturnType<typeof startServer> | undefined;
+let requestFlight: Promise<{ status: number; body: string }> | undefined;
+let cleanupFlight: Promise<void> | undefined;
+let sidecarWait: Promise<void> | undefined;
+let sidecarEntered: (() => void) | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -35,6 +41,10 @@ beforeEach(() => {
   resetVisionDescriptionCache();
   sidecarCalls = [];
   mainCalls = [];
+  proxy = undefined;
+  requestFlight = cleanupFlight = undefined;
+  sidecarWait = undefined;
+  sidecarEntered = undefined;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin === "https://api.mistral.ai") {
@@ -53,6 +63,8 @@ beforeEach(() => {
     }
     if (url.origin === "https://chatgpt.com" && url.pathname === "/backend-api/codex/responses") {
       sidecarCalls.push(JSON.parse(String(init?.body)));
+      sidecarEntered?.();
+      await sidecarWait;
       return new Response(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: CAPTION })}\n\ndata: [DONE]\n\n`, {
         headers: { "content-type": "text/event-stream" },
       });
@@ -62,15 +74,37 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  clearModelCache();
-  resetVisionDescriptionCache();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  codexHome.restore();
-  removeTreeWithRetry(home);
-});
+function finishFixture(): Promise<void> {
+  return cleanupFlight ??= (async () => {
+    // Background settlement alone does not own HTTP requests. Close ingress gracefully
+    // and await the complete response body before any fetch mock or home is restored.
+    await proxy?.stop(false);
+    await requestFlight?.catch(() => undefined);
+    await removeTreeAfterBackgroundWork(home);
+    clearModelCache();
+    resetVisionDescriptionCache();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome.restore();
+    globalThis.fetch = originalFetch;
+  })();
+}
+
+afterEach(finishFixture, 60_000);
+
+function imageRequest(model: string): Promise<{ status: number; body: string }> {
+  return requestFlight = (async () => {
+    const token = fakeChatGptJwt({ chatgpt_account_id: "acct-mistral-vision-fixture" });
+    const response = await fetch(new URL("/v1/responses", proxy!.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "chatgpt-account-id": "acct-mistral-vision-fixture" },
+      body: JSON.stringify({ model, stream: false, input: [{ role: "user", content: [
+        { type: "input_text", text: "Describe this image." }, { type: "input_image", image_url: IMAGE },
+      ] }] }),
+    });
+    return { status: response.status, body: await response.text() };
+  })();
+}
 
 /** Build an isolated Mistral configuration with a caller-authenticated OpenAI vision helper. */
 function configuration(): OcxConfig {
@@ -132,43 +166,60 @@ describe("Mistral GLM vision sidecar defaults", () => {
     }
   });
 
-  test.each(["sidecar", "disabled", "native"] as const)("image request uses the %s path", async mode => {
+  test.each(["sidecar", "disabled", "native", "retired-disabled", "retired-enabled", "retired-implicit"] as const)("image request uses the %s path", async mode => {
     const config = configuration();
     if (mode === "disabled") config.visionSidecar = { enabled: false };
     saveConfig(config);
-    const server = startServer(0);
-    try {
-      const token = fakeChatGptJwt({ chatgpt_account_id: "acct-mistral-vision-fixture" });
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json", authorization: `Bearer ${token}`,
-          "chatgpt-account-id": "acct-mistral-vision-fixture",
-        },
-        body: JSON.stringify({ model: `mistral/${mode === "native" ? NATIVE : GLM}`, stream: false,
-          input: [{ role: "user", content: [
-            { type: "input_text", text: "Describe this image." }, { type: "input_image", image_url: IMAGE },
-          ] }],
-        }),
-      });
-      expect(response.status).toBe(200);
-      await response.text();
-      expect(mainCalls).toHaveLength(1);
-      expect(sidecarCalls).toHaveLength(mode === "sidecar" ? 1 : 0);
-      const forwarded = JSON.stringify(mainCalls[0]);
-      if (mode === "sidecar") {
-        expect(sidecarCalls[0]!.model).toBe("gpt-5.6-luna");
-        expect(JSON.stringify(sidecarCalls[0])).toContain(IMAGE);
-        expect(forwarded).toContain(CAPTION);
-      }
-      if (mode === "native") expect(forwarded).toContain(IMAGE);
-      else {
-        expect(forwarded).not.toContain(IMAGE);
-        expect(forwarded).not.toContain("image_url");
-      }
-      if (mode === "disabled") expect(forwarded).toContain("[image omitted:");
-    } finally {
-      await server.stop(true);
+    if (mode.startsWith("retired-")) {
+      // Exercise file loading before real request admission, with a healthy helper available.
+      writeFileSync(getConfigPath(), JSON.stringify({ ...config, visionSidecar: {
+        backend: "routed", model: "opencode-free/old",
+        ...(mode === "retired-implicit" ? {} : { enabled: mode === "retired-enabled" }),
+      } }));
     }
-  });
+    proxy = startServer(0);
+    const response = await imageRequest(`mistral/${mode === "native" ? NATIVE : GLM}`);
+    expect(response.status).toBe(200);
+    expect(mainCalls).toHaveLength(1);
+    expect(sidecarCalls).toHaveLength(mode === "sidecar" ? 1 : 0);
+    const forwarded = JSON.stringify(mainCalls[0]);
+    if (mode === "sidecar") {
+      expect(sidecarCalls[0]!.model).toBe("gpt-5.6-luna");
+      expect(JSON.stringify(sidecarCalls[0])).toContain(IMAGE);
+      expect(forwarded).toContain(CAPTION);
+    }
+    if (mode === "native") expect(forwarded).toContain(IMAGE);
+    else {
+      expect(forwarded).not.toContain(IMAGE);
+      expect(forwarded).not.toContain("image_url");
+    }
+    if (mode === "disabled" || mode.startsWith("retired-")) expect(forwarded).toContain("[image omitted:");
+  }, 60_000);
+
+  test("fixture retains its fetch mock until an in-flight request and server have finished", async () => {
+    let release!: () => void;
+    sidecarWait = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { sidecarEntered = resolve; });
+    saveConfig(configuration());
+    proxy = startServer(0);
+    const guardedFetch = globalThis.fetch;
+    let requestFinished = false;
+    const response = imageRequest(`mistral/${GLM}`).then(value => { requestFinished = true; return value; });
+    try {
+      await entered;
+      expect((await settleBackgroundWork({ timeoutMs: 5_000 })).settled).toBe(true);
+      expect(requestFinished).toBe(false);
+      let cleanupFinished = false;
+      const cleanup = finishFixture().then(() => { cleanupFinished = true; });
+      await Promise.resolve();
+      expect(cleanupFinished).toBe(false);
+      expect(globalThis.fetch).toBe(guardedFetch);
+      release();
+      await cleanup;
+      expect((await response).status).toBe(200);
+      expect(requestFinished).toBe(true);
+      expect(globalThis.fetch).toBe(originalFetch);
+      expect(sidecarCalls).toHaveLength(1);
+    } finally { release(); }
+  }, 60_000);
 });
