@@ -10,6 +10,7 @@ import {
   type ClaudeCodeEditable,
 } from "../src/pages/claude-code-save";
 import { normalizeContextAccounting, type ClaudeCodeState, type MapRow } from "../src/pages/claude-code-types";
+import { applySidecarBackendChange, applySidecarModelChange, applySidecarPoolChange } from "../src/pages/claude-code-sidecar";
 
 const STATE = {
   enabled: true,
@@ -37,6 +38,26 @@ const STATE = {
 
 const row = (from: string, to: string, id = `${from}->${to}`): MapRow => ({ id, from, to });
 const editable = (state: Partial<ClaudeCodeState> = {}, rows: MapRow[] = []): ClaudeCodeEditable => ({ state: { ...STATE, ...state }, rows });
+
+test("model-edit activation provenance survives drafts but ends at a confirmed save or revert", () => {
+  const base = editable({ visionSidecar: { enabled: false } });
+  const typed = applySidecarModelChange(base.state.visionSidecar, "gpt-5.6-luna");
+  const submitted = editable({ visionSidecar: applySidecarPoolChange(applySidecarBackendChange(typed, "openai"), "") });
+  const body = claudeCodeSaveBody(submitted.state, []);
+  expect(body.visionSidecar).toEqual({ enabled: true, backend: "openai", model: "gpt-5.6-luna" });
+  expect(Object.getOwnPropertySymbols(body.visionSidecar!)).toHaveLength(0);
+  expect(JSON.parse(JSON.stringify(body)).visionSidecar).toEqual(body.visionSidecar);
+  const polled = applyServerRead({ draft: submitted, baseline: base, adoptNextRead: false }, base);
+  expect(applySidecarModelChange(polled.draft.state.visionSidecar, "").enabled).toBe(false);
+  expect(revertEditable(submitted.state, base.state).visionSidecar).toEqual({ enabled: false });
+  const acked = acknowledgeSave({ draft: submitted, baseline: base, adoptNextRead: false }, submitted)!;
+  // Even if the acknowledging GET fails, the successful PUT is the new activation baseline.
+  expect(applySidecarModelChange(acked.draft.state.visionSidecar, "").enabled).toBe(true);
+  const reverted = revertEditable(base.state, acked.baseline.state);
+  expect(applySidecarModelChange(reverted.visionSidecar, "").enabled).toBe(true);
+  const fresh = editable({ visionSidecar: { enabled: true, backend: "openai", model: "gpt-5.6-luna" } });
+  expect(applySidecarModelChange(applyServerRead(acked, fresh).draft.state.visionSidecar, "").enabled).toBe(true);
+});
 
 test("tier defaults participate in save, polling preservation and revert", () => {
   const tiers = { opus: "combo/opus", sonnet: "combo/sonnet", haiku: "combo/haiku" };

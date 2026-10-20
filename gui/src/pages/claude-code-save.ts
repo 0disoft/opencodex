@@ -1,4 +1,4 @@
-import { serializeSidecarOverride } from "./claude-code-sidecar";
+import { confirmSidecarOverride, serializeSidecarOverride } from "./claude-code-sidecar";
 import type { ClaudeCodeState, MapRow } from "./claude-code-types";
 import { newClientId } from "./claude-code-types";
 
@@ -118,7 +118,10 @@ export function applyServerRead(current: ClaudeCodeEditState | null, next: Claud
  */
 export function savedCopy(serverState: ClaudeCodeState, submitted: ClaudeCodeEditable): ClaudeCodeEditable {
   return {
-    state: { ...serverState, ...pickEditable(submitted.state) },
+    state: { ...serverState, ...pickEditable(submitted.state),
+      visionSidecar: confirmSidecarOverride(submitted.state.visionSidecar),
+      webSearchSidecar: confirmSidecarOverride(submitted.state.webSearchSidecar),
+    },
     rows: Object.entries(normalizedModelMap(submitted.rows)).map(([from, to]) => ({ id: newClientId(), from, to })),
   };
 }
@@ -137,5 +140,7 @@ export function acknowledgeSave(current: ClaudeCodeEditState | null, submitted: 
   const rows = baseline.rows;
   const unchanged = claudeCodeDraftKey(current.draft) === claudeCodeDraftKey(submitted);
   // Untouched since submission: show what was stored. Edited meanwhile: keep the edits, dirty.
-  return { draft: unchanged ? { state: current.draft.state, rows } : current.draft, baseline, adoptNextRead: unchanged };
+  return { draft: unchanged ? { state: { ...current.draft.state,
+    visionSidecar: baseline.state.visionSidecar, webSearchSidecar: baseline.state.webSearchSidecar,
+  }, rows } : current.draft, baseline, adoptNextRead: unchanged };
 }

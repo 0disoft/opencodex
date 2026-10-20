@@ -108,6 +108,13 @@ test.each([false, true])("normal Claude management saves retain retired disable 
     checkPlans(live, true);
     expect((await request(live, "/api/claude-code", { visionSidecar: { enabled: false }, webSearchSidecar: { enabled: false } })).status).toBe(200);
     const disabled = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+    const abandoned = claudeCodeSaveBody({ ...disabled,
+      visionSidecar: applySidecarModelChange(applySidecarModelChange(disabled.visionSidecar, "gpt-5.6-luna"), ""),
+      webSearchSidecar: applySidecarModelChange(applySidecarModelChange(disabled.webSearchSidecar, "gpt-5.6-luna"), ""),
+    }, []);
+    expect((await request(live, "/api/claude-code", abandoned)).status).toBe(200);
+    live = loadConfig();
+    checkPlans(live, false);
     const beforeInvalidEdit = readFileSync(getConfigPath(), "utf8");
     for (const field of ["visionSidecar", "webSearchSidecar"] as const) {
       const invalid = claudeCodeSaveBody({ ...disabled, [field]: applySidecarModelChange(disabled[field],
@@ -162,7 +169,8 @@ test.each(["backend", "model", "both"] as const)("Claude Auto edits clear persis
       const body = claudeCodeSaveBody({ ...state, [field]: draft, fastMode: true }, []);
       expect((await request(live, "/api/claude-code", body)).status).toBe(200);
       const reloaded = loadConfig();
-      expect(reloaded.claudeCode?.[field]).toEqual({ enabled: false });
+      expect(reloaded.claudeCode?.[field]).toEqual({ enabled: stored.enabled });
+      expect(Object.getOwnPropertySymbols(body[field]!)).toHaveLength(0);
       expect(reloaded.visionSidecar).toEqual(global);
       expect(reloaded.webSearchSidecar).toEqual(global);
       const after = await (await request(reloaded, "/api/claude-code")).json() as ClaudeCodeState;

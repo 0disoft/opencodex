@@ -56,6 +56,18 @@ test("Switching back to Inherit clears the override", () => {
   expect(serializeSidecarOverride(undefined)).toBeNull();
 });
 
+test("clearing a model preserves an already-enabled or implicit override", () => {
+  for (const enabled of [true, undefined]) {
+    const initial = { enabled, backend: "openai" as const, model: "gpt-5.6-luna" };
+    const cleared = applySidecarModelChange(initial, "   ");
+    expect(serializeSidecarOverride(cleared)).toEqual({
+      ...(enabled === undefined ? {} : { enabled }), backend: "openai", model: "",
+    });
+    expect(serializeSidecarOverride(applySidecarModelChange(applySidecarModelChange(initial, "replacement"), "")))
+      .toEqual(serializeSidecarOverride(cleared));
+  }
+});
+
 test("Switching Auto ↔ OpenAI ↔ Anthropic preserves the model", () => {
   let override = applySidecarModelChange(
     applySidecarBackendChange(undefined, "auto"),

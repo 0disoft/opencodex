@@ -8,6 +8,18 @@ import type { AnthropicInstanceId, SidecarOverride, VisionOverrideBackend } from
 
 export type SidecarSelectValue = "inherit" | "auto" | VisionOverrideBackend;
 
+// Draft-only provenance follows object spreads but cannot enter JSON or the PUT shape.
+const modelEditStartedDisabled = Symbol("modelEditStartedDisabled");
+type SidecarDraft = SidecarOverride & { [modelEditStartedDisabled]?: true };
+
+/** A confirmed save starts a new editing baseline. */
+export function confirmSidecarOverride(override?: SidecarOverride): SidecarOverride | undefined {
+  if (!override) return undefined;
+  const next = { ...override } as SidecarDraft;
+  delete next[modelEditStartedDisabled];
+  return next;
+}
+
 export type PersistedSidecarOverride = {
   enabled?: boolean;
   backend?: VisionOverrideBackend | null;
@@ -39,12 +51,15 @@ export function applySidecarPoolChange(override: SidecarOverride | undefined, va
   return next;
 }
 
-/** An explicit model edit can re-enable a disabled draft; clearing its target keeps it off. */
+/** Model edits preserve activation unless this draft started disabled. */
 export function applySidecarModelChange(
   override: SidecarOverride | undefined,
   model: string,
 ): SidecarOverride {
-  return { ...override, model, ...(override?.enabled !== undefined ? { enabled: model.trim().length > 0 } : {}) };
+  const startedDisabled = override?.enabled === false || (override as SidecarDraft | undefined)?.[modelEditStartedDisabled];
+  return { ...override, model, ...(startedDisabled ? {
+    enabled: model.trim().length > 0, [modelEditStartedDisabled]: true as const,
+  } : {}) };
 }
 
 /**
