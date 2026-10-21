@@ -1,3 +1,5 @@
+import { codexWsUpgradeReasoningHeaders } from "./codex-ws-metadata";
+
 export const MAX_CODEX_WS_SESSION_EXCHANGES = 32;
 
 /** Owns one physical socket; request listeners belong to the exchange, not this object. */
@@ -6,17 +8,21 @@ export class CodexWsSession {
   opened = false;
   closed = false;
   busy = false;
+  private upgradeHeaders = new Headers();
   private owner?: (reason: Error) => void;
   private readonly completedIds = new Set<string>();
 
   constructor(url: string, headers: Record<string, string>, readonly retainable = false,
     private readonly changed: () => void = () => {}, proxy?: string) {
     this.socket = new WebSocket(url, { headers, ...(proxy ? { proxy } : {}) } as unknown as string[]);
+    this.socket.addEventListener("handshake", this.onHandshake);
     this.socket.addEventListener("open", this.onOpen);
     this.socket.addEventListener("message", this.onIdleMessage);
     this.socket.addEventListener("close", this.onClose);
     this.socket.addEventListener("error", this.onIdleError);
   }
+
+  reasoningUpgradeHeaders(): Headers { return new Headers(this.upgradeHeaders); }
 
   get reused(): boolean { return this.completedIds.size > 0; }
   hasCompleted(id: string): boolean { return this.completedIds.has(id); }
@@ -71,7 +77,15 @@ export class CodexWsSession {
     }
   }
 
-  private onOpen = (): void => { this.opened = true; };
+  private onHandshake = (event: Event): void => {
+    if (this.opened || this.closed) return;
+    this.upgradeHeaders = codexWsUpgradeReasoningHeaders((event as MessageEvent<unknown>).data);
+    this.socket.removeEventListener("handshake", this.onHandshake);
+  };
+  private onOpen = (): void => {
+    this.opened = true;
+    this.socket.removeEventListener("handshake", this.onHandshake);
+  };
   private onIdleMessage = (): void => {
     if (!this.busy) this.dispose(new Error("codex websocket received unsolicited idle data"));
   };
@@ -85,6 +99,8 @@ export class CodexWsSession {
     // The active exchange's close listener retains pre-send fallback semantics.
   };
   private detach(): void {
+    this.upgradeHeaders = new Headers();
+    this.socket.removeEventListener("handshake", this.onHandshake);
     this.socket.removeEventListener("open", this.onOpen);
     this.socket.removeEventListener("message", this.onIdleMessage);
     this.socket.removeEventListener("close", this.onClose);

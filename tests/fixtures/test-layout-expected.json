@@ -1326,7 +1326,7 @@
   "ws-steering-completion.test.ts": "responses",
   "ws-steering-smoke.test.ts": "responses",
   "ws-steering-stability.test.ts": "responses",
-  "ws-upstream-reuse.test.ts": "responses",
+  "ws-upgrade-reasoning-header.test.ts": "responses", "ws-upstream-reuse.test.ts": "responses",
   "codex-ws-pool-contention.test.ts": "responses",
   "ws-upstream-socks5.test.ts": "responses",
   "ws-upstream.test.ts": "responses",

@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "transports/codex-ws-metadata.md",
+      "tier": 3,
+      "title": "Codex WebSocket upgrade metadata",
+      "scope": "Bounded actual upgrade reasoning signals on the WS-to-HTTP/SSE path.",
+      "documents": ["src/server/"]
+    },
+    {
       "path": "providers/generic-account-pool.md",
       "tier": 4,
       "title": "Generic OAuth Account Pool",

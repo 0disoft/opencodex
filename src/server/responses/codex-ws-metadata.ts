@@ -80,6 +80,28 @@ function assertMetadataBounds(headers: Headers): void {
   }
 }
 
+/** Bun's optional handshake event describes a connection, not a later turn's quota or request ID. */
+export function codexWsUpgradeReasoningHeaders(data: unknown): Headers {
+  const empty = new Headers();
+  if (!record(data) || data.statusCode !== 101 || !Array.isArray(data.rawHeaders)) return empty;
+  const raw = data.rawHeaders;
+  if (raw.length % 2 !== 0 || raw.length > CODEX_WS_METADATA_MAX_HEADERS * 2) return empty;
+  let bytes = 0;
+  let reasoning: string | undefined;
+  for (let i = 0; i < raw.length; i += 2) {
+    const name: unknown = raw[i], value: unknown = raw[i + 1];
+    if (typeof name !== "string" || typeof value !== "string") return empty;
+    bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
+    if (bytes > CODEX_WS_METADATA_MAX_BYTES) return empty;
+    if (name.toLowerCase() !== "x-reasoning-included") continue;
+    // An ambiguous/malformed optional signal is omitted; it cannot authorize a retry.
+    if (reasoning !== undefined || /[\r\n\0]/.test(value)
+      || Buffer.byteLength(value) > CODEX_WS_METADATA_MAX_VALUE_BYTES) return empty;
+    reasoning = value;
+  }
+  return responseHeaders(reasoning === undefined ? {} : { "x-reasoning-included": reasoning });
+}
+
 /** One exchange's metadata. The Response owns its final snapshot, not a global history ledger. */
 export class CodexWsMetadata {
   private headers = new Headers();

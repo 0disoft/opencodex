@@ -441,6 +441,13 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (settledPreOpen) return;
       clearTimeout(upgradeTimer);
       opened = true;
+      // Capture the real 101 signal before send/first-frame commit. Only this connection-level
+      // flag survives socket reuse; current-turn metadata still overrides it in the existing owner.
+      const upgradeHeaders = session.reasoningUpgradeHeaders();
+      if (metadata && upgradeHeaders.has("x-reasoning-included")) {
+        const seed = { type: "codex.response.metadata", headers: Object.fromEntries(upgradeHeaders) };
+        metadata.consume(seed, Buffer.byteLength(JSON.stringify(seed)));
+      }
       try {
         beforeDispatch?.(new Headers(headers));
       } catch (error) {

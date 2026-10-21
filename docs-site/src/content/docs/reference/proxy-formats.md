@@ -471,6 +471,15 @@ request-log owner, or to count_tokens. Streaming headers identify the turn's eve
 history row; they do not attest that final usage has already been saved. Old transcripts
 without a shared key remain unlinked; timestamp or token similarity is not an exact join.
 
+When the canonical ChatGPT upstream uses WebSocket transport, an actual
+`x-reasoning-included` header on its successful upgrade is preserved on the
+HTTP/SSE response. Prelude response metadata can override it; metadata received
+after the first Responses event stays in the stream and cannot rewrite HTTP
+headers already committed. Missing signals remain absent. This preserves upstream
+metadata; it does not synthesize reasoning usage or establish why a client compacted
+early. The client-facing WebSocket upgrade below uses a separate lifecycle and
+cannot receive headers discovered later on an upstream connection.
+
 ### WebSocket upgrade on the same path
 
 When `websockets` is enabled, a client may upgrade `/v1/responses` instead of opening an HTTP POST.

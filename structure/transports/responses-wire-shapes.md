@@ -468,8 +468,8 @@ Canonical WS quota and response metadata preceding the first Responses event
 are projected into bounded, allowlisted HTTP headers before the response is
 committed. Later quota observations update only the captured serving account;
 they cannot retroactively change HTTP headers already sent to the client.
-Control frames remain bounded, and provider credential/cookie headers are not
-forwarded. Once a WS create may have been sent, a missing prelude, overflow or
+Control frames remain bounded; [upgrade reasoning metadata](codex-ws-metadata.md)
+uses the same allowlist, excluding provider credentials and cookies. Once a WS create may have been sent, a missing prelude, overflow or
 disconnect settles as a non-replayable gateway status before the first Responses
 event, or as an errored SSE body after it, rather than as a retryable fetch
 failure, so HTTP fallback cannot duplicate that inference. The one exception is a
