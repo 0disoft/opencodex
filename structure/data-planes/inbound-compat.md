@@ -482,7 +482,9 @@ projection as a `reasoning` input item emitted immediately before its assistant
 message, matching the parser's buffer-and-prepend adjacency. Only representable
 plaintext crosses: no signature, encrypted payload or provider item id is
 reconstructed, because those attest to content this proxy never received. Opaque
-reasoning replay across a Chat boundary remains unimplemented by design.
+reasoning replay across a Chat boundary has exactly one exception: Anthropic thinking
+signatures carried in `reasoning_details` (#7429), documented in
+[chat-reasoning-details.md](chat-reasoning-details.md).
 `presence_penalty` and `frequency_penalty` are carried too; per-model
 `noPenaltyModels` opt-outs still apply at the adapter.
 
