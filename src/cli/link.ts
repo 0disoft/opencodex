@@ -5,6 +5,7 @@ import { projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import { runLinkEnrollment } from "./link-enrollment";
+import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
 import { isLinkPort } from "../link/ports";
@@ -33,8 +34,10 @@ export const LINK_USAGE = `Usage:
   ocx link status [--json]
   ocx link revoke --link-id <id> [--force --yes] [--json]
   ocx link reconnect --link-id <id> [--json]
+  ocx link cleanup [--link-id <id>] [--json]
 
-Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.`;
+Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
+Cleanup finds Windows Children and explains how to move them to Hub mode; it changes nothing.`;
 
 type LinkState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 type ListenerState = "off" | "listening" | "failed";
@@ -66,7 +69,7 @@ export interface LinkIssuePayload {
   listenerPort: number;
 }
 
-export interface LinkCliDeps extends RuntimeApiDeps {
+export interface LinkCliDeps extends RuntimeApiDeps, Omit<LinkCleanupDeps, "readStore"> {
   /** Test seam can shorten, never extend, the whole enrollment deadline. */
   enrollmentTimeoutMs?: number;
   choosePort?: () => Promise<number>;
@@ -333,7 +336,8 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "status") await runStatus(args, deps);
     else if (command === "revoke") await runRevoke(args, deps);
     else if (command === "reconnect") await runReconnect(args, deps);
-    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect", LINK_USAGE);
+    else if (command === "cleanup") await runLinkCleanup(args, deps, LINK_USAGE);
+    else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect, cleanup", LINK_USAGE);
   });
 }
 
