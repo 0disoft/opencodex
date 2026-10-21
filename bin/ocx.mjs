@@ -39,6 +39,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
+import { scopeTranspilerCacheToRuntime } from "../src/lib/bun-transpiler-cache-scope.mjs";
 import { findDesktopCli, findPathBun } from "../src/lib/bun-path-runtime.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
@@ -1070,6 +1071,15 @@ function findBunBinary(bunDir) {
   return null;
 }
 
+function bundledBunVersion(bunDir) {
+  try {
+    const version = JSON.parse(readFileSync(join(bunDir, "package.json"), "utf8")).version;
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
 function fail(msg) {
   const reinstall = installMethod === "pnpm"
     ? "pnpm add -g --allow-build=bun @bitkyc08/opencodex"
@@ -1106,7 +1116,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
   } catch { /* Missing dependency can still fall back to a validated PATH Bun. */ }
 
   let bin = bunDir ? findBunBinary(bunDir) : null;
-  if (bin) return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
@@ -1115,7 +1125,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
-  if (bin) return { path: bin, source: "bundled" };
+  if (bin) return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };
 
   // Reached only when the bundled runtime is unusable. The two probes start the candidate Bun
   // cold, and on Windows a first run of a copied bun.exe is often held by an on-access scan for
@@ -1123,7 +1133,7 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
   const pathBun = findPathBun({ pinnedVersion: pinnedBunVersion(launcherPath), deadlineMs: PATH_BUN_PROBE_BUDGET_MS });
   if (pathBun) {
     console.error(`opencodex: using PATH Bun ${pathBun.version}.`);
-    return { path: pathBun.path, source: "process" };
+    return { path: pathBun.path, source: "process", version: pathBun.version };
   }
   if (allowMissing) return null;
   fail(bunDir ? "Bun binary missing after install attempt." : "the `bun` dependency is not installed.");
@@ -1311,7 +1321,8 @@ const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, 
   // the long-running Bun child, and closing that window kills the proxy (#1236).
   windowsHide: true,
   env: {
-    ...inheritedEnv,
+    // A cache shared with another Bun version (the CI test runner's) is evicted on every start.
+    ...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),
     [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
     [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
