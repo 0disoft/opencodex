@@ -225,7 +225,10 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the provider list as JSON."},{"name":"--jsonl","value":"boolean","summary":"Emit one configured provider per JSON line."}],
     mutates: false,
     json: "envelope",
-    details: ["Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive."],
+    details: [
+      "Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.",
+      "Each configured row carries active: false while this device is linked to a Home (a Remote Link Child or a Hub-mode client), whose providers serve instead; true when the row serves. Credential values are never printed.",
+    ],
     usage: "ocx provider list [--json|--jsonl]",
   },
   {
