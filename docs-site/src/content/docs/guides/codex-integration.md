@@ -31,7 +31,24 @@ selected stored account is cooling down and no eligible stored alternative or re
 available. This also covers a new request blocked before sending, following the same caller
 validation used after an upstream rejection. Existing model-permission and main-account policy
 checks still apply. The fallback preserves the stored account's cooldown and does not persist the
-caller credential as the Pool selection. An exact account binding remains bound to that account.
+caller credential as the Pool selection. An exact account binding remains bound to that account. A manual Pool
+pin is a preference, not an exact account binding: it can still use this fallback. Use an
+account-qualified model when a request must remain on one account. Pausing the observed native
+main blocks fallback for its matching caller credential; it does not identify or pause unrelated
+caller-owned logins.
+
+Adding or reauthenticating a pool account rejects a duplicate of the native main login with
+`Account is already configured as the native Codex main account.` The check compares ChatGPT
+account ID, personal/workspace subscription bucket, and email; a missing email does not prove
+a different identity. Different workspaces, distinct workspace members, and separate personal
+and workspace subscriptions remain supported. A failed usage lookup does not discard the
+subscription plan carried by the login token.
+
+Existing duplicates remain stored but cannot be selected as a second Pool account. The account
+list exposes `selectionExcludedReason: "duplicate_main"` and an actionable `selectionExcludedAction`. Use native main explicitly,
+or sign native Codex into a different account before reusing the stored entry. Detection follows
+the latest owned native-login observation, including a later native relogin; passive account
+listing and caller-owned requests do not open native credentials to refresh that observation.
 
 ## Config injection
 
@@ -124,6 +141,17 @@ existing `openai` provider; preserve its account mode and other settings. Omit t
 to restore the default upstream WebSocket selection. This setting does not change the
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
+
+**Reasoning usage metadata (pending next release).** For HTTP/SSE clients on the canonical
+ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
+connection-response header when the Bun runtime exposes it, including on a reused connection.
+This tells Codex that the server's reported usage already includes earlier reasoning. Metadata
+sent before the first Responses event takes precedence; later metadata remains in the stream
+but cannot change headers already committed. The relay does not invent this signal or alter
+usage numbers. A missing upstream signal and Codex's own accounting lifecycle remain separate
+issues, so this change alone does not establish that early compaction is fixed. Client-facing
+WebSocket connections have already completed their upgrade before the upstream response and
+cannot receive the signal retroactively as an upgrade header.
 
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
