@@ -72,10 +72,16 @@ appears between its own absence check and existence check, re-reads it for up to
 it once it is valid; an empty or partial file is never returned or memoized. A symlink, or a file
 that stays malformed past that bound, is refused and left untouched rather than overwritten.
 
+`homeId` is also the Home instance id other peers see: `GET /healthz` publishes it as `instanceId`
+and `GET /v1/models` names it in `x-opencodex-served-by` (`src/remote/served-by.ts`, see
+[Runtime](runtime.md)). It is random and carries nothing derivable from the machine; the secret is
+never published.
+
 `accountRef` is `acct_` + base64url of the first 128 bits of HMAC-SHA256(secret,
 `ocx.quota-pool/1` NUL provider NUL accountId). It is stable across restarts, distinct per provider,
 and never contains an email, a raw account id or a token; without the secret a recipient cannot
 confirm a guessed identity against it. Deleting the file rotates `homeId` and every reference
-together. `label` is the account's existing log label (`main`, `p<hex6>`, `o<hex6>`), never an
+together when the proxy next starts; a running proxy keeps the identity it already read (and keeps
+publishing that `homeId` as its instance id). `label` is the account's existing log label (`main`, `p<hex6>`, `o<hex6>`), never an
 email or alias. `producer.role` is `runtimeRole` (`standalone` when unset) and `producer.version`
 is the package version. `driver` and `pooled.headroom` are not produced yet.
