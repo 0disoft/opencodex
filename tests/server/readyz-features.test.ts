@@ -33,21 +33,23 @@ const none: PeerFeatureSources = {
   linkManagementReadPaths: [],
   servedByHeaderEmitted: false,
   relayAuthVersion: "2",
+  linkPeerReportVersion: "1",
 };
 const all: PeerFeatureSources = {
   managementRoutes: [{ method: "GET", path: QUOTA_POOL_PATH }],
   linkManagementReadPaths: ["/api/settings"],
   servedByHeaderEmitted: true,
   relayAuthVersion: "2",
+  linkPeerReportVersion: "1",
 };
 
 describe("peer feature registry", () => {
   test("presence and absence follow each owning source", () => {
-    expect(servedPeerFeatures(none)).toEqual(["relay-auth/2"]);
-    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "link-management-relay", "served-by-header", "relay-auth/2"]);
-    expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "POST", path: QUOTA_POOL_PATH }] })).toEqual(["relay-auth/2"]);
-    expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "GET", path: "/api/quota-pool/extra" }] })).toEqual(["relay-auth/2"]);
-    expect(servedPeerFeatures({ ...none, relayAuthVersion: "3" })).toEqual(["relay-auth/3"]);
+    expect(servedPeerFeatures(none)).toEqual(["relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "link-management-relay", "served-by-header", "relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "POST", path: QUOTA_POOL_PATH }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "GET", path: "/api/quota-pool/extra" }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures({ ...none, relayAuthVersion: "3", linkPeerReportVersion: "2" })).toEqual(["relay-auth/3", "link-peer-report/2"]);
   });
 
   test("this build reads the live sources", () => {

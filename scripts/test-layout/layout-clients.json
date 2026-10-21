@@ -9,6 +9,7 @@
   "desktop-supervised-restart.test.ts": "clients",
   "link-home-settings.test.ts": "clients",
   "link-relay-bound-transport.test.ts": "clients",
+  "link-peer-compatibility.test.ts": "clients",
   "aside-profile-identity.test.ts": "clients",
   "aside-profile-paths.test.ts": "clients",
   "aside-profile-sync-owner.test.ts": "clients",

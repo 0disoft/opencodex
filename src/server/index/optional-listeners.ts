@@ -39,6 +39,7 @@ export interface OptionalListenerSet<T> {
   linkAdmissionKeyIds(): ReadonlySet<string>;
   onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
   notifyAuthenticatedCatalog(apiKeyId: string): void;
+  peerObservation(linkId: string): import("../../link/peer-report").LinkPeerEntry;
   status(): LinkListenerStatus;
   linkStatus(): LinkListenerStatus;
   linkSupervisor(): LinkSupervisor;
@@ -91,6 +92,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     linkAdmissionKeyIds: () => linkListener.linkAdmissionKeyIds(),
     onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
     notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
+    peerObservation: linkId => linkListener.peerObservation(linkId),
     status: () => linkListener.status(),
     linkStatus: () => linkListener.status(),
     linkSupervisor: () => supervisor,

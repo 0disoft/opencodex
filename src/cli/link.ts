@@ -4,6 +4,7 @@ import { loadConfig } from "../config";
 import { projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto } from "../link/status-projection";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
 import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
+import type { LinkLocalPeer, LinkPeerStatus } from "../link/compatibility";
 import { runLinkEnrollment } from "./link-enrollment";
 import { runLinkCleanup, type LinkCleanupDeps } from "./link-cleanup";
 import { assertSshAlias } from "../link/ssh-argv";
@@ -53,6 +54,7 @@ export interface LinkStatusPayload {
     since: string;
     reason: string | null;
     tunnelPort: number;
+    peer?: LinkPeerStatus;
   }>;
   child: null | {
     alias: string;
@@ -60,6 +62,7 @@ export interface LinkStatusPayload {
     since: string;
     reason: string | null;
   };
+  local?: LinkLocalPeer;
 }
 
 export interface LinkIssuePayload {
@@ -90,9 +93,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const expected = new Set(keys);
+  assertKeys(value, keys, [], label);
+}
+
+/** Exact keys plus fields a newer proxy adds; an older proxy omits them. */
+function assertKeys(value: Record<string, unknown>, keys: readonly string[], optional: readonly string[], label: string): void {
+  const allowed = new Set([...keys, ...optional]);
   const actual = Object.keys(value);
-  if (actual.length !== expected.size || actual.some(key => !expected.has(key))) {
+  if (keys.some(key => !(key in value)) || actual.some(key => !allowed.has(key))) {
     throw new Error(`invalid link API response: ${label} fields`);
   }
 }
@@ -109,9 +117,42 @@ function validNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
+function validStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(validString);
+}
+
+function validateLocal(value: unknown): LinkLocalPeer {
+  if (!isRecord(value)) throw new Error("invalid link API response: local");
+  assertExactKeys(value, ["version", "relayAuth", "features"], "local");
+  if (!validString(value.version) || !validString(value.relayAuth) || !validStringList(value.features)) {
+    throw new Error("invalid link API response: local fields");
+  }
+  return { version: value.version, relayAuth: value.relayAuth, features: [...value.features] };
+}
+
+function validatePeer(value: unknown, index: number): LinkPeerStatus {
+  const fail = (): never => { throw new Error(`invalid link API response: link ${index} peer`); };
+  if (!isRecord(value)) return fail();
+  assertExactKeys(value, ["observedAt", "version", "versionRange", "relayAuth", "features", "compatibility", "reasons"], `link ${index} peer`);
+  const range = value.versionRange;
+  if (!validNullableString(value.observedAt) || !validNullableString(value.version) || !validNullableString(value.relayAuth)
+    || (value.features !== null && !validStringList(value.features)) || !validStringList(value.reasons)
+    || !["compatible", "degraded", "incompatible", "unknown"].includes(value.compatibility as string)
+    || (range !== null && (!isRecord(range) || !validNullableString(range.min) || !validString(range.below)))) fail();
+  return {
+    observedAt: value.observedAt as string | null,
+    version: value.version as string | null,
+    versionRange: range === null ? null : { min: (range as Record<string, unknown>).min as string | null, below: (range as Record<string, unknown>).below as string },
+    relayAuth: value.relayAuth as string | null,
+    features: value.features === null ? null : [...value.features as string[]],
+    compatibility: value.compatibility as LinkPeerStatus["compatibility"],
+    reasons: [...value.reasons as string[]],
+  };
+}
+
 function validateStatus(value: unknown): LinkStatusPayload {
   if (!isRecord(value)) throw new Error("invalid link API response: status object");
-  assertExactKeys(value, ["role", "listener", "links", "child"], "status");
+  assertKeys(value, ["role", "listener", "links", "child"], ["local"], "status");
   if (value.role !== "standalone" && value.role !== "home" && value.role !== "child") {
     throw new Error("invalid link API response: status role");
   }
@@ -128,8 +169,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
-    const parityKeys = PARITY_KEYS.filter(key => key in candidate);
-    assertExactKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort", ...parityKeys], `link ${index}`);
+    assertKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], [...PARITY_KEYS, "peer"], `link ${index}`);
     const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
@@ -146,6 +186,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
       ...parity,
+      ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
     } as LinkStatusPayload["links"][number];
   });
   let child: LinkStatusPayload["child"] = null;
@@ -169,6 +210,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
     listener: { state: value.listener.state, port: value.listener.port },
     links,
     child,
+    ...(value.local !== undefined ? { local: validateLocal(value.local) } : {}),
   };
 }
 
@@ -268,7 +310,8 @@ async function runStatus(args: string[], deps: LinkCliDeps): Promise<void> {
     }
     throw error;
   }
-  const result = validateStatus(await linkRequest<unknown>("/api/link/status", {}, { ...deps, baseUrl }));
+  // A proxy older than the compatibility report ignores the query and answers the exact K16 shape.
+  const result = validateStatus(await linkRequest<unknown>("/api/link/status?compatibility=1", {}, { ...deps, baseUrl }));
   console.log(JSON.stringify(result));
 }
 

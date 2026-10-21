@@ -3,6 +3,8 @@ import type { LinkTunnelStatus } from "./supervisor";
 import type { TunnelState } from "./tunnel-state";
 import { readCompensation, type CompensationStore } from "./compensation";
 import { EMPTY_LINK_CHILD_PARITY, type LinkChildParity } from "./child-parity";
+import { linkPeerStatus, type LinkLocalPeer, type LinkPeerStatus } from "./compatibility";
+import type { LinkPeerEntry } from "./peer-report";
 import type { OcxClientConnectionConfig } from "../types";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
@@ -18,6 +20,8 @@ export interface LinkStatusDto {
     since: string;
     reason: string | null;
     tunnelPort: number;
+    /** Home only: what the link carried from this Child, and the compatibility verdict. */
+    peer?: LinkPeerStatus;
   }>;
   child: null | {
     alias: string;
@@ -25,6 +29,17 @@ export interface LinkStatusDto {
     since: string;
     reason: string | null;
   };
+  /** This build's version and link protocol, the side every `peer` verdict compares against. */
+  local?: LinkLocalPeer;
+}
+
+/** Add this build's identity and, on a Home, each Child's observed peer status. */
+export function attachLinkPeers(dto: LinkStatusDto, local: LinkLocalPeer, observation: (linkId: string) => LinkPeerEntry): LinkStatusDto {
+  if (dto.role === "home") {
+    for (const link of dto.links) link.peer = linkPeerStatus(local, observation(link.id));
+  }
+  dto.local = local;
+  return dto;
 }
 
 export interface ClientLinkIdentity { direction: "hub-initiated" | "client-initiated"; alias?: string }

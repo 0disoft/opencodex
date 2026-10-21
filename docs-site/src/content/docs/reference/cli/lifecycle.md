@@ -413,7 +413,8 @@ use for the management plane: the configured `hub.managementPublicOrigin` when `
 HTTP(S) origin is rejected rather than answered with a guess.
 `features` lists the peer features this build serves, so a peer can check a capability without
 comparing versions: `relay-auth/<n>` names the Remote Link relay authentication version,
-`link-management-relay` the read-only Remote Link management relay, `quota-pool/1` the
+`link-management-relay` the read-only Remote Link management relay, `link-peer-report/<n>` that
+a Remote Link Home reports each Child's version and compatibility in `ocx link status`, `quota-pool/1` the
 `GET /api/quota-pool` management read, and `served-by-header` the `x-opencodex-served-by` response
 header. A feature this build does not serve is absent. The list holds fixed names only, never
 account or configuration data. Old proxies without `/readyz` fail

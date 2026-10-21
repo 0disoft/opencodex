@@ -125,6 +125,25 @@ Update both the Home and Child when upgrading to connection-bound relay authenti
 
 Removing the final Home link drains pending authenticated relay requests before releasing its listener. Stopping the process still cancels active connections. This does not change which caller credentials are stripped or which routes can be relayed, and it does not replace SSH's host-key verification.
 
+### Home and Child versions
+
+On the Home, `ocx link status --json` reports the Home's own `local` version, relay authentication version and features, and gives every link a `peer` block. Nothing is read over SSH: the Home learns about a Child from the relay authentication check the Child sends before each relayed request. From 2.91.0 that check also carries the Child's version and feature list. The Home keeps what it learned in memory, so after a Home restart a link reads `unknown` until its Child relays a request again.
+
+| Part of the link | First release |
+|---|---|
+| `relay-auth/2`, connection-bound relay authentication | 2.69.0 |
+| `link-management-relay`, read-only Home management on the Child | 2.84.0 |
+| `link-peer-report/1`, the Child reports its version and features | 2.91.0 |
+
+`peer.compatibility` is one of:
+
+- `compatible`: the relay authentication versions match, and the Home serves every feature the Child reports. A Child older than 2.91.0 reports no version; `peer.version` is then `null` and `peer.versionRange` gives the range its relay authentication implies, for example `{ "min": "2.69.0", "below": "2.91.0" }`.
+- `degraded`: the Child reports a feature this Home does not serve. Upgrade the Home.
+- `incompatible`: the Child asked for a relay authentication version this Home does not speak, so its relayed requests are refused. `peer.reasons` names the side to upgrade.
+- `unknown`: the Child has not relayed a request since the Home started, or it sent a version or feature list the Home could not read, so its features cannot be checked.
+
+The version a Child reports is its own claim, bound to its link key. OpenCodex uses it for display and never for admission. Older `ocx` installations keep receiving the previous status document; only a 2.91.0 or newer CLI asks for these fields.
+
 
 ### Standalone pairing authorization
 
