@@ -15,7 +15,7 @@ import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
-import { createUpdateServiceHomePolicy, isUpdateHomeProbe, UPDATE_HOME_LAUNCHER_PROTOCOL, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "../src/update/service-home-policy.mjs";
+import { createUpdateServiceHomePolicy, isUpdateHomeProbe, parseUpdateWorkerHome, UPDATE_HOME_LAUNCHER_PROTOCOL, UPDATE_PACKAGE_ONLY_EXIT_CODE, UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION } from "../src/update/service-home-policy.mjs";
 import { probeUpdateServiceHome, supportsUpdateHomeProbe, updateHomeProbeEnvironment } from "../src/update/service-home-probe.mjs";
 import {
   inspectPackageRuntimeLiveness,
@@ -331,7 +331,7 @@ function runPackageManagerSelfUpdate(manager) {
     ? allServiceStatePaths.slice(0, 1)
     : allServiceStatePaths;
   let authorityLauncher = fileURLToPath(import.meta.url);
-  const homePolicy = createUpdateServiceHomePolicy(() => readNodeUpdateHome(authorityLauncher), message => console.warn(message), process.argv.includes("--update-package-only"));
+  const homePolicy = createUpdateServiceHomePolicy(() => readNodeUpdateHome(authorityLauncher), message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
   if (!homePolicy.checkPackage()) process.exit(1);
   const serviceWasInstalled = homePolicy.serviceAllowed && serviceStatePaths.some(path => existsSync(path));
   // What this update may do to the runtime. The same rule the Bun updater applies, from the
@@ -994,7 +994,12 @@ function runPackageManagerSelfUpdate(manager) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
       process.exit(process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : 0);
     }
-    if (!homePolicy.check()) process.exit(1);
+    if (!homePolicy.check()) {
+      if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable && existsSync(postUpdateLauncher)) {
+        try { runTrayLifecycle(postUpdateLauncher, "start"); } catch { /* preserve the authority refusal */ }
+      }
+      process.exit(1);
+    }
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     repairCodexShimIfNeeded(postUpdateLauncher);
@@ -1154,7 +1159,7 @@ if (updateHelpRequested) {
 // Capability only: no Bun lookup, home inspection, dotenv or ordinary bootstrap.
 if (process.argv[2] === "__update-package-only-probe") {
   if (process.argv.length !== 3) process.exit(2);
-  console.log(JSON.stringify({ schemaVersion: 1, packageOnlyProtocolVersion: 1 }));
+  console.log(JSON.stringify({ schemaVersion: 1, packageOnlyProtocolVersion: UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION }));
   process.exit(0);
 }
 if (process.argv[2] === "__update-home-probe") {

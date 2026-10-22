@@ -2,10 +2,12 @@ import { expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createTempHome } from "../helpers/temp-home";
 import { dirname, join } from "node:path";
-import { repoPath } from "../helpers/repo-root";
+import { helperPath, repoPath } from "../helpers/repo-root";
+import { prepareWorkerUpdateHome } from "../../src/update/job-update-home";
 import { createUpdateServiceHomePolicy, type UpdateServiceHomeAuthority } from "../../src/update/service-home-policy.mjs";
 import { updateHomeProbeEnvironment } from "../../src/update/service-home-probe.mjs";
 import { planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
+import { UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION } from "../../src/update/service-home-policy.mjs";
 
 const source = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
 function extract(start: string, end: string, invoke: string) {
@@ -211,7 +213,7 @@ test("the installed test Bun honors --no-env-file while the control loads the fi
 
 for (const delegated of [false, true]) test(`Node package-only success reports a ${delegated ? "restricted worker" : "CLI"} result before recovery`, () => {
   const start = source.indexOf("    if (homePolicy.packageOnly) {", source.indexOf("  const postInstallPlan"));
-  const end = source.indexOf("    if (!homePolicy.check()) process.exit(1);", start);
+  const end = source.indexOf("    if (!homePolicy.check()) {", start);
   expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
   const run = new Function("deps", `with (deps) { ${source.slice(start, end)} }`);
   const events: string[] = [];
@@ -269,7 +271,61 @@ test("package-only capability interception is exact and precedes install-capable
     const terminal = new Error("exit");
     expect(() => run({ process: { argv: ["node", "ocx", "__update-package-only-probe", ...(extra ? ["extra"] : [])],
       exit(code: number) { events.push(code); throw terminal; } }, console: { log: (text: string) => events.push(JSON.parse(text)) },
+      UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION,
     })).toThrow("exit");
-    expect(events).toEqual(extra ? [2] : [{ schemaVersion: 1, packageOnlyProtocolVersion: 1 }, 0]);
+    expect(events).toEqual(extra ? [2] : [{ schemaVersion: 1, packageOnlyProtocolVersion: 2 }, 0]);
   }
+});
+
+for (const [parent, observed, exit] of [
+  ["same", "unknown", 1], ["absent", "unknown", 1], ["foreign", "unknown", 1],
+  ["unknown", "same", 1], ["unknown", "unknown", 75],
+] as const) test(`the real Node child preserves ${parent} parent authority when observing ${observed}`, () => {
+  const box = createTempHome("ocx-node-home-child-");
+  try {
+    const command = { bin: "node", args: [repoPath("bin/ocx.mjs"), "update"], display: "" };
+    expect(prepareWorkerUpdateHome(command, "npm", command.args[0]!, "node", "latest", () => {},
+      () => ({ kind: parent, ...(parent === "foreign" ? { subject: "a".repeat(64) } : {}) }), () => true)).not.toBeNull();
+    const child = Bun.spawnSync(["node", helperPath("update-node-home-child.mjs"), box.root, observed, ...command.args.slice(2)],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    const log = child.stdout.toString() + child.stderr.toString();
+    expect(child.exitCode, log).toBe(exit);
+    const receipt = child.stdout.toString().split("\n").find(line => line.startsWith("NODE_HOME_PROBE:"));
+    expect(receipt, log).toBeDefined();
+    const trace = JSON.parse(receipt!.slice("NODE_HOME_PROBE:".length)) as string[];
+    expect(trace.filter(phase => phase === "replacement")).toHaveLength(exit === 75 ? 1 : 0);
+    expect(trace[0]).toBe("home");
+    if (exit === 75) { expect(trace).toContain("release"); expect(log).toContain("Restart the proxy:"); }
+  } finally { box.remove(); }
+});
+
+for (const baseline of [["--update-worker-home"], ["--update-worker-home=same"],
+  ["--update-worker-home", "same", "--update-worker-home", "unknown"]]) test(`the real Node child refuses malformed baseline ${baseline.join(" ")}`, () => {
+  const box = createTempHome("ocx-node-home-invalid-");
+  try {
+    const child = Bun.spawnSync(["node", helperPath("update-node-home-child.mjs"), box.root, "unknown", ...baseline],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    const log = child.stdout.toString() + child.stderr.toString();
+    expect(child.exitCode, log).toBe(1);
+    expect(log).toContain('NODE_HOME_PROBE:["home"]');
+    expect(log).toContain("Automatic update restart refused");
+  } finally { box.remove(); }
+});
+
+for (const scenario of ["post-refusal-running", "post-refusal-stopped", "post-refusal-unverified"]) test(`the real Node updater restores only an own stopped tray on ${scenario}`, () => {
+  const box = createTempHome("ocx-node-home-tray-refusal-");
+  try {
+    const child = Bun.spawnSync(["node", helperPath("update-node-home-child.mjs"), box.root, scenario,
+      "--update-worker-home", "absent", "--update-worker-result"],
+      { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    const log = child.stdout.toString() + child.stderr.toString();
+    expect(child.exitCode, log).toBe(1);
+    const receipt = child.stdout.toString().split("\n").find(line => line.startsWith("NODE_HOME_PROBE:"));
+    expect(receipt, log).toBeDefined();
+    const trace = JSON.parse(receipt!.slice("NODE_HOME_PROBE:".length)) as string[];
+    expect(trace.filter(event => event === "replacement")).toEqual(["replacement"]);
+    expect(trace.filter(event => event.startsWith("tray:"))).toEqual(scenario === "post-refusal-running"
+      ? ["tray:stop", "tray:start"] : scenario === "post-refusal-stopped" ? [] : ["tray:stop"]);
+    expect(log).toContain("Automatic update restart refused");
+  } finally { box.remove(); }
 });

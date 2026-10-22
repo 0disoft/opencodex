@@ -15,7 +15,7 @@ import type { ServiceOwnership } from "../service/state";
 import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from "./runtime-ownership.mjs";
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
-import { createUpdateServiceHomePolicy, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
+import { createUpdateServiceHomePolicy, parseUpdateWorkerHome, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
@@ -493,7 +493,7 @@ export async function runUpdate(): Promise<void> {
   // Ownership inspection imports the service CLI, which reaches this update entry again.
   // Load it only after entering the lease; the policy itself stays a dependency-free import.
   const { inspectUpdateServiceHome } = await import("./service-home-authority");
-  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"));
+  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
   if (!homePolicy.checkPackage()) return 1;
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
@@ -916,6 +916,18 @@ export async function runUpdate(): Promise<void> {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
       return process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : undefined;
     }
+    // Authority gates every post-replacement control action (shim, tray, service), like
+    // the Node launcher; refusal may only restore the own tray stopped before replacement.
+    if (!homePolicy.check()) {
+      if (trayWasRunning && postUpdateLauncherUsable && existsSync(postUpdateLauncher)) {
+        try {
+          spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], {
+            stdio: "ignore", windowsHide: true, timeout: 15_000, env: mutation.unprivilegedEnvironment(),
+          });
+        } catch { /* preserve the authority refusal */ }
+      }
+      return 1;
+    }
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     // Re-enter through the verified active package launcher. This keeps the Codex
     // shim, tray, service and proxy recovery paths on the same package/group that
@@ -946,7 +958,6 @@ export async function runUpdate(): Promise<void> {
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
-    if (!homePolicy.check()) return 1;
     if (!homePolicy.serviceAllowed && postInstallPlan.mayStopRuntime) {
       if (stopAttempted) return await startProxyDirectly() === true ? undefined : 1;
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);

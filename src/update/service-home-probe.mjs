@@ -1,4 +1,4 @@
-import { parseUpdateHomeProbe } from "./service-home-policy.mjs";
+import { parseUpdateHomeProbe, UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION } from "./service-home-policy.mjs";
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -65,7 +65,7 @@ export function probeUpdatePackageOnlyLauncher(launcher, run, node, env, read = 
   if (!supportsUpdateHomeProbe(launcher, read)) return false;
   try {
     const declaration = JSON.parse(read(join(dirname(launcher), "..", "src", "update", "service-home-package-only-protocol.json")));
-    if (declaration?.schemaVersion !== 1 || declaration?.packageOnlyProtocolVersion !== 1
+    if (declaration?.schemaVersion !== 1 || declaration?.packageOnlyProtocolVersion !== UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION
       || declaration?.entry !== "__update-package-only-probe" || Object.keys(declaration).length !== 3) return false;
     const result = run(node, [launcher, "__update-package-only-probe"], {
       encoding: "utf8", timeout: 8_000, maxBuffer: 4096, windowsHide: true,
@@ -74,6 +74,6 @@ export function probeUpdatePackageOnlyLauncher(launcher, run, node, env, read = 
     if (result.status !== 0 || result.error || result.signal || typeof result.stdout !== "string"
       || Buffer.byteLength(result.stdout, "utf8") > 4096) return false;
     const response = JSON.parse(result.stdout);
-    return response?.schemaVersion === 1 && response?.packageOnlyProtocolVersion === 1 && Object.keys(response).length === 2;
+    return response?.schemaVersion === 1 && response?.packageOnlyProtocolVersion === UPDATE_PACKAGE_ONLY_PROTOCOL_VERSION && Object.keys(response).length === 2;
   } catch { return false; }
 }

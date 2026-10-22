@@ -55,13 +55,30 @@ receipts, including quarantined unreadable receipts, also block package-only rep
 The worker passes its restriction as `--update-package-only`; package-only-capable launchers preserve it
 in both Node and Bun update paths even when their own probe matches. A package-only Bun worker
 uses that guarded launcher instead of its ordinary raw package-manager command. Delegated launchers
-also receive `--update-worker-result`: successful package-only transactions report exit 75 instead
-of ordinary success. The worker handles this restricted-success result before any tray refresh or
-restart, even when its own probe still matches. Unmarked package-manager exit 75 is a failure.
+also receive `--update-worker-home` plus `--update-worker-result`: the flag pins the worker's verified
+initial home authority — all four kinds, unknown included — as the child's baseline in place of a
+fresh inspection, so a service registered or removed between the worker's check and the child's run
+cannot mint authority the worker never held, and a malformed or duplicated baseline fails closed
+rather than falling back to inspection. A stable unknown baseline still permits the package-only
+replacement. Successful package-only transactions report exit 75 instead of ordinary success. The
+worker handles this restricted-success result before any tray refresh or restart, even when its own
+probe still matches. Unmarked package-manager exit 75 is a failure. The raw package-manager lane
+cannot carry baseline argv, so the worker rechecks home authority at the replacement boundary itself,
+after the own-foreground tray handoff and before the command runs; on refusal the only side effect
+is restoring that stopped tray, and on a post-replacement refusal the same restore is the only tray
+action — the check runs before any shim, tray install or service refresh, never after.
+Both CLI lanes restore that stopped tray only through a verified, still-present package launcher;
+a tray that was not running receives no cleanup command, and refusal never installs or refreshes it.
+The dashboard also carries its original home baseline into `finishGuiUpdateRestart` and the actual
+restart policy through `RestartIo`, retaining it across lease acquisition and asynchronous health
+checks. A registration appearing after initial absence, or a changed foreign subject, cannot become
+new recovery authority. Standalone restart calls without a delegated baseline inspect their own.
 
-The dashboard worker checks the unchanged v1 `src/update/service-home-protocol.json` plus
+The dashboard worker checks the unchanged v1 `src/update/service-home-protocol.json` plus the v2
 `src/update/service-home-package-only-protocol.json`, then the delegated launcher's exact private
-`__update-package-only-probe` response. This separate capability probe performs no Bun resolution
+`__update-package-only-probe` response. The version bump fails closed in both directions: an old
+worker refuses a v2 launcher whose flag it would ignore, and a v2 worker refuses a v1 launcher that
+cannot enforce a pinned baseline. This separate capability probe performs no Bun resolution
 or home inspection. Missing declarations, failed calls and malformed responses refuse delegation.
 Keeping the original home-probe declaration and response at v1 lets already-running v1 updaters
 inspect and recover after installing the new package. `src/update/job-update-home.ts` owns the
@@ -115,7 +132,8 @@ managed home; foreground recovery does not acquire that authority.
 
 For a matching managed home, the dashboard restart worker in `src/update/job.ts` follows the same order through
 `src/update/job-supervised-restart.ts`, which sits beside it because `job.ts` is at the repository
-size cap. When a service-managed install's refresh fails, is not viable, or never serves, the
+size cap, and `src/update/job-update-tray.ts` owns the production own-foreground tray handoff for
+the same reason. When a service-managed install's refresh fails, is not viable, or never serves, the
 worker asks the manager to restart its job before it re-acquires the lease for a direct start,
 using the same helpers and the same manager-PID-against-serving-PID proof. A proven supervised
 restart skips the direct start. An unsettled restart starts no competing proxy and fails the job.
@@ -148,3 +166,13 @@ service-stop authority and matching-home recovery. Manager, probe and process si
 `tests/update/update-service-home-policy.test.ts` covers schema/capability validation and transition
 semantics; `tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
 exercise the actual Node/Bun helper bodies with injected lease, manager, owner and spawn boundaries.
+The launcher suite also runs the complete Node update function in an isolated Node child with
+replacement/control I/O intercepted; `tests/update/update-bun-ownership-lease.test.ts` runs the actual
+Bun updater child. Both enforce the delegated baseline before replacement, retain stable-unknown
+package-only success, and reject malformed baselines. The Bun child also rejects a changed
+post-replacement home before shim/tray/service commands. `tests/update/update-home-worker.test.ts`
+executes tray handoff and command injection on every platform, covering both a previously running
+and a stopped tray so refusal can restore only the former, without install or refresh.
+The worker suite changes absent/foreign authority under the restart lease, after the worker's last
+check, and reaches the real recovery policy with no service repair or direct start permitted.
+The Node child and executable Bun refusal body also cover stopped/unverified tray cleanup.

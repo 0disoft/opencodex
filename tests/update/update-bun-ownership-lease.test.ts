@@ -197,3 +197,20 @@ for (const scenario of ["home-unknown-live", "home-unknown-changed", "home-chang
   if (scenario === "home-unknown-pending") expect(result.pendingReceipt).toBe(true);
   expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
 });
+
+for (const scenario of ["delegated-known-unknown", "delegated-unknown-known", "delegated-malformed", "delegated-unknown-unknown"]) test(`the actual Bun child enforces ${scenario}`, async () => {
+  const result = await run(scenario);
+  const stableUnknown = scenario === "delegated-unknown-unknown";
+  expect(result.exit, result.log).toBe(stableUnknown ? 75 : 1);
+  expect(result.trace.map(row => row.phase)).toEqual(stableUnknown ? ["replacement", "after"] : ["after"]);
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+  if (stableUnknown) expect(result.log).toContain("Restart the proxy:");
+});
+
+test("the actual Bun updater refuses changed post-replacement authority before shim, tray or service commands", async () => {
+  const result = await run("delegated-post-replacement");
+  expect(result.exit, result.log).toBe(1);
+  expect(result.trace.map(row => row.phase)).toEqual(["stop", "replacement", "after"]);
+  expect(result.log).toContain("ownership could not be verified");
+  expect(result.trace.at(-1)).toMatchObject({ reacquired: true, parentToken: false });
+});

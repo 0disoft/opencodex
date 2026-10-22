@@ -21,6 +21,14 @@ if (scenario.startsWith("parent-package-only")) process.argv.push("--update-pack
 if (scenario === "parent-package-only-result") process.argv.push("--update-worker-result");
 if (scenario === "home-unknown-pending") writeFileSync(join(home, "pending-teardown-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.unreadable.json"), "{broken");
 let homeReads = 0;
+let packageReplaced = false;
+const delegatedHome = scenario.startsWith("delegated-");
+if (delegatedHome) {
+  running = false;
+  const baseline = scenario === "delegated-known-unknown" || scenario === "delegated-post-replacement" ? "same"
+    : scenario === "delegated-malformed" ? "invalid-shape" : "unknown";
+  process.argv.push("--update-worker-home", baseline, "--update-worker-result");
+}
 const direct = scenario.startsWith("direct-");
 const reserved = direct ? Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("fixture") }) : undefined;
 const port = reserved?.port ?? 23456;
@@ -64,6 +72,8 @@ mock.module(repoPath("src/service.ts"), () => ({ ...service,
 mock.module(repoPath("src/update/service-home-authority.ts"), () => ({
   inspectUpdateServiceHome: () => {
     homeReads++;
+    if (scenario === "delegated-post-replacement") return { kind: packageReplaced ? "unknown" : "same" };
+    if (delegatedHome) return { kind: scenario === "delegated-unknown-known" ? "same" : "unknown" };
     if (scenario === "home-changed-after-stop" && homeReads > 3) return { kind: "unknown" };
     if (scenario === "home-unknown-changed" && homeReads > 2) return { kind: "same" };
     if (scenario === "home-changed" && homeReads > 2) return { kind: "unknown" };
@@ -138,6 +148,7 @@ mock.module("node:child_process", () => ({ ...processTools,
       if (scenario === "unknown-runtime") writeFileSync(runtime, "{malformed");
     }
     if (phase === "replacement") {
+      packageReplaced = true;
       if (scenario === "replacement-throw") throw new Error("injected replacement failure");
       if (scenario === "foreign-owner") writeFileSync(authority, JSON.stringify({ revision: 2, owner: "desktop", installId: "owner-b", consentGeneration: 2 }));
       if (direct || scenario === "home-unknown-fail" || scenario === "package-fail" || scenario === "foreign-owner" || scenario === "recovery-throw") return { status: 1 };

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from "./service-home-authority";
-import { UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
+import { UPDATE_PACKAGE_ONLY_EXIT_CODE, UPDATE_WORKER_HOME_FLAG, updateWorkerHomeArgv } from "./service-home-policy.mjs";
 import { currentServiceHomes } from "../service/state";
 import { probeUpdatePackageOnlyLauncher, updateHomeProbeEnvironment } from "./service-home-probe.mjs";
 
@@ -21,7 +21,11 @@ export function prepareWorkerUpdateHome(command: { bin: string; args: string[]; 
   compatible: (launcher: string, node: string) => boolean = automaticUpdateLauncherSupported) {
   const policy = createUpdateServiceHomePolicy(inspect, report);
   if (!policy.checkPackage()) return null;
-  if (installer === "npm" || installer === "pnpm" || policy.packageOnly) {
+  // npm/pnpm and restricted workers delegate through the guarded Node launcher, which can
+  // receive argv. The raw package-manager lane (e.g. `bun add -g`) cannot: the worker
+  // rechecks the same baseline itself at the replacement boundary instead.
+  const delegated = installer === "npm" || installer === "pnpm" || policy.packageOnly;
+  if (delegated) {
     if (!compatible(launcher, node)) {
       report("Automatic update refused: guarded recovery protocol unavailable. Check 'ocx service status' and update this CLI manually before retrying.");
       return null;
@@ -36,7 +40,18 @@ export function prepareWorkerUpdateHome(command: { bin: string; args: string[]; 
     // tool token either. `command.bin`/`command.args` keep the real spawn target unchanged.
     command.display = `node <path> update --tag ${channel} --update-package-only`;
   }
-  if (installer === "npm" || installer === "pnpm" || policy.packageOnly) command.args.push("--update-worker-result");
+  if (delegated) {
+    // Pin the verified baseline: without it the child inspects fresh and an unknown or
+    // matching read could mint authority the parent never held. v2 children refuse a
+    // malformed baseline and v2 parents refuse v1 children, so mixed-version delegation
+    // fails closed before either side runs.
+    const baseline = updateWorkerHomeArgv(policy.initial);
+    if (baseline === null) {
+      report("Automatic update refused: the observed service registration baseline could not be delegated.");
+      return null;
+    }
+    command.args.push(UPDATE_WORKER_HOME_FLAG, baseline, "--update-worker-result");
+  }
   return policy;
 }
 
