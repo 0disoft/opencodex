@@ -117,7 +117,8 @@ export function writeRemoteFile(path: string, text: string, sync = fsyncSync): v
   try {
     try { checkMacAcl(temporary); writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
-    checkMacAcl(path);
+    try { checkMacAcl(path); }
+    catch { throw remoteError("remote_storage_unknown", "Messaging state was replaced, but its ACL privacy and crash durability could not be confirmed; inspect state and permissions before explicit recovery."); }
     syncRemoteDirectory(dirname(path), sync);
   } finally { if (remotePathExists(temporary)) unlinkSync(temporary); }
 }

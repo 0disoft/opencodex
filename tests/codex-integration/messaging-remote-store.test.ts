@@ -93,6 +93,86 @@ test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor a
     expect(result.status).toBe(0);
   } finally { rmSync(root, { recursive: true }); }
 });
+test.each(["acl", "error", "timeout"])("post-rename ACL %s reports unknown publication without retry or rollback", failure => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-published-acl-"));
+  try {
+    // Only the destination probe after real replacement fails; earlier ACL checks pass.
+    const result = spawnSync(process.execPath, ["--eval", `
+      import { mock } from "bun:test";
+      import assert from "node:assert/strict";
+      import * as fs from "node:fs";
+      import * as childProcess from "node:child_process";
+      import * as path from "node:path";
+      const native = { ...fs }, root = ${JSON.stringify(root)}, failure = ${JSON.stringify(failure)};
+      const nativePath = { ...path }, { basename, join } = nativePath;
+      const target = "/fixture/journal.json", published = join(root, "journal.json");
+      native.writeFileSync(published, "old", { mode: 0o600 });
+      let renames = 0, writes = 0, syncs = 0, directoryOpens = 0, postRenameProbes = 0;
+      const probes = [], descriptors = [];
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      Object.defineProperty(process, "getuid", { value: () => 1234 });
+      mock.module("node:path", () => ({ ...nativePath, ...nativePath.posix }));
+      mock.module("node:fs", () => ({ ...native,
+        lstatSync(path) {
+          if (path === "/fixture" || path === "/") return {
+            uid: 1234, mode: 0o700, isDirectory: () => true, isSymbolicLink: () => false,
+          };
+          return native.lstatSync(join(root, basename(path)));
+        },
+        realpathSync: () => "/",
+        openSync(path, flags, mode) {
+          if (path === "/") { directoryOpens++; throw new Error("unexpected directory sync"); }
+          const fd = native.openSync(join(root, basename(path)), flags, mode);
+          descriptors.push(fd); return fd;
+        },
+        fstatSync(fd) { return Object.assign(native.fstatSync(fd), { uid: 1234, mode: 0o100600 }); },
+        writeFileSync(...args) { writes++; return native.writeFileSync(...args); },
+        renameSync(from, to) {
+          assert.equal(native.readFileSync(published, "utf8"), "old");
+          native.renameSync(join(root, basename(from)), join(root, basename(to))); renames++;
+        },
+        unlinkSync(path) { native.unlinkSync(join(root, basename(path))); },
+      }));
+      mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command, args, options) {
+        assert.equal(command, "/bin/ls"); assert.equal(options.timeout, 1000);
+        probes.push(args[1]);
+        if (args[1] !== target || !renames) return { status: 0, stderr: "",
+          stdout: (args[1] === "/fixture" ? "drwx------" : "-rw-------") + " 1 owner staff 3 Oct 22 00:00 state\\n" };
+        postRenameProbes++;
+        assert.equal(native.readFileSync(published, "utf8"), "new");
+        if (failure === "acl") return { status: 0, stderr: "",
+          stdout: "-rw-------+ 1 owner staff 3 Oct 22 00:00 state\\n 0: everyone allow read\\n" };
+        return { status: null, stderr: "", stdout: "", error: Object.assign(new Error("private ACL diagnostic"), {
+          code: failure === "timeout" ? "ETIMEDOUT" : "EIO",
+        }) };
+      } }));
+      const { writeRemoteFile } = await import(${JSON.stringify(pathToFileURL(repoPath("src/messaging/remote-files.ts")).href)});
+      const { LocalMessagingError } = await import(${JSON.stringify(pathToFileURL(repoPath("src/messaging/types.ts")).href)});
+      let thrown;
+      try { writeRemoteFile(target, "new", fd => { syncs++; native.fsyncSync(fd); }); }
+      catch (error) { thrown = error; }
+      if (!postRenameProbes) throw thrown;
+      assert.equal(postRenameProbes, 1);
+      assert.equal(probes.length, 5);
+      assert.deepEqual(probes.slice(0, 3), ["/fixture", "/fixture", target]);
+      assert.equal(basename(probes[3]).startsWith(".write-"), true);
+      assert.equal(probes[4], target);
+      assert.equal(renames, 1); assert.equal(writes, 1); assert.equal(syncs, 1); assert.equal(directoryOpens, 0);
+      assert.equal(native.readFileSync(published, "utf8"), "new");
+      assert.deepEqual(native.readdirSync(root), ["journal.json"]);
+      for (const fd of descriptors) assert.throws(() => native.fstatSync(fd), { code: "EBADF" });
+      assert.ok(thrown instanceof LocalMessagingError);
+      assert.equal(thrown.code, "remote_storage_unknown");
+      assert.match(thrown.message, /replaced/);
+      assert.match(thrown.message, /ACL.*could not be confirmed/);
+      assert.match(thrown.message, /inspect.*before.*recovery/);
+      assert.equal(thrown.message.includes("private ACL diagnostic"), false);
+    `], { encoding: "utf8", timeout: 10_000, windowsHide: true });
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  } finally { rmSync(root, { recursive: true }); }
+});
 const macTest = process.platform === "darwin" ? test : test.skip;
 macTest("macOS extended ACLs are refused on messaging directories and files", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-remote-acl-")), home = join(root, "ocx"), store = new RemoteMessageStore(home);

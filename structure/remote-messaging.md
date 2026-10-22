@@ -25,7 +25,10 @@ Mutations acquire an exclusive directory lock and atomically publish private
 files, syncing the file before rename and its parent directory before dependent work.
 Creation persists new directory entries; journal removal also syncs the parent before reporting success.
 A failed publication/removal directory sync reports `remote_storage_unknown`; the operation is not
-automatically retried and the visible state is retained for explicit recovery. Crash locks are not automatically reaped by age. Filesystem calls are not
+automatically retried and the visible state is retained for explicit recovery. A post-rename ACL
+refusal or probe failure also reports `remote_storage_unknown`, because replacement has already
+occurred; ACL privacy and crash durability require inspection before explicit recovery.
+Crash locks are not automatically reaped by age. Filesystem calls are not
 claimed to resist unrestricted same-uid access or privileged path replacement.
 
 `src/messaging/remote-enrollment.ts` uses a private temporary offered known-hosts
