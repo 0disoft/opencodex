@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RemoteMessageStore, parseRemoteState } from "../../src/messaging/remote-store";
 import { macAclOutputIsPrivate, readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "../../src/messaging/remote-files";
+import { LocalMessagingError } from "../../src/messaging/types";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 import { repoPath } from "../helpers/repo-root";
 
@@ -177,14 +178,22 @@ const macTest = process.platform === "darwin" ? test : test.skip;
 macTest("macOS extended ACLs are refused on messaging directories and files", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-remote-acl-")), home = join(root, "ocx"), store = new RemoteMessageStore(home);
   try {
-    mkdirSync(home, { mode: 0o755 }); store.enable();
+    mkdirSync(home, { mode: 0o755 }); const enabled = store.enable();
     for (const path of [store.directory, store.path]) {
+      expect(store.read()).toEqual(enabled);
+      const mode = statSync(path).mode;
+      expect(mode & 0o077).toBe(0);
       const added = spawnSync("/bin/chmod", ["+a", "everyone allow read", path], { encoding: "utf8", timeout: 1_000 });
       expect(added.error).toBeUndefined(); expect(added.status).toBe(0);
-      expect(statSync(path).mode & 0o077).toBe(0);
-      expect(() => store.read()).toThrow("unsafe");
+      expect(statSync(path).mode).toBe(mode);
+      let refusal: unknown;
+      try { store.read(); } catch (error) { refusal = error; }
+      expect(refusal).toBeInstanceOf(LocalMessagingError);
+      expect((refusal as LocalMessagingError).code).toBe("unsafe_remote_storage");
       const removed = spawnSync("/bin/chmod", ["-N", path], { encoding: "utf8", timeout: 1_000 });
       expect(removed.error).toBeUndefined(); expect(removed.status).toBe(0);
+      expect(statSync(path).mode).toBe(mode);
+      expect(store.read()).toEqual(enabled);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
