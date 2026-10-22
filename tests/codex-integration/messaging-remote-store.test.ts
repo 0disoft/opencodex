@@ -82,7 +82,10 @@ test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor a
         assert.deepEqual(native.readdirSync(root), []);
       } finally {
         // Even the deliberately red regression run must release its fixture descriptor.
-        if (fd !== undefined) { try { native.closeSync(fd); } catch {} }
+        if (fd !== undefined) {
+          try { native.closeSync(fd); }
+          catch (error) { if (error?.code !== "EBADF") throw error; }
+        }
       }
     `], { encoding: "utf8", timeout: 10_000, windowsHide: true });
     expect(result.error).toBeUndefined();
