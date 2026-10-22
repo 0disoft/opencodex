@@ -567,10 +567,15 @@ describe("desktop picker freshness inputs (#4761)", () => {
     expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, 1_000], 1_000)).toBe("stale");
     expect(classifyDesktopPicker([500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([500, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, 500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([1_000, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, null], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([], 1_000)).toBe("not_running");
     expect(classifyDesktopPicker([], null)).toBe("not_running");
     expect(classifyDesktopPicker(null, 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, null], 1_000)).toBe("unknown");
+    expect(classifyDesktopPicker([null, 2_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000], null)).toBe("unknown");
   });
 

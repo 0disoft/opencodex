@@ -9,7 +9,8 @@ app-server restart cannot refresh it. A shell at or before the mtime of the cata
 `config.toml` binds through `model_catalog_json` is provably stale. A newer shell is still
 `unknown`: its start time cannot prove which binding it loaded, because an earlier sync may
 have rebound an already-existing, byte-identical catalog. An unbound config or an unreadable
-shell list, start time or catalog mtime is likewise unknown, and a binding this request's own
+shell list or catalog mtime is unknown; an unreadable shell start time is unknown unless another
+readable shell is already known stale. A binding this request's own
 sync changed is stale. Both states request the full restart; `desktopApp.pickerState` reports
 which reading decided. A closed desktop is left closed. `config.toml`'s own mtime is not
 evidence, because injection rewrites identical bytes.

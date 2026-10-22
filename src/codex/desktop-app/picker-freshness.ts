@@ -49,8 +49,9 @@ export function classifyDesktopPicker(
   if (shellStartsMs === null) return "unknown";
   if (shellStartsMs.length === 0) return "not_running";
   if (catalogMtimeMs === null) return "unknown";
+  if (shellStartsMs.some(start => start !== null && start <= catalogMtimeMs)) return "stale";
   if (shellStartsMs.some(start => start === null)) return "unknown";
-  return shellStartsMs.some(start => start! <= catalogMtimeMs) ? "stale" : "unknown";
+  return "unknown";
 }
 
 export interface DesktopPickerIo extends DesktopAppRestartIo {
