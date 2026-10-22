@@ -7,6 +7,7 @@ import { buildCodingAgentToolCatalog, CodingAgentToolCatalogError } from "../cod
 import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAgentToolBridgeInput, type CodingAgentFailure } from "../coding-agent/turn";
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
+import { ToolEnvelopeEchoFilter } from "../../lib/tool-envelope-echo-filter";
 
 export type QoderAdapterDeps = CodingAgentDeps;
 
@@ -79,6 +80,8 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
 
 /**
  * Wrap the turn's outbound channel with the scaffolding guard (#4190).
+ * Vendor-cleaned assistant text also uses the shared replay-envelope recognizer
+ * (#7517), so internal history scaffolding cannot become a successful answer.
  *
  * The vendor CLI can put its own agent layer into the text channel despite built-in tools
  * being disabled, and the shared stream-json parser forwards a text delta
@@ -93,6 +96,7 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
 export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (event: AdapterEvent) => void {
   const textFilter = new QoderScaffoldFilter();
   const thinkingFilter = new QoderScaffoldFilter();
+  const replayFilter = new ToolEnvelopeEchoFilter();
   let closed = false;
 
   const refuse = (reason: string): void => {
@@ -110,11 +114,23 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     });
   };
 
+  const forwardText = (text: string, refuseOnMatch = true): void => {
+    const safe = replayFilter.feed(text);
+    // An overflowing fenced hold can release an unverified marker. Refuse it
+    // before publication rather than leaking the envelope under a memory cap.
+    if (replayFilter.unverifiedMarker) {
+      if (refuseOnMatch) refuse("replayed tool envelope");
+      return;
+    }
+    if (safe) emit({ type: "text_delta", text: safe });
+    if (replayFilter.matched && refuseOnMatch) refuse("replayed tool envelope");
+  };
+
   return (event: AdapterEvent): void => {
     if (closed) return;
     if (event.type === "text_delta") {
       const cleaned = textFilter.push(event.text);
-      if (cleaned.text) emit({ ...event, text: cleaned.text });
+      if (cleaned.text) forwardText(cleaned.text);
       if (cleaned.fail) refuse(cleaned.fail);
       return;
     }
@@ -127,9 +143,13 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
       const tail = textFilter.flush();
       const reasoning = thinkingFilter.flush();
-      if (tail.text) emit({ type: "text_delta", text: tail.text });
+      if (tail.text) forwardText(tail.text, false);
+      if (closed) return;
+      const replayTail = replayFilter.finish();
+      if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
       if (reasoning.text) emit({ type: "thinking_delta", thinking: reasoning.text });
-      const fail = tail.fail ?? reasoning.fail;
+      const fail = tail.fail ?? reasoning.fail
+        ?? (replayFilter.matched || replayFilter.unverifiedMarker ? "replayed tool envelope" : null);
       // A vendor error already carries the better explanation for why the turn ended;
       // only a terminal that claims success is replaced.
       if (fail && event.type !== "error") {

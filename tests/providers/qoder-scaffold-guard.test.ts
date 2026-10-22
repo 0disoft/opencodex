@@ -276,3 +276,53 @@ describe("guardQoderScaffolding", () => {
     expect(events.map(event => event.type)).toEqual(["tool_call_start", "done"]);
   });
 });
+
+
+describe("Qoder replay envelope refusal (#7517)", () => {
+  for (const marker of ["[Tool call: probe (call_id: call_fixture) with args: ", "[Tool Result]\n", "[Tool Error]\n", "[tool_result]\n", "[Tool Call]\n"]) {
+    for (const size of [1, 2, 7, 64]) test(`refuses ${marker.trim()} split in ${size}-character deltas`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      const text = "Safe answer.\n" + marker + JSON.stringify({ input: "private-fixture\n".repeat(6000) });
+      for (let at = 0; at < text.length; at += size) guard({ type: "text_delta", text: text.slice(at, at + size) });
+      guard({ type: "done", stopReason: "stop" });
+      expect(textOf(events)).toBe("Safe answer.\n");
+      expect(events.filter(event => event.type === "error")).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
+
+  for (const marker of ["[Tool Result", "[Tool Call"]) for (const terminal of ["done", "incomplete", "error"] as const) test(`settles trailing ${marker} before ${terminal}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Safe.\n" + marker });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
+    expect(textOf(events)).toBe("Safe.\n");
+    expect(events.at(-1)).toMatchObject(terminal === "error" ? end : { type: "error", status: 502, retryable: false });
+  });
+
+  test("keeps ordinary marker prose, closed fenced examples and partial nonmarkers", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    const answer = "[Tool Result] means a returned value.\n```text\n[Tool call: example]\nquoted payload\n```\nFinal [Tool Res";
+    for (const text of answer) guard({ type: "text_delta", text });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(answer);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("refuses an unclosed fenced envelope without releasing an overflowing hold", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "```text\n[Tool call: probe]\n" + "private-fixture".repeat(6000) });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).not.toContain("[Tool call:");
+    expect(textOf(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, retryable: false });
+  });
+});

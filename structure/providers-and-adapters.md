@@ -77,6 +77,14 @@ name/namespace components and wire names over 512 UTF-8 bytes before staging. It
 projection. Duplicate and ambiguous wire identities remain the Responses parser's responsibility. Qoder appends the
 folded system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or `QODERCN_APPEND_SYSTEM_PROMPT` child environment, never through command-line arguments or inherited vendor variables. `src/adapters/qoder/adapter.ts` sets the region's usage switch (`QODER_EXPOSE_TOKEN_USAGE` or `QODERCN_EXPOSE_TOKEN_USAGE`; each CLI build reads only its own prefix) to `true` only in Qoder's child environment, so the shared usage parser receives the CLI's token counts instead of zeros.
 
+Qoder's assistant text passes through the vendor-scaffolding guard and then the existing `src/lib/tool-envelope-echo-filter.ts` line/fence recognizer.
+A replayed tool envelope or an unverified marker released by its bounded fence hold terminates with non-retryable `vendor_scaffold_detected` (502), without publishing that envelope or a later successful terminal.
+Whole-line result/error markers and tool-call line prefixes are recognized across deltas; ordinary marker prose and closed fenced examples keep the shared recognizer's semantics.
+Thinking retains the existing vendor-scaffolding guard. Tool events are not interpreted as text.
+
+> Decision record: [ADR-7517](decisions/ADR-7517-qoder-replay-envelope.md)
+
+
 Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
 tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
 joins only when a newline or EOF completes the frame. This preserves split UTF-8, BOM, CRLF,
