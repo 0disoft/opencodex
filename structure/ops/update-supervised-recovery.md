@@ -131,7 +131,10 @@ managed home; foreground recovery does not acquire that authority.
 For a matching managed home, the dashboard restart worker in `src/update/job.ts` follows the same order through
 `src/update/job-supervised-restart.ts`, which sits beside it because `job.ts` is at the repository
 size cap, and `src/update/job-update-tray.ts` owns the production own-foreground tray handoff for
-the same reason. When a service-managed install's refresh fails, is not viable, or never serves, the
+the same reason. The helper publishes its pre-stop plan to the worker before stopping; if post-stop
+status and immediate native restore both fail, the worker retains the original running state and
+retries only `tray start` through its verified launcher. A failed handoff never permits package
+replacement, and a failed cleanup retains the handoff error. When a service-managed install's refresh fails, is not viable, or never serves, the
 worker asks the manager to restart its job before it re-acquires the lease for a direct start,
 using the same helpers and the same manager-PID-against-serving-PID proof. A proven supervised
 restart skips the direct start. An unsettled restart starts no competing proxy and fails the job.
@@ -174,3 +177,6 @@ and a stopped tray so refusal can restore only the former, without install or re
 The worker suite changes absent/foreign authority under the restart lease, after the worker's last
 check, and reaches the real recovery policy with no service repair or direct start permitted.
 The Node child and executable Bun refusal body also cover stopped/unverified tray cleanup.
+`tests/update/update-tray-handoff.test.ts` also drives the default Windows worker path in isolated
+children with native tray I/O mocked: running, idle, absent, missing initial evidence, and post-stop
+status plus native-restore failures, including a launcher cleanup failure. No handoff override is used.

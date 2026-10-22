@@ -1796,8 +1796,9 @@ export interface GuiUpdateWorkerIo {
   resolveOwnershipFn?: () => ServiceOwnershipResolution; // Defaults to the shared service install state.
   serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   launcherSupportsUpdateHomeFn?: (launcher: string, node: string) => boolean;
+  platform?: NodeJS.Platform; // Exercise the default Windows handoff without changing the host platform.
   /** Isolated tray handoff plan for focused worker tests (default: the win32 tray handoff). */
-  trayHandoffFn?: () => ReturnType<typeof planWindowsTrayUpdate> | Promise<ReturnType<typeof planWindowsTrayUpdate>>;
+  trayHandoffFn?: (capturePlan?: Parameters<typeof defaultWorkerTrayHandoff>[0]) => ReturnType<typeof planWindowsTrayUpdate> | Promise<ReturnType<typeof planWindowsTrayUpdate>>;
   /** Isolated tray command runner for focused worker tests (default: runLoggedCommand). */
   trayCommandFn?: GuiUpdateWorkerIo["runCommandFn"];
   runCommandFn?: (
@@ -1807,7 +1808,6 @@ export interface GuiUpdateWorkerIo {
     timeout: number,
   ) => { status: number | null; signal: NodeJS.Signals | null };
 }
-
 export async function runGuiUpdateWorker(
   jobId: string,
   channel: Channel,
@@ -1856,7 +1856,6 @@ export async function runGuiUpdateWorker(
     };
     writeJob(job);
   }
-
   try {
     if (!check.canUpdate) {
       throw new Error(check.reason ?? "No update is available");
@@ -1910,14 +1909,15 @@ export async function runGuiUpdateWorker(
       if (trayWasRunning && activeLauncherVerified) trayRun(["tray", "start"], 15_000);
       updateJob(job!, { status: "failed", restarted: false, error: homeRefusal });
     };
-    if (!homePolicy.packageOnly && (io.trayHandoffFn || process.platform === "win32")) {
+    if (!homePolicy.packageOnly && (io.trayHandoffFn || (io.platform ?? process.platform) === "win32")) {
       try {
-        const trayPlan = await (io.trayHandoffFn ?? defaultWorkerTrayHandoff)();
+        const trayPlan = await (io.trayHandoffFn ?? defaultWorkerTrayHandoff)(plan => { trayWasInstalled = plan.refreshAfterReplacement; trayWasRunning = plan.restoreOnFailure; });
         trayWasInstalled = trayPlan.refreshAfterReplacement;
         trayWasRunning = trayPlan.restoreOnFailure;
       } catch (error) {
+        if (trayWasRunning && activeLauncherVerified) { try { trayRun(["tray", "start"], 15_000); } catch { /* preserve the handoff failure */ } }
         updateJob(job, {
-          status: "failed",
+          status: "failed", restarted: false,
           error: `Could not stop the Windows tray; aborting before package replacement: ${withheldSummary(error)}`,
         });
         return;
