@@ -1965,7 +1965,7 @@ export async function runGuiUpdateWorker(
         if (trayWasRunning) runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
       }
     }
-    if (!homePolicy.check()) { updateJob(job, { status: "failed", restarted: false }); return; }
+    if (!homePolicy.check()) { updateJob(job, { status: "failed", restarted: false, error: homeRefusal }); return; }
     if (restart) {
       const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async lease => {
         job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");

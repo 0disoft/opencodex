@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createTempHome } from "../helpers/temp-home";
-import { automaticUpdateLauncherSupported, packageOnlyUpdateSucceeded } from "../../src/update/job-update-home";
+import { automaticUpdateLauncherSupported, packageOnlyUpdateSucceeded, prepareWorkerUpdateHome } from "../../src/update/job-update-home";
 import { join } from "node:path";
 import { readUpdateJob, runGuiUpdateWorker } from "../../src/update/job";
 
@@ -70,6 +70,10 @@ for (const installer of ["npm", "bun"] as const) test(`worker ${installer} insta
     expect(events).toEqual(["update"]);
     const job = readUpdateJob(`unknown-${installer}`);
     expect(job).toMatchObject({ status: "succeeded", restarted: false });
+    // The persisted command must survive renderSafeCommand: bare node name plus the launcher
+    // path placeholder, like the ordinary npm/pnpm worker display — never an ocx literal that
+    // would be withheld as an unrecognized shape.
+    expect(job?.command).toBe("node <path> update --tag latest --update-package-only");
     expect(JSON.stringify(job?.log)).toContain("ownership could not be verified");
     expect(JSON.stringify(job?.log)).toContain("Restart the proxy manually");
   } finally { box.remove(); }
@@ -93,6 +97,49 @@ test("a child package-only success vetoes parent restart even when its own home 
     });
     expect(restartChecks).toBe(0);
     expect(readUpdateJob("child-package-only")).toMatchObject({ status: "succeeded", restarted: false });
+  } finally { box.remove(); }
+});
+
+test("a spaced Windows launcher path still yields a recognizable package-only display", () => {
+  // renderSafeCommand splits on \s and only accepts bare tool tokens: a raw `C:\Program Files\...`
+  // display would withhold on both counts (split path, `node.exe` tool). The persisted display
+  // must carry the pre-sanitized `<path>` placeholder while bin/args keep the real spaced path.
+  const command = { bin: "placeholder", args: [] as string[], display: "" };
+  const reports: string[] = [];
+  const policy = prepareWorkerUpdateHome(command, "npm",
+    "C:\\Program Files\\OpenCodex\\bin\\ocx.mjs", "node.exe", "latest",
+    message => reports.push(message),
+    () => ({ kind: "unknown" }),
+    () => true);
+  expect(policy?.packageOnly).toBe(true);
+  expect(command.bin).toBe("node.exe");
+  expect(command.args).toEqual([
+    "C:\\Program Files\\OpenCodex\\bin\\ocx.mjs", "update", "--tag", "latest",
+    "--update-package-only", "--update-worker-result",
+  ]);
+  expect(command.display).toBe("node <path> update --tag latest --update-package-only");
+});
+
+test("a home authority change after install persists the refusal as the job error", async () => {
+  const box = createTempHome("ocx-update-home-late-refusal-");
+  mkdirSync(box.codexHome, { recursive: true });
+  try {
+    let flipped = false;
+    await runGuiUpdateWorker("late-refusal", "latest", true, {
+      checkForUpdateFn: () => ({ currentVersion: "2.7.40", latestVersion: "2.7.41", channel: "latest",
+        installer: "npm", updateAvailable: true, canUpdate: true, command: "fixture", releaseNotesUrl: "fixture" }),
+      integrityFn: () => ({ ok: true, integrity: "sha512-testfixturevalue000000000" }),
+      cachePreflightFn: () => ({ ok: true, reason: "ok" }),
+      launcherSupportsUpdateHomeFn: () => true,
+      serviceHomeAuthorityFn: () => flipped ? { kind: "foreign", subject: "b".repeat(64) } : { kind: "same" },
+      runCommandFn: () => { flipped = true; return { status: 0, signal: null }; },
+    });
+    const job = readUpdateJob("late-refusal");
+    expect(job).toMatchObject({ status: "failed", restarted: false });
+    // The refusal text the policy reported must reach `error`, not only `log` — the dashboard
+    // surfaces `error` as the failure reason.
+    expect(job?.error).toContain("Automatic update restart refused");
+    expect(job?.error).toContain("ocx service status");
   } finally { box.remove(); }
 });
 

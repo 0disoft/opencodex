@@ -15,8 +15,7 @@ import type { ServiceOwnership } from "../service/state";
 import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from "./runtime-ownership.mjs";
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
-import { createUpdateServiceHomePolicy, inspectUpdateServiceHome } from "./service-home-authority";
-import { UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
+import { createUpdateServiceHomePolicy, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
@@ -491,6 +490,9 @@ export async function runUpdate(): Promise<void> {
 
   const { serviceStatePaths } = await import("../service");
   const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  // Ownership inspection imports the service CLI, which reaches this update entry again.
+  // Load it only after entering the lease; the policy itself stays a dependency-free import.
+  const { inspectUpdateServiceHome } = await import("./service-home-authority");
   const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"));
   if (!homePolicy.checkPackage()) return 1;
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`

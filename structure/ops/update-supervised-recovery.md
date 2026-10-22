@@ -100,8 +100,10 @@ foreground runtime's existing PID/port and lease checks for direct recovery, wit
 the other registration or reporting that foreground runtime as UNSUPERVISED. Unknown evidence
 refuses automatic restart. A matching home that becomes foreign or unknown after the unleased
 refresh refuses both manager recovery and direct fallback. A foreign record must remain the same
-observed subject for foreground recovery. Refusals persist static manual-status guidance, never
-recorded paths or probe output.
+observed subject for foreground recovery. Refusals persist static manual-status guidance in the
+terminal error, including authority changes after installation, never recorded paths or probe output.
+Package-only command displays retain the Node launcher shape with a `<path>` placeholder before
+persistence; the executable and argument array retain the actual launcher path, including spaces.
 
 Home authority is checked before initial reclaim, after releasing the repair lease, before manager
 recovery, after direct-fallback lease reacquisition and at pinned-start preparation/send boundaries.
