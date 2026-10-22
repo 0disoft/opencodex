@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
-import { formatSelectorConjunction } from "../../integrations/merge";
+import { formatSelectorConjunction, UnrepresentableSelectorError } from "../../integrations/merge";
 import { ClientPathError } from "../config-export";
 import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { LOOPBACK_API_KEY_PLACEHOLDER, OPENCODE_PROVIDER_ID } from "./constants";
@@ -85,7 +85,7 @@ export function buildQoderContribution(ctx: ExportContext): ManagedContribution 
           { field: "provider", value: OPENCODE_PROVIDER_ID },
           { field: "model", value: model.model },
         ]);
-        if (selector === null) throw new Error("Qoder model ID cannot be represented by a managed array selector.");
+        if (selector === null) throw new UnrepresentableSelectorError("Qoder model ID cannot be represented by a managed array selector.");
         return { path: ["modelConfigs", "customModels", selector], value: model };
       }),
     ],

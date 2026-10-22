@@ -18,6 +18,7 @@ import { SNAPSHOT_RETENTION } from "./journal";
 import {
   AmbiguousSelectorError,
   InvalidSelectorError,
+  UnrepresentableSelectorError,
   parseSegment,
   readPath,
   selectIndex,
@@ -678,7 +679,18 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   const parsed = input.clientId === "cline"
     ? parseClineDocument(loaded.before)
     : parseConfig(loaded.before, effective.format, EXPORT_CLIENTS[input.clientId].jsonc ? { jsonc: true } : undefined);
-  const contribution = buildIntegrationContribution(input, effective, parsed, record);
+  let contribution: ManagedContribution;
+  try {
+    contribution = buildIntegrationContribution(input, effective, parsed, record);
+  } catch (error) {
+    // One catalog row can make this client's ownership unaddressable. Keep its
+    // refusal visible without hiding every other client in a collection read.
+    if (!(error instanceof UnrepresentableSelectorError)) throw error;
+    return { clientId: input.clientId, state: "unsafe", installed, configPath,
+      reason: "unresolvable-path",
+      ...(record?.configPath === configPath ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
+      ...retention };
+  }
   if (input.clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0
     && (!record || record.configPath !== configPath)) {
     return { clientId: input.clientId, state: "unsafe", installed, configPath,

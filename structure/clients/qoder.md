@@ -12,6 +12,12 @@ relative override. The Qoder exporter in
 `model`, preserving same-named models belonging to other providers. Apply, refresh and disable
 use the existing recorded-fragment writer; restore uses its snapshots. Model IDs that cannot
 be represented by the shared selector grammar refuse managed contribution construction.
+Status reads report only Qoder as `unsafe` with `unresolvable-path`, retaining its resolved
+path, installation state, matching ownership metadata and retention information. Collection
+and single-client reads remain available; preview and mutation still refuse those contributions.
+Unexpected builder errors propagate rather than being classified as a selector refusal.
+
+> Decision record: [ADR-7512](../decisions/ADR-7512-qoder-selector-status.md)
 The default model is the first normalized model; an empty catalog omits the default.
 Input limits use authoritative context metadata or Qoder's requested 128000 fallback.
 Exports reject non-loopback placeholder use; the writer's existing admission gate protects

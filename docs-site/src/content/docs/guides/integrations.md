@@ -83,6 +83,9 @@ The generated API key is a non-secret placeholder: Qoder integration requires lo
 access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
 changes refresh an already enabled Qoder integration like the other managed clients.
+If a catalog model ID contains `,` or `]` (for example `kimi/k3[1m]`), Qoder reports
+that its configuration cannot be verified; other integration statuses remain available.
+Managed preview and changes remain refused while the catalog contains that model ID.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
