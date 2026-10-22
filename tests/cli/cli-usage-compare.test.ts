@@ -230,7 +230,7 @@ describe("ocx usage compare", () => {
 });
 
 
-test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "credential", "admin", "transport"])(
+test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "credential", "admin", "transport", "runtime"])(
   "usage comparison keeps one owner across both windows (%s)", scenario => {
     const home = mkdtempSync(join(tmpdir(), "ocx-compare-owner-"));
     try {
@@ -248,7 +248,7 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
           managementTransport: "direct", selectedClients: ["claude"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
           apiKeyId: "account-a", tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1,
           connectedAt: "2026-09-01T00:00:00.000Z" };
-        const connected = !["stable-local", "connect", "admin"].includes(scenario);
+        const connected = !["stable-local", "connect", "admin", "runtime"].includes(scenario);
         const write = (isClient) => writeFileSync(join(home, "config.json"), JSON.stringify({
           port: 9, providers: {}, defaultProvider: "openai", runtimeRole: isClient ? "client" : "standalone",
           ...(isClient ? { client } : {}),
@@ -277,8 +277,11 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
         const output = [], errors = [], requests = [];
         console.log = (...args) => output.push(args.join(" "));
         console.error = (...args) => errors.push(args.join(" "));
+        let discoveries = 0;
         const code = await handleObserveCommand(["usage", "compare", "--json"], {
-          baseUrl: "http://local.test", now: () => ${NOW},
+          ...(scenario === "runtime" ? { findLiveProxy: async () => ({
+            pid: ++discoveries === 1 ? 101 : 202, port: 7777, hostname: "127.0.0.1", source: "runtime", role: "standalone",
+          }) } : { baseUrl: "http://local.test" }), now: () => ${NOW},
           fetchImpl: async (input, init) => {
             const url = new URL(String(input));
             requests.push({ origin: url.origin, path: url.pathname,
@@ -290,7 +293,7 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
               providers: [], models: [], days: [], filter: { provider: null, model: null, matched: true, comboOverlap: false } });
           },
         });
-        process.stdout.write(JSON.stringify({ code, output, errors, requests }));
+        process.stdout.write(JSON.stringify({ code, output, errors, requests, discoveries }));
       `], { cwd: repoRoot(), env: { ...process.env, OPENCODEX_HOME: home }, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5000 });
       expect(child.status, child.stderr).toBe(0);
       const result = JSON.parse(child.stdout);
@@ -303,8 +306,12 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
       } else {
         expect(result.code).toBe(1);
         expect(result.output).toEqual([]);
-        expect(result.errors.join("\n")).toContain("Usage owner changed during comparison");
+        expect(result.errors.join("\n")).toContain(scenario === "runtime" ? "Usage runtime changed during comparison" : "Usage owner changed during comparison");
         expect(result.requests).toHaveLength(1);
+        if (scenario === "runtime") {
+          expect(result.discoveries).toBe(2);
+          expect(result.requests[0].originalCredential).toBe(true);
+        }
       }
       expect(child.stdout).not.toContain("compare-fixture");
     } finally {

@@ -9,6 +9,7 @@ import { fetchHubUsage } from "../client/hub-client";
 import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
 import { redactSecretString } from "../lib/redact";
+import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { rangeWindow, USAGE_SURFACES } from "../usage/summary";
 import type { UsageTimeWindow } from "../usage/time-range";
 import {
@@ -17,7 +18,6 @@ import {
   rejectArgs,
   RuntimeApiError,
   runtimeRequest,
-  runtimeBaseUrl,
   takeFlag,
   takeOption,
   takeOptionWithSyntax,
@@ -193,6 +193,21 @@ function captureUsageOwner() {
 }
 type UsageOwner = ReturnType<typeof captureUsageOwner>;
 
+function pinUsageRuntime(deps: RuntimeApiDeps): RuntimeApiDeps {
+  let pinned: string | undefined;
+  return { ...deps, findLiveProxy: async () => {
+    const live = await (deps.findLiveProxy ?? findLiveProxy)();
+    const identity = JSON.stringify(live
+      ? [live.pid, live.port, live.hostname, live.source, live.role] satisfies Array<LiveProxy[keyof LiveProxy]>
+      : null);
+    if (pinned !== undefined && pinned !== identity) {
+      throw new Error("Usage runtime changed during comparison; no comparison was produced. Retry for the current runtime.");
+    }
+    pinned = identity;
+    return live;
+  } };
+}
+
 function assertUsageOwner(owner: UsageOwner): void {
   const current = readClientConnectionState();
   const expected = owner.connection;
@@ -276,7 +291,9 @@ export async function handleUsageCompareCommand(argv: string[], deps: UsageCompa
   const windows = compareUsageWindows(range, now);
   const filters = { range, surface, provider, model, apiKeyId };
   const owner = captureUsageOwner();
-  const readDeps = owner.connection.kind === "disconnected" ? { ...deps, baseUrl: await runtimeBaseUrl(deps) } : deps;
+  // Rediscover immediately before each local request and refuse to send the captured
+  // management credential when the serving process or listener has changed.
+  const readDeps = owner.connection.kind === "disconnected" && !deps.baseUrl ? pinUsageRuntime(deps) : deps;
   const currentReport = await readUsage(query({ ...filters, since: windows.current.since, until: windows.current.until }), windows.current, apiKeyId, readDeps, owner);
   const previousReport = await readUsage(query({ ...filters, since: windows.previous.since, until: windows.previous.until }), windows.previous, apiKeyId, readDeps, owner);
   const current = totalsOf(currentReport);
