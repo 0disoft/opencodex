@@ -1,12 +1,33 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, fsyncSync, fstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RemoteMessageStore, parseRemoteState } from "../../src/messaging/remote-store";
-import { readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "../../src/messaging/remote-files";
+import { macAclOutputIsPrivate, readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "../../src/messaging/remote-files";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
 
 const unixTest = test.skipIf(process.platform === "win32");
+test("macOS ACL inspection distinguishes plain metadata from access entries", () => {
+  expect(macAclOutputIsPrivate("-rw-------  1 owner  staff  4 Oct 22 00:00 state.json\n")).toBe(true);
+  expect(macAclOutputIsPrivate("-rw-------+ 1 owner  staff  4 Oct 22 00:00 state.json\n 0: everyone allow read\n")).toBe(false);
+  expect(macAclOutputIsPrivate("")).toBe(false);
+});
+const macTest = process.platform === "darwin" ? test : test.skip;
+macTest("macOS extended ACLs are refused on messaging directories and files", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-acl-")), home = join(root, "ocx"), store = new RemoteMessageStore(home);
+  try {
+    mkdirSync(home, { mode: 0o755 }); store.enable();
+    for (const path of [store.directory, store.path]) {
+      const added = spawnSync("/bin/chmod", ["+a", "everyone allow read", path], { encoding: "utf8", timeout: 1_000 });
+      expect(added.error).toBeUndefined(); expect(added.status).toBe(0);
+      expect(statSync(path).mode & 0o077).toBe(0);
+      expect(() => store.read()).toThrow("unsafe");
+      const removed = spawnSync("/bin/chmod", ["-N", path], { encoding: "utf8", timeout: 1_000 });
+      expect(removed.error).toBeUndefined(); expect(removed.status).toBe(0);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 unixTest("publication syncs the file before rename and its directory afterwards, closing both descriptors", () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-remote-sync-")), path = join(root, "journal.json");
   const synced: { fd: number; directory: boolean }[] = [];
