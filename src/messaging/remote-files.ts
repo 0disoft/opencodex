@@ -115,7 +115,11 @@ export function writeRemoteFile(path: string, text: string, sync = fsyncSync): v
   const temporary = join(dirname(path), `.write-${crypto.randomUUID()}`);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
-    try { checkMacAcl(temporary); writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
+    try {
+      try { checkMacAcl(temporary); }
+      catch { throw remoteError("unsafe_remote_storage", "Cannot safely publish messaging state: temporary file ACL privacy could not be confirmed."); }
+      writeFileSync(fd, text, "utf8"); sync(fd);
+    } finally { closeSync(fd); }
     renameSync(temporary, path);
     try { checkMacAcl(path); }
     catch { throw remoteError("remote_storage_unknown", "Messaging state was replaced, but its ACL privacy and crash durability could not be confirmed; inspect state and permissions before explicit recovery."); }

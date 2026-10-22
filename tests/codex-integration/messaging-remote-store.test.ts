@@ -29,7 +29,8 @@ test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor a
       import * as path from "node:path";
       const native = { ...fs }, root = ${JSON.stringify(root)}, failure = ${JSON.stringify(failure)};
       const nativePath = { ...path }, { basename, join } = nativePath;
-      const target = "/fixture/journal.json";
+      const target = "/fixture/journal.json", published = join(root, "journal.json");
+      native.writeFileSync(published, "old", { mode: 0o600 });
       let fd, temporary, probes = 0, writes = 0, syncs = 0, renames = 0;
       Object.defineProperty(process, "platform", { value: "darwin" });
       Object.defineProperty(process, "getuid", { value: () => 1234 });
@@ -49,6 +50,7 @@ test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor a
           fd = native.openSync(temporary, flags, mode);
           return fd;
         },
+        fstatSync(fd) { return Object.assign(native.fstatSync(fd), { uid: 1234, mode: 0o100600 }); },
         writeFileSync(...args) { writes++; return native.writeFileSync(...args); },
         renameSync() { renames++; throw new Error("unexpected publication"); },
         unlinkSync(path) { native.unlinkSync(join(root, basename(path))); },
@@ -71,16 +73,22 @@ test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor a
           }) };
       } }));
       const { writeRemoteFile } = await import(${JSON.stringify(pathToFileURL(repoPath("src/messaging/remote-files.ts")).href)});
+      const { LocalMessagingError } = await import(${JSON.stringify(pathToFileURL(repoPath("src/messaging/types.ts")).href)});
       try {
-        assert.throws(() => writeRemoteFile(target, "unpublished", () => { syncs++; }), error => {
-          if (!probes) throw error;
-          return true;
-        });
+        let refusal;
+        try { writeRemoteFile(target, "unpublished", () => { syncs++; }); }
+        catch (error) { refusal = error; }
+        if (!probes) throw refusal;
         assert.equal(probes, 1);
         assert.equal(writes, 0); assert.equal(syncs, 0); assert.equal(renames, 0);
         assert.throws(() => native.fstatSync(fd), { code: "EBADF" });
         assert.equal(native.existsSync(temporary), false);
-        assert.deepEqual(native.readdirSync(root), []);
+        assert.equal(native.readFileSync(published, "utf8"), "old");
+        assert.deepEqual(native.readdirSync(root), ["journal.json"]);
+        assert.ok(refusal instanceof LocalMessagingError);
+        assert.equal(refusal.code, "unsafe_remote_storage");
+        assert.equal(refusal.message.includes("fixture ACL probe failure"), false);
+        assert.equal(refusal.message.includes("everyone allow read"), false);
       } finally {
         // Even the deliberately red regression run must release its fixture descriptor.
         if (fd !== undefined) {
