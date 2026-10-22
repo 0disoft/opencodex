@@ -5,6 +5,7 @@ import * as processTools from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawnedNpmOperation } from "./npm-operation";
 import { repoPath } from "./repo-root";
 
 const realSpawnSync = processTools.spawnSync;
@@ -123,8 +124,8 @@ mock.module("node:child_process", () => ({ ...processTools,
     Date.now = () => realNow() + clockOffset;
     return directChild;
   },
-  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv } = {}) => {
-    if (args.includes("view")) return { status: 0, stdout: "99.0.0\n", stderr: "" };
+  spawnSync: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv; windowsVerbatimArguments?: boolean } = {}) => {
+    if (spawnedNpmOperation(args, options) === "view") return { status: 0, stdout: "99.0.0\n", stderr: "" };
     const env = options.env ?? process.env;
     const phase = args.includes("stop") ? "stop" : args.includes("service") ? "recovery"
       : args.some(arg => arg.includes("@bitkyc08/opencodex")) ? "replacement" : "ancillary";
