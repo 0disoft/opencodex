@@ -44,7 +44,7 @@ export type { UpdateCheckDeps } from "./check-types";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
-import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { GUI_UPDATE_FAILURE_NEXT_STEP } from "./update-failure-guidance.mjs";
 import {
   npmCachePreflightFailureMessage,
@@ -53,6 +53,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
 import { prepareWorkerUpdateHome, packageOnlyUpdateSucceeded } from "./job-update-home";
+import { defaultWorkerTrayHandoff } from "./job-update-tray";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import type { WorkerLaunchContext } from "./worker-launch";
 
@@ -986,6 +987,7 @@ export interface RestartIo {
   killProxyFn?: typeof killProxy;
   serviceInstalledFn?: () => boolean;
   serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
+  serviceHomeBaseline?: ReturnType<UpdateServiceHomeInspector>; // Worker delegation pins its original authority.
   stopServiceWrappersFn?: () => void;
   readPidFn?: typeof readPid;
   /**
@@ -1097,8 +1099,8 @@ async function restartAfterUpdate(
   io: RestartIo = {},
 ): Promise<false | void | "unsupervised"> {
   const homePolicy = createUpdateServiceHomePolicy(io.serviceHomeAuthorityFn ?? inspectUpdateServiceHome,
-    refusal => { updateJob(job, { status: "failed", restarted: false, error: refusal }, refusal); });
-  if (!homePolicy.check(homePolicy.initial)) return false;
+    refusal => { updateJob(job, { status: "failed", restarted: false, error: refusal }, refusal); }, false, io.serviceHomeBaseline);
+  if (!homePolicy.check(io.serviceHomeBaseline ? undefined : homePolicy.initial)) return false;
   const serviceInstalled = homePolicy.initial.kind === "same" && (io.serviceInstalledFn ?? isServiceInstalled)();
   const config = loadConfig();
   // Stop-first update already cleared pid/runtime state, so the pre-update capture is
@@ -1794,6 +1796,10 @@ export interface GuiUpdateWorkerIo {
   resolveOwnershipFn?: () => ServiceOwnershipResolution; // Defaults to the shared service install state.
   serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   launcherSupportsUpdateHomeFn?: (launcher: string, node: string) => boolean;
+  /** Isolated tray handoff plan for focused worker tests (default: the win32 tray handoff). */
+  trayHandoffFn?: () => ReturnType<typeof planWindowsTrayUpdate> | Promise<ReturnType<typeof planWindowsTrayUpdate>>;
+  /** Isolated tray command runner for focused worker tests (default: runLoggedCommand). */
+  trayCommandFn?: GuiUpdateWorkerIo["runCommandFn"];
   runCommandFn?: (
     job: UpdateJobState,
     bin: string,
@@ -1831,6 +1837,8 @@ export async function runGuiUpdateWorker(
   let activeLauncher = packageLauncherPath();
   let activeLauncherVerified = true;
   let pnpmOwner: PnpmGlobalOwner | undefined;
+  const trayRun = (args: string[], timeout: number) =>
+    (io.trayCommandFn ?? runLoggedCommand)(job!, process.execPath, [activeLauncher, ...args], timeout);
   if (!job) {
     job = {
       id: jobId,
@@ -1898,17 +1906,13 @@ export async function runGuiUpdateWorker(
       message => { homeRefusal = message; job = updateJob(job!, {}, message); }, io.serviceHomeAuthorityFn, io.launcherSupportsUpdateHomeFn);
     if (!homePolicy) { updateJob(job, { status: "failed", restarted: false, error: homeRefusal }); return; }
     job = updateJob(job, { command: cmd.display });
-    if (!homePolicy.packageOnly && process.platform === "win32") {
+    const refuseWorkerHome = () => {
+      if (trayWasRunning && activeLauncherVerified) trayRun(["tray", "start"], 15_000);
+      updateJob(job!, { status: "failed", restarted: false, error: homeRefusal });
+    };
+    if (!homePolicy.packageOnly && (io.trayHandoffFn || process.platform === "win32")) {
       try {
-        const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
-        const tray = getWindowsTrayStatus();
-        const trayPlan = handoffWindowsTrayForUpdate(tray, {
-          stop: () => {
-            const stopped = stopWindowsTray();
-            return { exitStatus: 0, running: stopped.running };
-          },
-          start: () => startWindowsTray(),
-        });
+        const trayPlan = await (io.trayHandoffFn ?? defaultWorkerTrayHandoff)();
         trayWasInstalled = trayPlan.refreshAfterReplacement;
         trayWasRunning = trayPlan.restoreOnFailure;
       } catch (error) {
@@ -1919,12 +1923,13 @@ export async function runGuiUpdateWorker(
         return;
       }
     }
-
     /* [Decision Log]
     - 목적: GUI 요청 처리 프로세스가 자신이 실행 중인 패키지를 직접 덮어쓰지 않도록 업데이트를 별도 worker에서 수행한다.
     - 대안 분석: (1) 서버에서 runUpdate 직접 호출: process.exit/stdio/실행 파일 교체 위험. (2) GUI에서 CLI 명령 안내만 제공: 자동 업데이트 UX 부족. (3) 숨은 worker가 Node launcher/Bun 전역 명령을 실행: 상태 추적과 안전한 재시작이 가능.
     - 선택 근거: 현재 CLI의 package-manager self-update 우회를 재사용하면서도 GUI 서버 요청 생명주기와 설치 작업을 분리할 수 있어 가장 안정적이다.
     */
+    // Raw package-manager lanes cannot carry the baseline argv; the parent rechecks it at the boundary.
+    if (!homePolicy.checkPackage()) { refuseWorkerHome(); return; }
     const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
     if (packageOnlyUpdateSucceeded(cmd, result.status, homePolicy.packageOnly)) {
       homePolicy.check({ kind: "unknown" }); updateJob(job, { status: "succeeded", restarted: false },
@@ -1939,9 +1944,7 @@ export async function runGuiUpdateWorker(
         if (verifiedLauncher) activeLauncher = verifiedLauncher;
         else activeLauncherVerified = false;
       }
-      if (trayWasRunning && activeLauncherVerified) {
-        runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
-      }
+      if (trayWasRunning && activeLauncherVerified) trayRun(["tray", "start"], 15_000);
       updateJob(job, {
         status: "failed",
         exitCode: result.status,
@@ -1957,20 +1960,23 @@ export async function runGuiUpdateWorker(
       activeLauncher = verifiedLauncher;
     }
 
+    // Authority gates every post-replacement control action; refusal may only restore the
+    // own tray stopped before replacement, never install/refresh a new artifact.
+    if (!homePolicy.check()) { refuseWorkerHome(); return; }
     if (trayWasInstalled) {
       const trayArgs = planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs;
-      const tray = runLoggedCommand(job, process.execPath, [activeLauncher, ...trayArgs], 20_000);
+      const tray = trayRun(trayArgs, 20_000);
       if (tray.status !== 0) {
         updateJob(job, {}, "Windows tray refresh failed; run 'ocx tray install'.");
-        if (trayWasRunning) runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
+        if (trayWasRunning) trayRun(["tray", "start"], 15_000);
       }
     }
-    if (!homePolicy.check()) { updateJob(job, { status: "failed", restarted: false }); return; }
     if (restart) {
       const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async lease => {
         job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
         return finishGuiUpdateRestart(job!, captured, check.installer, {
           ...io.restartIo,
+          serviceHomeAuthorityFn: io.restartIo?.serviceHomeAuthorityFn ?? io.serviceHomeAuthorityFn, serviceHomeBaseline: homePolicy.initial,
           releaseForServiceManagerFn: lease.releaseForServiceManager,
           reacquireForDirectStartFn: lease.reacquireForDirectStart,
           packageLauncherPathFn: () => activeLauncher,
@@ -1981,13 +1987,10 @@ export async function runGuiUpdateWorker(
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested and proxy is healthy.");
       return;
     }
-
     updateJob(job, { status: "succeeded", restarted: false }, "Update installed. Restart the proxy to use the new version.");
   } catch (err) {
     if (check.installer === "pnpm") activeLauncherVerified = false;
-    if (trayWasRunning && activeLauncherVerified) {
-      runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
-    }
+    if (trayWasRunning && activeLauncherVerified) trayRun(["tray", "start"], 15_000);
     updateJob(job, {
       status: "failed",
       error: withheldSummary(err),

@@ -80,3 +80,31 @@ test("Bun manager boundary releases first, refuses changed homes, and skips stab
     }
   }
 });
+
+const postReplacementRefusal = extracted("    // Authority gates every post-replacement control action", "    if (!postInstallPlan.mayStopRuntime)", '"continued"');
+for (const running of [false, true]) for (const verified of [false, true]) test(`Bun home refusal restores only a running own tray through a verified launcher (${running}/${verified})`, async () => {
+  const commands: string[][] = [];
+  const result = await postReplacementRefusal({
+    homePolicy: { check: () => false }, trayWasRunning: running, postUpdateLauncherUsable: verified,
+    postUpdateLauncher: "/verified/launcher", existsSync: () => true, process: { execPath: "/fixture/bun" },
+    mutation: { unprivilegedEnvironment: () => ({ fixture: "unprivileged" }) },
+    spawnSync: (_bin: string, args: string[], options: { timeout: number; env: object }) => {
+      commands.push(args); expect(options.timeout).toBe(15_000); expect(options.env).toEqual({ fixture: "unprivileged" });
+      return { status: 0 };
+    },
+  });
+  expect(result).toBe(1);
+  expect(commands).toEqual(running && verified ? [["/verified/launcher", "tray", "start"]] : []);
+});
+
+test("Bun home refusal preserves the refusal if the verified tray restore throws or its launcher is absent", async () => {
+  for (const present of [false, true]) {
+    let starts = 0;
+    expect(await postReplacementRefusal({ homePolicy: { check: () => false }, trayWasRunning: true,
+      postUpdateLauncherUsable: true, postUpdateLauncher: "/verified/launcher", existsSync: () => present,
+      process: { execPath: "/fixture/bun" }, mutation: { unprivilegedEnvironment: () => ({}) },
+      spawnSync: () => { starts++; throw new Error("fixture tray failure"); },
+    })).toBe(1);
+    expect(starts).toBe(present ? 1 : 0);
+  }
+});
