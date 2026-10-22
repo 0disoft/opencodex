@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -22,6 +23,7 @@ import {
 } from "../src/codex/user-identity";
 import { resolveTrustedWindowsPowerShellExe } from "../src/lib/windows-elevation";
 import { hardenSecretDir } from "../src/lib/windows-secret-acl";
+import { openTestRunLockGate, TEST_RUN_LOCK_RELEASE_WAIT_MS, withTestRunLockGate } from "./test-run-lock-gate";
 
 export const TEST_RUN_ID_ENV = "OCX_TEST_RUN_ID";
 export const TEST_RUN_LOCK_PATH_ENV = "OCX_TEST_RUN_LOCK_PATH";
@@ -403,8 +405,9 @@ function readOwner(lockPath: string): TestRunLockOwner | null {
     // A malformed optional identity must not discard an otherwise live owner.
     const { processStart, ...owner } = parsed;
     return { ...owner, ...(validProcessStart(processStart) ? { processStart } : {}) } as TestRunLockOwner;
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof SyntaxError || errorCode(error) === "ENOENT") return null;
+    throw error;
   }
 }
 
@@ -672,8 +675,9 @@ function liveMemberExists(
   let files: string[];
   try {
     files = readdirSync(membersDir);
-  } catch {
-    return false;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
   }
   const suffix = `-${owner.token}`;
   const candidates: { pid: number; start: string }[] = [];
@@ -714,6 +718,8 @@ function lockIsLive(lockPath: string, owner: TestRunLockOwner, evidence: LockLiv
 }
 
 function registerMember(lockPath: string, owner: TestRunLockOwner, pid: number, evidence: LockLivenessEvidence): boolean {
+  const generation = readGeneration(lockPath);
+  if (!generation || !ownsLock(lockPath, owner)) return false;
   const membersPath = join(lockPath, MEMBERS_DIR);
   const start = readStart(evidence, pid);
   const path = memberPath(lockPath, owner, pid, start);
@@ -724,23 +730,48 @@ function registerMember(lockPath: string, owner: TestRunLockOwner, pid: number, 
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
     }
-  } catch {
-    return false;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
   }
-  if (ownsLock(lockPath, owner)) return true;
-  rmSync(path, { force: true });
+  if (sameGeneration(lockPath, generation) && ownsLock(lockPath, owner)) return true;
+  // A nonparticipating old executable may replace the canonical directory.
+  // Do not unlink through that changed path, even to roll back a marker.
   return false;
 }
 
 function incompleteOwnerIsRecent(lockPath: string): boolean {
   try {
     return Date.now() - statSync(lockPath).mtimeMs < INCOMPLETE_OWNER_GRACE_MS;
-  } catch {
-    return false;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
   }
 }
 
-function reclaimStaleLock(lockPath: string): boolean {
+interface LockGeneration { dev: bigint; ino: bigint; ownerText: string | null }
+
+function readGeneration(lockPath: string): LockGeneration | null {
+  try {
+    const entry = lstatSync(lockPath, { bigint: true });
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("Unsafe Bun test lock directory.");
+    let ownerText: string | null = null;
+    try { ownerText = readFileSync(ownerPath(lockPath), "utf8"); }
+    catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+    return { dev: entry.dev, ino: entry.ino, ownerText };
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function sameGeneration(lockPath: string, expected: LockGeneration): boolean {
+  const current = readGeneration(lockPath);
+  return current?.dev === expected.dev && current.ino === expected.ino && current.ownerText === expected.ownerText;
+}
+
+function reclaimStaleLock(lockPath: string, expected: LockGeneration): boolean {
+  if (!sameGeneration(lockPath, expected)) return false;
   const stalePath = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
   try {
     renameSync(lockPath, stalePath);
@@ -748,7 +779,12 @@ function reclaimStaleLock(lockPath: string): boolean {
     if (["ENOENT", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
     throw error;
   }
-  rmSync(stalePath, { recursive: true, force: true });
+  if (!sameGeneration(stalePath, expected)) {
+    // Cannot undo an old in-flight actor's pathname race. Preserve the displaced
+    // object rather than deleting it or overwriting a newer canonical owner.
+    throw new Error("Bun test lock changed during retirement; the displaced directory was preserved.");
+  }
+  rmSync(stalePath, { recursive: true });
   return true;
 }
 
@@ -760,13 +796,15 @@ function ownsLock(lockPath: string, owner: TestRunLockOwner): boolean {
 /**
  * Acquire the user-scoped, machine-local OpenCodex Bun-test lock.
  *
- * `mkdir` is the cross-platform atomic primitive. The owner PID makes a lock left by
+ * A stable SQLite sibling serializes updated runners' generation transitions.
+ * The owner PID makes a lock left by
  * SIGKILL recoverable, while the run ID lets every worker belonging to one bare
  * `bun test --parallel` invocation join the same lock without blocking its siblings.
  * Joiners register their own PIDs so a worker-owned lock remains live if its first
  * worker exits before the rest of the pool. PID liveness is bound to process
  * identity when available. Legacy records and unreadable identities retain the
- * live-PID veto. This does not change the existing check/rename reclamation race.
+ * live-PID veto. Old in-flight executables ignore the gate: complete them before
+ * upgrading to obtain the updated-runner guarantee.
  */
 export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Promise<TestRunLock> {
   const env = options.env ?? process.env;
@@ -782,26 +820,29 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
   };
   const pollMs = Math.max(1, options.pollMs ?? 5_000);
   const maxWaitMs = Math.max(pollMs, options.maxWaitMs ?? 45 * 60 * 1000);
+  // Required path/ACL setup is outside the queue-wait budget, just like default
+  // runtime resolution. Keep one SQLite connection across asynchronous polls.
+  const gate = openTestRunLockGate(lockPath);
   const startedAt = Date.now();
   let announced = false;
 
-  if (options.joinExistingOwnerToken !== undefined) {
-    const current = readOwner(lockPath);
-    if (
-      current?.runId === options.runId
-      && current.token === options.joinExistingOwnerToken
-      && lockIsLive(lockPath, current, evidence)
-      && registerMember(lockPath, current, process.pid, evidence)
-    ) {
-      return { acquired: false, owner: current, release() {} };
+  const tryAcquire = (canRetire = true): TestRunLock | "retry" | null => {
+    if (options.joinExistingOwnerToken !== undefined) {
+      const current = readOwner(lockPath);
+      if (
+        current?.runId === options.runId
+        && current.token === options.joinExistingOwnerToken
+        && lockIsLive(lockPath, current, evidence)
+        && registerMember(lockPath, current, process.pid, evidence)
+      ) {
+        return { acquired: false, owner: current, release() {} };
+      }
+      throw new Error(
+        "Cannot join the wrapper-owned Bun test lock because its exact live owner no longer matches; "
+          + "refusing to create or reclaim an inherited path.",
+      );
     }
-    throw new Error(
-      "Cannot join the wrapper-owned Bun test lock because its exact live owner no longer matches; "
-        + "refusing to create or reclaim an inherited path.",
-    );
-  }
 
-  for (;;) {
     const owner: TestRunLockOwner = {
       version: 1,
       runId: options.runId,
@@ -810,22 +851,37 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
       acquiredAt: new Date().toISOString(),
     };
     try {
+      if (readGeneration(lockPath)) throw Object.assign(new Error("Lock already exists."), { code: "EEXIST" });
+      const processStart = processIsAlive(ownerPid) === true ? readStart(evidence, ownerPid) : undefined;
+      if (processStart) owner.processStart = processStart;
       mkdirSync(lockPath, { mode: 0o700 });
+      const created = readGeneration(lockPath);
       try {
-        const processStart = processIsAlive(ownerPid) === true ? readStart(evidence, ownerPid) : undefined;
-        if (processStart) owner.processStart = processStart;
         writeFileSync(ownerPath(lockPath), `${JSON.stringify(owner)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
       } catch (error) {
-        rmSync(lockPath, { recursive: true, force: true });
+        // No recursive deletion through the current path after publication fails.
+        if (created && sameGeneration(lockPath, created)) {
+          try { rmdirSync(lockPath); }
+          catch (cleanupError) {
+            if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(errorCode(cleanupError))) throw cleanupError;
+          }
+        }
         throw error;
       }
-      if (announced) options.onAcquiredAfterWait?.(Date.now() - startedAt);
+      const acquiredGeneration = readGeneration(lockPath);
+      if (!created || !acquiredGeneration || created.dev !== acquiredGeneration.dev
+        || created.ino !== acquiredGeneration.ino || !ownsLock(lockPath, owner)) {
+        throw new Error("Bun test lock generation changed during owner publication.");
+      }
       return {
         acquired: true,
         owner,
         release() {
-          if (!ownsLock(lockPath, owner)) return;
-          reclaimStaleLock(lockPath);
+          const released = withTestRunLockGate(lockPath, () => {
+            if (!ownsLock(lockPath, owner)) return;
+            reclaimStaleLock(lockPath, acquiredGeneration);
+          }, TEST_RUN_LOCK_RELEASE_WAIT_MS);
+          if (!released) throw new Error("Timed out entering the Bun test lock generation gate during release.");
         },
       };
     } catch (error) {
@@ -842,6 +898,7 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
       }
     }
 
+    const generation = readGeneration(lockPath);
     const current = readOwner(lockPath);
     const currentIsLive = current === null
       ? incompleteOwnerIsRecent(lockPath)
@@ -850,21 +907,36 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
       if (registerMember(lockPath, current, process.pid, evidence)) {
         return { acquired: false, owner: current, release() {} };
       }
-      continue;
+      return "retry";
     }
-    if (!currentIsLive && reclaimStaleLock(lockPath)) continue;
+    if (!currentIsLive && generation) {
+      if (!canRetire) throw new Error("Bun test lock changed between retirement and owner publication.");
+      if (reclaimStaleLock(lockPath, generation)) return tryAcquire(false);
+    }
+    return null;
+  };
 
-    if (!announced) {
-      announced = true;
-      options.onWait?.(current);
+  try {
+    for (;;) {
+      const attempt = gate.run(tryAcquire);
+      if (attempt?.value === "retry" && Date.now() - startedAt < maxWaitMs) continue;
+      if (attempt?.value && attempt.value !== "retry") {
+        if (attempt.value.acquired && announced) options.onAcquiredAfterWait?.(Date.now() - startedAt);
+        return attempt.value;
+      }
+      const current = readOwner(lockPath);
+      if (!announced) {
+        announced = true;
+        options.onWait?.(current);
+      }
+      if (Date.now() - startedAt >= maxWaitMs) {
+        const holder = current ? `pid ${current.pid} (run ${current.runId})` : "an initializing runner";
+        throw new Error(
+          `timed out after ${Math.round(maxWaitMs / 1000)}s waiting for ${holder} to release ${lockPath}; `
+          + `set ${TEST_RUN_NO_QUEUE_ENV}=1 only when overlapping test runners are intentional`,
+        );
+      }
+      await Bun.sleep(pollMs);
     }
-    if (Date.now() - startedAt >= maxWaitMs) {
-      const holder = current ? `pid ${current.pid} (run ${current.runId})` : "an initializing runner";
-      throw new Error(
-        `timed out after ${Math.round(maxWaitMs / 1000)}s waiting for ${holder} to release ${lockPath}; `
-        + `set ${TEST_RUN_NO_QUEUE_ENV}=1 only when overlapping test runners are intentional`,
-      );
-    }
-    await Bun.sleep(pollMs);
-  }
+  } finally { gate.close(); }
 }
