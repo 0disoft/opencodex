@@ -205,10 +205,13 @@ import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
+import { homeInstanceId, stampServedBy } from "../../remote/served-by";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
+import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
+import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -370,6 +373,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
           ? loopbackPolicy()
           : config;
+      // Codex runtime agent assertion_only (Authorization: AgentAssertion) is refused before
+      // admission or routing: it is never a bearer, never an admission secret, and no pool or
+      // routed credential may stand in for it.
+      if (hasAgentAssertionAuthorization(req.headers)) return withCors(agentAssertionUnsupportedResponse(), req, policy);
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -380,7 +387,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
           const { handleLinkManagementRequest } = await import("./link-management");
-          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+          return withCors(await handleLinkManagementRequest(
+            req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
+            admission.kind === "configured" ? admission.keyId : undefined,
+          ), req, policy);
         }
       }
       const url = requestUrl;
@@ -408,11 +418,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
         const fencedHealth = url.pathname === "/healthz";
+        const fencedInstanceId = fencedHealth ? homeInstanceId() : undefined;
         const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
+              ...(fencedInstanceId ? { instanceId: fencedInstanceId } : {}),
               uptime: process.uptime(),
               pid: process.pid,
               port: fencedPort,
@@ -623,10 +635,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = ctx.server.port ?? listenPort;
+        // Opaque Home instance id (src/remote/served-by.ts); omitted until the identity exists.
+        const instanceId = homeInstanceId();
         const response = jsonResponse({
           status: "ok",
           service: "opencodex",
           version: VERSION,
+          ...(instanceId ? { instanceId } : {}),
           uptime: process.uptime(),
           pid: process.pid,
           port: healthPort,
@@ -1348,8 +1363,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
-          } catch {
-            response = formatErrorResponse(500, "server_error", "Unexpected compact request failure");
+          } catch (error) {
+            response = reasoningArchiveErrorResponse(error)
+              ?? formatErrorResponse(500, "server_error", "Unexpected compact request failure");
           }
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
@@ -1520,6 +1536,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               },
             });
           } catch (error) {
+            const archiveError = reasoningArchiveErrorResponse(error);
+            if (archiveError) return withRequestLogId(
+              withCors(responseWithDeferredRequestLog(archiveError, requestId, start, logCtx), req, policy), requestId,
+            );
             // A bounded upstream body can fail before handleResponses returns a client response.
             // Finalize before rethrow so accounting observes the physical send while the caller
             // retains the existing reset/rejection instead of receiving a synthesized response.
@@ -1972,5 +1992,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     },
     websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
-  return serveOptions;
+  const routeFetch = serveOptions.fetch;
+  // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
+  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
 }

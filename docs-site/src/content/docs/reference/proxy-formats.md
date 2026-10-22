@@ -20,6 +20,15 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## MiMo bare tool-call recovery
+
+On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a
+complete bare `<tool_call>` block as a call to an exact declared freeform tool when the response
+contains no structured tool calls. Prose around the block is preserved; fenced and inline-code
+examples, nested headers, undeclared tools and identified wrappers remain literal. Recovery is
+bounded to 128 calls, 4 MiB total and 2 MiB per candidate. Long streamed prose may release the
+original markup before terminal recovery; errors never dispatch recovered calls.
+
 ## Upstream redirects
 
 Credential-bearing model, image, video, and search requests do not automatically follow HTTP redirects, including same-origin redirects. Configure the final upstream API URL instead of a redirecting alias. A redirect does not cause the server to resend credentials or the request body to its destination. The response owner retains its existing error or relay behavior; native Responses and compact routes can return the original 3xx and `Location` to the client. Client redirect behavior is separate from this server transport policy.
@@ -537,6 +546,18 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+When the model is Claude, the response also carries `reasoning_details` in the same shape
+OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
+for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
+one, on `message` or as `delta.reasoning_details` (each entry arrives complete in one chunk). Send
+the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
+reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
+clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
+(`api.anthropic.com`) as a single route; on any other destination, or when an entry is
+malformed (an unknown type or format, or a missing signature), the turn falls back to the plain
+`reasoning_content` text. An entry whose text or signature was edited is forwarded as is, and
+Anthropic rejects it, so return the array exactly as received.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw
@@ -732,7 +753,8 @@ upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; 
 account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
 account that created the call, while Direct mode forwards the caller's current bearer on both legs.
 The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
-`originator`, `x-oai-attestation`, and `x-codex-turn-metadata`
+`originator`, `x-oai-attestation`, `x-codex-turn-metadata`, and `voice-session-id` (the client voice
+session id, separate from the realtime `x-session-id`)
 (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`); each is relayed only when the caller
 sent it, and none is invented.
 `Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces
