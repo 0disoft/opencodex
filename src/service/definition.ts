@@ -8,9 +8,7 @@
  * intentionally stays behind because it asks every backend).
  */
 import { getConfigDir, loadConfig } from "../config";
-import { claudeInterceptProxyPort } from "../claude/intercept/port-policy";
 import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
-import { claudeInterceptProxyUrl } from "../claude/intercept/settings";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
 
@@ -92,23 +90,28 @@ export function parseBakedListenPort(read: () => string): number | null {
  */
 export function resolvedProxyEnv(
   env: NodeJS.ProcessEnv = process.env,
-  ownClaudeInterceptProxy = currentClaudeInterceptProxyUrl(),
+  ownClaudeInterceptProxy?: string | null,
 ): { name: string; value: string }[] {
+  const token = ownClaudeInterceptProxy === undefined ? readClaudeInterceptProxyToken(getConfigDir()) : null;
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
-    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && v !== ownClaudeInterceptProxy);
+    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && (
+      ownClaudeInterceptProxy === undefined ? !isOwnedClaudeInterceptProxy(v, token) : v !== ownClaudeInterceptProxy
+    ));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
 }
 
 /**
- * Resolve the exact URL this installation writes into Claude settings without creating a token.
+ * Match this installation's credential and exact URL components without creating a token.
+ * An inherited URL can still use an old bound port after the persisted config changes.
  * Shape alone cannot establish ownership: a user proxy may also use an `opencodex` username.
  */
-function currentClaudeInterceptProxyUrl(): string | null {
-  const token = readClaudeInterceptProxyToken(getConfigDir());
-  if (!token) return null;
-  const config = loadConfig();
-  return claudeInterceptProxyUrl(claudeInterceptProxyPort(config, config.port ?? 10100), token);
+function isOwnedClaudeInterceptProxy(value: string, token: string | null): boolean {
+  if (!token) return false;
+  const prefix = `http://opencodex:${encodeURIComponent(token)}@127.0.0.1:`;
+  if (!value.startsWith(prefix)) return false;
+  const port = value.slice(prefix.length).replace(/\/$/, "");
+  return /^\d{1,5}$/.test(port) && Number(port) > 0 && Number(port) <= 65535;
 }
