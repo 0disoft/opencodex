@@ -56,7 +56,15 @@ describe("Windows tray update handoff contract", () => {
     for (const path of ["src/update/index.ts", "src/update/job.ts", "bin/ocx.mjs"]) {
       const source = readFileSync(join(root, path), "utf8");
       expect(source).toContain("planWindowsTrayUpdate");
-      expect(source).toContain("handoffWindowsTrayForUpdate");
+      if (path === "src/update/job.ts") {
+        expect(source).toContain('import { defaultWorkerTrayHandoff } from "./job-update-tray";');
+        expect(source).toContain("(io.trayHandoffFn ?? defaultWorkerTrayHandoff)()");
+        const handoff = readFileSync(join(root, "src/update/job-update-tray.ts"), "utf8");
+        expect(handoff).toContain('import { handoffWindowsTrayForUpdate } from "./tray-update-plan.mjs";');
+        expect(handoff).toContain("return handoffWindowsTrayForUpdate(getWindowsTrayStatus(), {");
+      } else {
+        expect(source).toContain("handoffWindowsTrayForUpdate");
+      }
       expect(source).toContain("installArgs");
     }
   });
