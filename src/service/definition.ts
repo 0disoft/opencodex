@@ -7,7 +7,10 @@
  * route back through them (see `installedServiceListenPort` in `health.ts`, which
  * intentionally stays behind because it asks every backend).
  */
-import { loadConfig } from "../config";
+import { getConfigDir, loadConfig } from "../config";
+import { claudeInterceptProxyPort } from "../claude/intercept/port-policy";
+import { readClaudeInterceptProxyToken } from "../claude/intercept/proxy-auth";
+import { claudeInterceptProxyUrl } from "../claude/intercept/settings";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { PROXY_ENV_KEYS } from "../lib/proxy-env";
 
@@ -87,19 +90,25 @@ export function parseBakedListenPort(read: () => string): number | null {
  * own `applyProxyEnv` already treats both cases as equivalent. Only the canonical
  * upper-case name is baked, so a definition never carries two spellings of one setting.
  */
-export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: string; value: string }[] {
+export function resolvedProxyEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  ownClaudeInterceptProxy = currentClaudeInterceptProxyUrl(),
+): { name: string; value: string }[] {
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
-    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && !OWN_CLAUDE_INTERCEPT_PROXY.test(v));
+    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && v !== ownClaudeInterceptProxy);
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
 }
 
 /**
- * The URL Claude first-party writes into `~/.claude/settings.json` (`claudeInterceptProxyUrl`),
- * which every process Claude Code starts inherits. Baked into the service, it would send the
- * proxy's own outbound traffic back through its intercept listener. Only the token-bearing form
- * is matched: a plain `http://127.0.0.1:<port>` is a user's local proxy client and is kept.
+ * Resolve the exact URL this installation writes into Claude settings without creating a token.
+ * Shape alone cannot establish ownership: a user proxy may also use an `opencodex` username.
  */
-const OWN_CLAUDE_INTERCEPT_PROXY = /^http:\/\/opencodex:[^@/]+@127\.0\.0\.1:\d{1,5}\/?$/i;
+function currentClaudeInterceptProxyUrl(): string | null {
+  const token = readClaudeInterceptProxyToken(getConfigDir());
+  if (!token) return null;
+  const config = loadConfig();
+  return claudeInterceptProxyUrl(claudeInterceptProxyPort(config, config.port ?? 10100), token);
+}
