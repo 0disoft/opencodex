@@ -20,6 +20,7 @@ OS directory aliases are allowed only with trusted resolved ancestors. An existi
 configuration parent may be 0755; only the owned messaging subtree must be 0700, and enable
 does not chmod the existing parent. On macOS, the private subtree and every state file must also
 have no extended access ACL; creation, reads, and atomic replacement all fail closed otherwise.
+Temporary-file ACL refusal or probe failure closes the file descriptor and removes the unpublished file.
 Mutations acquire an exclusive directory lock and atomically publish private
 files, syncing the file before rename and its parent directory before dependent work.
 Creation persists new directory entries; journal removal also syncs the parent before reporting success.

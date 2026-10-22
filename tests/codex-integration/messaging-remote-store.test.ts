@@ -3,15 +3,92 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, fsyncSync, fstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { RemoteMessageStore, parseRemoteState } from "../../src/messaging/remote-store";
 import { macAclOutputIsPrivate, readRemoteFile, removeRemoteFile, withRemoteLock, writeRemoteFile } from "../../src/messaging/remote-files";
 import { remoteMessagingPair } from "../helpers/messaging-remote";
+import { repoPath } from "../helpers/repo-root";
 
 const unixTest = test.skipIf(process.platform === "win32");
 test("macOS ACL inspection distinguishes plain metadata from access entries", () => {
   expect(macAclOutputIsPrivate("-rw-------  1 owner  staff  4 Oct 22 00:00 state.json\n")).toBe(true);
   expect(macAclOutputIsPrivate("-rw-------+ 1 owner  staff  4 Oct 22 00:00 state.json\n 0: everyone allow read\n")).toBe(false);
   expect(macAclOutputIsPrivate("")).toBe(false);
+});
+test.each(["acl", "error", "timeout"])("temporary ACL %s closes the descriptor and removes unpublished state", failure => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-remote-acl-failure-"));
+  try {
+    // Keep built-in mocks and simulated macOS ownership out of every other test.
+    // File creation, descriptor checks, close and unlink use the real host filesystem.
+    const result = spawnSync(process.execPath, ["--eval", `
+      import { mock } from "bun:test";
+      import assert from "node:assert/strict";
+      import * as fs from "node:fs";
+      import * as childProcess from "node:child_process";
+      import * as path from "node:path";
+      const native = { ...fs }, root = ${JSON.stringify(root)}, failure = ${JSON.stringify(failure)};
+      const nativePath = { ...path }, { basename, join } = nativePath;
+      const target = "/fixture/journal.json";
+      let fd, temporary, probes = 0, writes = 0, syncs = 0, renames = 0;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      Object.defineProperty(process, "getuid", { value: () => 1234 });
+      mock.module("node:path", () => ({ ...nativePath, ...nativePath.posix }));
+      mock.module("node:fs", () => ({ ...native,
+        lstatSync(path) {
+          if (path === "/fixture" || path === "/") return {
+            uid: 1234, mode: 0o700,
+            isDirectory: () => true,
+            isSymbolicLink: () => false,
+          };
+          return native.lstatSync(join(root, basename(path)));
+        },
+        realpathSync: () => "/",
+        openSync(path, flags, mode) {
+          temporary = join(root, basename(path));
+          fd = native.openSync(temporary, flags, mode);
+          return fd;
+        },
+        writeFileSync(...args) { writes++; return native.writeFileSync(...args); },
+        renameSync() { renames++; throw new Error("unexpected publication"); },
+        unlinkSync(path) { native.unlinkSync(join(root, basename(path))); },
+      }));
+      mock.module("node:child_process", () => ({ ...childProcess, spawnSync(command, args, options) {
+        assert.equal(command, "/bin/ls");
+        assert.deepEqual(args.slice(0, 1), ["-lde"]);
+        assert.equal(options.timeout, 1000);
+        if (!basename(args[1]).startsWith(".write-")) return {
+          status: 0, stderr: "", stdout: "drwx------ 1 owner staff 0 Oct 22 00:00 fixture\\n",
+        };
+        probes++;
+        assert.equal(native.fstatSync(fd).isFile(), true);
+        assert.equal(native.existsSync(temporary), true);
+        if (failure === "acl") return { status: 0, stderr: "",
+          stdout: "-rw-------+ 1 owner staff 0 Oct 22 00:00 state\\n 0: everyone allow read\\n" };
+        return { status: null, stderr: "", stdout: "",
+          error: Object.assign(new Error("fixture ACL probe failure"), {
+            code: failure === "timeout" ? "ETIMEDOUT" : "EIO",
+          }) };
+      } }));
+      const { writeRemoteFile } = await import(${JSON.stringify(pathToFileURL(repoPath("src/messaging/remote-files.ts")).href)});
+      try {
+        assert.throws(() => writeRemoteFile(target, "unpublished", () => { syncs++; }), error => {
+          if (!probes) throw error;
+          return true;
+        });
+        assert.equal(probes, 1);
+        assert.equal(writes, 0); assert.equal(syncs, 0); assert.equal(renames, 0);
+        assert.throws(() => native.fstatSync(fd), { code: "EBADF" });
+        assert.equal(native.existsSync(temporary), false);
+        assert.deepEqual(native.readdirSync(root), []);
+      } finally {
+        // Even the deliberately red regression run must release its fixture descriptor.
+        if (fd !== undefined) { try { native.closeSync(fd); } catch {} }
+      }
+    `], { encoding: "utf8", timeout: 10_000, windowsHide: true });
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  } finally { rmSync(root, { recursive: true }); }
 });
 const macTest = process.platform === "darwin" ? test : test.skip;
 macTest("macOS extended ACLs are refused on messaging directories and files", () => {

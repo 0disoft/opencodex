@@ -115,8 +115,7 @@ export function writeRemoteFile(path: string, text: string, sync = fsyncSync): v
   const temporary = join(dirname(path), `.write-${crypto.randomUUID()}`);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
-    checkMacAcl(temporary);
-    try { writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
+    try { checkMacAcl(temporary); writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
     checkMacAcl(path);
     syncRemoteDirectory(dirname(path), sync);
