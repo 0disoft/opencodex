@@ -11,8 +11,37 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { handleObserveCommand } from "../../src/cli/observe";
 import { compareUsageWindows } from "../../src/cli/usage-compare";
+import type { UsageCompareDeps } from "../../src/cli/usage-compare";
+import type { RuntimePortState } from "../../src/config/process-state";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
+import { managementPrincipal, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
+import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 
 const NOW = Date.UTC(2026, 9, 15, 15, 30, 0);
+const LOCAL = { pid: 4242, port: 10100, hostname: "127.0.0.1", attestationSecret: "A".repeat(43) };
+const AUTH: ManagementAuthState = { available: true, token: "compare-fixture-admin", source: "environment", sessions: new Map(), pairingGrants: new Map() };
+
+function localDeps(fetchImpl: typeof fetch): UsageCompareDeps {
+  return {
+    // baseUrl must never bypass protected runtime discovery, even with a fetch seam.
+    baseUrl: "http://untrusted.test", now: () => NOW,
+    findLiveProxy: async () => ({ ...LOCAL, source: "runtime" }),
+    readRuntime: () => ({ ...LOCAL }),
+    fetchImpl: async (input, init) => {
+      const req = new Request(input, init);
+      expect(req.url.startsWith(`http://127.0.0.1:${LOCAL.port}/api/usage?`)).toBe(true);
+      for (const header of ["authorization", "cookie", "x-opencodex-api-key", "proxy-authorization"]) expect(req.headers.has(header)).toBe(false);
+      expect(requireManagementAuth(req, AUTH, undefined, LOCAL)).toBeNull();
+      expect(managementPrincipal(req, AUTH, undefined, LOCAL)).toBe("local-read-capability");
+      const response = await fetchImpl(input, init);
+      response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof(
+        LOCAL.attestationSecret, req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER)!, LOCAL.pid, LOCAL.port,
+      )!);
+      return response;
+    },
+  };
+}
 
 function report(url: URL, requests: number): Record<string, unknown> {
   return {
@@ -54,7 +83,7 @@ async function run(
   console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
   console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
   try {
-    const code = await handleObserveCommand(argv, { baseUrl: "http://cli.test", fetchImpl, now: () => NOW });
+    const code = await handleObserveCommand(argv, localDeps(fetchImpl));
     return { code, out: lines.join("\n"), err: errors.join("\n"), urls, inits };
   } finally {
     console.log = originalLog;
@@ -146,7 +175,7 @@ describe("ocx usage compare", () => {
     const original = console.log;
     console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
     try {
-      expect(await handleObserveCommand(["usage", "compare"], { baseUrl: "http://cli.test", fetchImpl, now: () => NOW })).toBe(0);
+      expect(await handleObserveCommand(["usage", "compare"], localDeps(fetchImpl))).toBe(0);
     } finally {
       console.log = original;
     }
@@ -170,9 +199,7 @@ describe("ocx usage compare", () => {
     const original = console.error;
     console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
     try {
-      expect(await handleObserveCommand(["usage", "compare", "--range", "today", "--json"], {
-        baseUrl: "http://cli.test", fetchImpl, now: () => NOW,
-      })).toBe(1);
+      expect(await handleObserveCommand(["usage", "compare", "--range", "today", "--json"], localDeps(fetchImpl))).toBe(1);
       expect(errors.join("\n")).toContain("did not confirm the requested custom usage window");
     } finally {
       console.error = original;
@@ -184,9 +211,7 @@ describe("ocx usage compare", () => {
     errors.length = 0;
     console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
     try {
-      expect(await handleObserveCommand(["usage", "compare", "--api-key-id", "Key-A", "--json"], {
-        baseUrl: "http://cli.test", fetchImpl: scoped, now: () => NOW,
-      })).toBe(1);
+      expect(await handleObserveCommand(["usage", "compare", "--api-key-id", "Key-A", "--json"], localDeps(scoped))).toBe(1);
       expect(errors.join("\n")).toContain("did not confirm the requested API key scope");
     } finally {
       console.error = original;
@@ -213,9 +238,7 @@ describe("ocx usage compare", () => {
     const original = console.log;
     console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
     try {
-      expect(await handleObserveCommand(["usage", "compare", "--range", "7d", "--api-key-id", "Key-A", "--json"], {
-        baseUrl: "http://cli.test", fetchImpl, now: () => NOW,
-      })).toBe(0);
+      expect(await handleObserveCommand(["usage", "compare", "--range", "7d", "--api-key-id", "Key-A", "--json"], localDeps(fetchImpl))).toBe(0);
     } finally {
       console.log = original;
     }
@@ -227,6 +250,108 @@ describe("ocx usage compare", () => {
     expect(inits[0]!.credentials).toBe("omit");
     expect(JSON.parse(lines.join("\n")).filter.apiKeyId).toBe("Key-A");
   });
+});
+
+test.each([
+  "missing-record", "missing-secret", "malformed-secret", "untrusted-source", "null-pid", "wrong-host",
+  "missing-proof", "malformed-proof", "redirect", "same-metadata-replacement", "secret-before-get", "replacement-before-get",
+  "secret-between-windows", "replacement-between-windows", "secret-after-response", "hostname-after-response", "secret-during-body",
+])("usage comparison refuses unattested or replaced local runtime (%s)", async scenario => {
+  let runtime: RuntimePortState | null = { ...LOCAL };
+  let discoveries = 0;
+  let requests = 0;
+  const deps = localDeps(async input => {
+    return Response.json(report(new URL(String(input)), 1));
+  });
+  const signedFetch = deps.fetchImpl!;
+  deps.readRuntime = () => runtime;
+  if (scenario === "missing-record") runtime = null;
+  if (scenario === "missing-secret") delete runtime!.attestationSecret;
+  if (scenario === "malformed-secret") runtime!.attestationSecret = "invalid";
+  deps.findLiveProxy = async () => {
+    discoveries++;
+    if (scenario === "secret-before-get" || (scenario === "secret-between-windows" && discoveries === 2)) {
+      runtime = { ...LOCAL, attestationSecret: "B".repeat(43) };
+    }
+    if (scenario === "replacement-before-get" || (scenario === "replacement-between-windows" && discoveries === 2)) {
+      runtime = { ...LOCAL, pid: LOCAL.pid + 1 };
+    }
+    return { ...LOCAL, source: scenario === "untrusted-source" ? "config" : "runtime",
+      pid: scenario === "null-pid" ? null : LOCAL.pid,
+      hostname: scenario === "wrong-host" ? "foreign.example.test" : LOCAL.hostname };
+  };
+  deps.fetchImpl = async (input, init) => {
+    requests++;
+    const response = await signedFetch(input, init);
+    if (scenario === "missing-proof") response.headers.delete(LOCAL_ATTESTATION_PROOF_HEADER);
+    if (scenario === "malformed-proof") response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, "invalid");
+    if (scenario === "redirect") return new Response(null, { status: 302, headers: { ...Object.fromEntries(response.headers), location: "http://untrusted.test" } });
+    if (scenario === "same-metadata-replacement") response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof(
+      "B".repeat(43), new Headers(init?.headers).get(LOCAL_MANAGEMENT_NONCE_HEADER)!, LOCAL.pid, LOCAL.port,
+    )!);
+    if (scenario === "secret-after-response") runtime = { ...LOCAL, attestationSecret: "B".repeat(43) };
+    if (scenario === "hostname-after-response") runtime = { ...LOCAL, hostname: "localhost" };
+    if (scenario === "secret-during-body") {
+      const json = response.json.bind(response);
+      response.json = async () => {
+        const result = await json();
+        runtime = { ...LOCAL, attestationSecret: "B".repeat(43) };
+        return result;
+      };
+    }
+    return response;
+  };
+  const output: unknown[] = [], errors: unknown[] = [];
+  const originalLog = console.log, originalError = console.error;
+  console.log = (...args) => { output.push(args); };
+  console.error = (...args) => { errors.push(args); };
+  try {
+    expect(await handleObserveCommand(["usage", "compare", "--json"], deps)).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(requests).toBe(["missing-proof", "malformed-proof", "redirect", "same-metadata-replacement", "secret-between-windows",
+      "replacement-between-windows", "secret-after-response", "hostname-after-response", "secret-during-body"].includes(scenario) ? 1 : 0);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
+
+test("usage comparison uses the bounded direct transport with its 60 second deadline", async () => {
+  const runtime = { ...LOCAL, port: 0 };
+  let requests = 0, transports = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+    requests++;
+    for (const header of ["authorization", "cookie", "x-opencodex-api-key"]) expect(req.headers.has(header)).toBe(false);
+    expect(requireManagementAuth(req, AUTH, undefined, runtime)).toBeNull();
+    expect(managementPrincipal(req, AUTH, undefined, runtime)).toBe("local-read-capability");
+    return Response.json(report(new URL(req.url), 1), { headers: {
+      [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(runtime.attestationSecret,
+        req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER)!, runtime.pid, runtime.port)!,
+    } });
+  } });
+  runtime.port = server.port!;
+  const deps: UsageCompareDeps = {
+    now: () => NOW, baseUrl: "http://untrusted.test",
+    readRuntime: () => ({ ...runtime }), findLiveProxy: async () => ({ ...runtime, source: "runtime" }),
+    directFetch: async (input, init, io) => {
+      transports++;
+      expect(io?.timeoutMs).toBe(60_000);
+      expect(init?.redirect).toBe("error");
+      expect(init?.credentials).toBe("omit");
+      return directLocalHttpFetch(input, init, io);
+    },
+  };
+  const original = console.log;
+  console.log = () => {};
+  try {
+    expect(await handleObserveCommand(["usage", "compare", "--json"], deps)).toBe(0);
+    expect(requests).toBe(2);
+    expect(transports).toBe(2);
+  } finally {
+    console.log = original;
+    await server.stop(true);
+  }
 });
 
 
@@ -241,6 +366,9 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
         import * as state from "./src/client/state";
         import { serviceApiTokenFingerprint } from "./src/lib/service-secrets";
         import { handleObserveCommand } from "./src/cli/observe";
+        import { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } from "./src/lib/local-management-attestation";
+        import { LOCAL_MANAGEMENT_NONCE_HEADER } from "./src/lib/local-management-capability";
+        import { managementPrincipal, requireManagementAuth } from "./src/server/management-auth";
         const scenario = ${JSON.stringify(scenario)};
         const home = process.env.OPENCODEX_HOME;
         const token = "compare-fixture-key-a", nextToken = "compare-fixture-key-b";
@@ -254,6 +382,8 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
           ...(isClient ? { client } : {}),
         }));
         write(connected);
+        const runtime = { pid: 101, port: 7777, hostname: "127.0.0.1", attestationSecret: "A".repeat(43) };
+        writeFileSync(join(home, "runtime-port.json"), JSON.stringify(runtime));
         writeFileSync(join(home, "service-api-token"), token);
         process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "compare-fixture-admin-a";
         const change = () => {
@@ -264,7 +394,7 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
           }
           if (scenario === "transport") client.transport = "hub";
           if (scenario === "admin") process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "compare-fixture-admin-b";
-          write(scenario !== "disconnect");
+          write(scenario === "admin" ? false : scenario !== "disconnect");
         };
         // On the old implementation these are the first read's before/after observations,
         // followed by the second read's capture. Change only after that first owner was verified.
@@ -279,18 +409,24 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
         console.error = (...args) => errors.push(args.join(" "));
         let discoveries = 0;
         const code = await handleObserveCommand(["usage", "compare", "--json"], {
-          ...(scenario === "runtime" ? { findLiveProxy: async () => ({
-            pid: ++discoveries === 1 ? 101 : 202, port: 7777, hostname: "127.0.0.1", source: "runtime", role: "standalone",
-          }) } : { baseUrl: "http://local.test" }), now: () => ${NOW},
+          baseUrl: "http://local.test", findLiveProxy: async () => ({
+            ...runtime, pid: ++discoveries === 1 || scenario !== "runtime" ? 101 : 202, source: "runtime", role: "standalone",
+          }), now: () => ${NOW},
           fetchImpl: async (input, init) => {
             const url = new URL(String(input));
             requests.push({ origin: url.origin, path: url.pathname,
               originalCredential: new Headers(init?.headers).get("x-opencodex-api-key") === (connected ? token : "compare-fixture-admin-a") });
+            const req = new Request(input, init);
+            const auth = { available: true, token: "compare-fixture-admin-a", source: "environment", sessions: new Map(), pairingGrants: new Map() };
+            if (!connected && (requireManagementAuth(req, auth, undefined, runtime) !== null
+              || managementPrincipal(req, auth, undefined, runtime) !== "local-read-capability")) throw new Error("capability admission failed");
             if (requests.length === 1 && ["connect", "admin"].includes(scenario)) change();
             return Response.json({ schemaVersion: 1, source: "hub", scope: "client", range: "30d", surface: "all",
               generatedAt: 1, customWindow: true, since: Number(url.searchParams.get("since")), until: Number(url.searchParams.get("until")),
               summary: { requests: 1, totalTokens: 3, inputTokens: 2, outputTokens: 1, cachedInputTokens: 0, unpricedRequests: 1, unmeteredRequests: 0 },
-              providers: [], models: [], days: [], filter: { provider: null, model: null, matched: true, comboOverlap: false } });
+              providers: [], models: [], days: [], filter: { provider: null, model: null, matched: true, comboOverlap: false } },
+              { headers: !connected ? { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(
+                runtime.attestationSecret, req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER), runtime.pid, runtime.port) } : {} });
           },
         });
         process.stdout.write(JSON.stringify({ code, output, errors, requests, discoveries }));
@@ -300,7 +436,7 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
       if (scenario.startsWith("stable")) {
         expect(result.code).toBe(0);
         expect(result.requests).toHaveLength(2);
-        expect(result.requests.every((request: { originalCredential: boolean }) => request.originalCredential)).toBe(true);
+        expect(result.requests.every((request: { originalCredential: boolean }) => request.originalCredential === (scenario === "stable-hub"))).toBe(true);
         expect(result.requests.map((request: { path: string }) => request.path)).toEqual(Array(2).fill(scenario === "stable-hub" ? "/v1/usage" : "/api/usage"));
         expect(JSON.parse(result.output.join("\n")).delta.requests).toBe(0);
       } else {
@@ -310,7 +446,7 @@ test.each(["stable-local", "stable-hub", "connect", "disconnect", "account", "cr
         expect(result.requests).toHaveLength(1);
         if (scenario === "runtime") {
           expect(result.discoveries).toBe(2);
-          expect(result.requests[0].originalCredential).toBe(true);
+          expect(result.requests[0].originalCredential).toBe(false);
         }
       }
       expect(child.stdout).not.toContain("compare-fixture");
