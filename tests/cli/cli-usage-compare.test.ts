@@ -62,6 +62,7 @@ function report(url: URL, requests: number): Record<string, unknown> {
 async function run(
   argv: string[],
   status = 200,
+  adjustDeps?: (deps: UsageCompareDeps) => void,
 ): Promise<{ code: number; out: string; err: string; urls: URL[]; inits: RequestInit[] }> {
   const urls: URL[] = [];
   const inits: RequestInit[] = [];
@@ -71,8 +72,9 @@ async function run(
     urls.push(url);
     inits.push(init ?? {});
     n += 1;
-    return new Response(JSON.stringify(status === 200 ? report(url, n === 1 ? 20 : 10) : { error: "not found" }), {
+    return new Response(JSON.stringify(status === 200 ? report(url, n === 1 ? 20 : 10) : { error: "compare-fixture-private-error" }), {
       status,
+      statusText: "compare-fixture-private-status",
       headers: { "content-type": "application/json" },
     });
   };
@@ -83,7 +85,9 @@ async function run(
   console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
   console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
   try {
-    const code = await handleObserveCommand(argv, localDeps(fetchImpl));
+    const deps = localDeps(fetchImpl);
+    adjustDeps?.(deps);
+    const code = await handleObserveCommand(argv, deps);
     return { code, out: lines.join("\n"), err: errors.join("\n"), urls, inits };
   } finally {
     console.log = originalLog;
@@ -106,6 +110,41 @@ describe("compareUsageWindows", () => {
     const week = compareUsageWindows("7d", NOW);
     expect(week.previous.until).toBeLessThan(week.current.since);
   });
+});
+
+test.each([undefined, "Key-A"])("usage comparison preserves attested local HTTP failures (key=%s)", async apiKeyId => {
+  for (const status of [400, 401, 404, 409, 500]) {
+    const result = await run(["usage", "compare", "--json", ...(apiKeyId ? ["--api-key-id", apiKeyId] : [])], status);
+    expect(result.code).toBe(status === 404 ? 4 : status === 409 ? 5 : 1);
+    expect(result.err).toContain(`HTTP ${status}`);
+    expect(result.err).not.toMatch(/upgrade|restart/i);
+    expect(result.err).not.toContain("compare-fixture-private");
+    expect(result.out).toBe("");
+    expect(result.urls).toHaveLength(1);
+  }
+});
+
+test.each([undefined, "Key-A"])("usage comparison preserves closed local read refusals (key=%s)", async apiKeyId => {
+  for (const failure of ["missing-proof", "malformed-proof", "transport"]) {
+    let attempts = 0;
+    const result = await run(["usage", "compare", "--json", ...(apiKeyId ? ["--api-key-id", apiKeyId] : [])], 401, deps => {
+      const signedFetch = deps.fetchImpl!;
+      deps.fetchImpl = async (input, init) => {
+        attempts++;
+        if (failure === "transport") throw new Error("compare-fixture-private-transport");
+        const response = await signedFetch(input, init);
+        if (failure === "missing-proof") response.headers.delete(LOCAL_ATTESTATION_PROOF_HEADER);
+        else response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, "compare-fixture-private-proof");
+        return response;
+      };
+    });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(failure === "transport" ? "transport" : "unattested-response");
+    expect(result.err).not.toContain("HTTP 401");
+    expect(result.err).not.toContain("compare-fixture-private");
+    expect(result.out).toBe("");
+    expect(attempts).toBe(1);
+  }
 });
 
 describe("ocx usage compare", () => {

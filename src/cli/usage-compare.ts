@@ -237,8 +237,11 @@ function pinUsageRuntime(deps: UsageCompareDeps, owner: UsageOwner): (suffix: st
       timeoutMs: 60_000, requireResponseProof: true,
     });
     assertRuntime();
-    if (read.kind !== "response" || !read.response.ok) {
-      throw new Error("Usage could not be read from the attested runtime. Restart the proxy and retry.");
+    if (read.kind === "unavailable") {
+      throw new RuntimeApiError(`Local usage read unavailable (${read.reason}). No comparison was produced.`, 503, null);
+    }
+    if (!read.response.ok) {
+      throw new RuntimeApiError(`Usage request failed (HTTP ${read.response.status}). No comparison was produced.`, read.response.status, null);
     }
     const result = await read.response.json() as ScopedUsage;
     assertRuntime();
@@ -292,7 +295,7 @@ async function readUsage(
       result = await localRead!(suffix);
     } catch (error) {
       if (apiKeyId === undefined) throw error;
-      if (error instanceof RuntimeApiError && error.code === "proxy_not_running") throw error;
+      if (error instanceof RuntimeApiError) throw error;
       throw new Error("Key-scoped usage could not be read. Check runtime access and retry.");
     }
     if (apiKeyId !== undefined && result.filter?.apiKeyId !== apiKeyId) {
