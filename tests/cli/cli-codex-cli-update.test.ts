@@ -141,6 +141,59 @@ describe("Codex CLI job persistence failures", () => {
     } finally { log.mockRestore(); admission.mockRestore(); worker.mockRestore(); }
   });
 
+  test.each(["applied", "not_applied", "unknown-code"] as const)("CLI preserves the unpersisted %s result without rerunning work", async outcome => {
+    const unknown = outcome === "unknown-code";
+    const actual = { ...result, outcome: outcome === "not_applied" ? outcome : "applied",
+      reason: unknown ? "private/unknown-reason" : outcome === "applied" ? "verified_target" : "original_install_unchanged",
+      leaseRetained: outcome !== "applied", cleanupErrors: unknown ? ["private/cleanup", "lease_release_exception"]
+        : outcome === "applied" ? ["staging_cleanup_failed"] : ["lease_release_exception"],
+      installedVersion: "private/installed", privateDetails: "private/internal-path" } as CodexCliApplyResult;
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockResolvedValue({
+      kind: "accepted", job: terminal, generation: randomUUID(),
+    });
+    let runs = 0, finishes = 0, releases = 0;
+    const worker = spyOn(updateJobs, "runCodexCliUpdateJob").mockImplementation(async (_id, _generation, run) =>
+      runCodexCliUpdateJobWork(run, { begin: async () => 1, read: async () => null, release: async () => { releases++; },
+        finish: async () => { finishes++; throw new Error("unsafe_store"); } }));
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const json of [false, true]) {
+        runs = finishes = releases = 0; worker.mockClear(); log.mockClear(); error.mockClear();
+        expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", result.planId, "--yes", ...(json ? ["--json"] : [])],
+          { applyUpdate: async () => { runs++; return actual; } })).toBe(1);
+        const safeOutcome = unknown ? "ambiguous" : outcome;
+        const safeReason = unknown ? "job_result_unknown" : actual.reason;
+        const cleanupErrors = unknown ? ["lease_release_exception"] : actual.cleanupErrors;
+        const output = log.mock.calls.map(call => String(call[0])).join("\n");
+        if (json) expect(JSON.parse(output)).toEqual({ error: "job_result_persistence_failed", jobId: terminal.jobId,
+          outcome: safeOutcome, reason: safeReason, leaseRetained: actual.leaseRetained, cleanupErrors });
+        else for (const line of [`job: ${terminal.jobId}`, "persistence: unverified (job_result_persistence_failed)",
+          `outcome: ${safeOutcome}`, `reason: ${safeReason}`, `lease-retained: ${actual.leaseRetained}`,
+          `cleanup-errors: ${cleanupErrors.join(", ")}`]) expect(output).toContain(line);
+        expect(output).not.toContain("private/");
+        expect(error).not.toHaveBeenCalled(); expect(worker).toHaveBeenCalledTimes(1);
+        expect(runs).toBe(1); expect(finishes).toBe(1); expect(releases).toBe(1);
+      }
+    } finally { error.mockRestore(); log.mockRestore(); worker.mockRestore(); admission.mockRestore(); }
+  });
+
+  test("CLI leaves generic apply worker failures on the existing error path", async () => {
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockResolvedValue({
+      kind: "accepted", job: terminal, generation: randomUUID(),
+    });
+    const worker = spyOn(updateJobs, "runCodexCliUpdateJob").mockRejectedValue(new Error("job_store_busy"));
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    let runs = 0;
+    try {
+      expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", result.planId, "--yes", "--json"],
+        { applyUpdate: async () => { runs++; return result; } })).toBe(1);
+      expect(log).not.toHaveBeenCalled(); expect(error).toHaveBeenCalledWith("Error: job_store_busy");
+      expect(worker).toHaveBeenCalledTimes(1); expect(runs).toBe(0);
+    } finally { error.mockRestore(); log.mockRestore(); worker.mockRestore(); admission.mockRestore(); }
+  });
+
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["open", "partial-write"] as const)("owned lock initialization %s failure rolls back and permits later admission", async failure => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-init-");
     const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");

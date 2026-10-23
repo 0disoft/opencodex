@@ -145,6 +145,10 @@ Windows apply remains refused. Shims and non-npm managers remain unsupported.
 
 On Windows, `src/codex/cli-update-job-store-windows.ts` maps the same ledger contract onto NTFS handle semantics and the public admit/read/finish API in `src/codex/cli-update-job.ts` dispatches to it asynchronously. Each ancestor from the volume root is opened relative to its already-held parent — never a re-parsed path — and refused on any reparse attribute, then evaluated under the "trusted-ancestry" ACL policy (owner is the serving token or SYSTEM/Administrators/TrustedInstaller; untrusted grantees may hold read and, on admin-owned ancestors only, broad create-only rights). The config-root parent and a pre-existing config root are verified under the "write-private" policy and are never rehardened; only a directory the call itself creates is icacls-hardened and held to the strict "private" rule. File identity is the volume serial plus 128-bit file ID with single link and no pending delete, the dev:ino analog. Ledger writes go through a private hardened temp that is byte/ACL/identity-verified, renamed while its handle is held, re-read through the published name, and flushed at the directory. The admission mutex is a mkdir lock plus an owner record released only while both held pins still show this call identity and content, so a leftover lock blocks later admission exactly like POSIX. ACL snapshots are taken per phase through the shared bounded PowerShell read in `src/lib/windows-owner-acl.ts` (async variant), not per path. Pins bind each object to its verified state for the operation and the private DACL confines writers, but this is not a proof against concurrent mutation by the serving account or an elevated process, which sit inside the trust boundary as on POSIX. The backend is x64-only; cross-account (other-SID) and ARM64 behavior are unverified.
 
+An ACL-query timeout fails closed without accepting a late result. Its PowerShell child may still
+hold transient handles while termination settles, so lock cleanup may fail and retain a busy mutex;
+the store does not automatically reclaim that leftover lock. Filtered-token behavior is also unverified.
+
 The ledger retains at most 64 jobs, including terminal jobs, and never prunes request IDs automatically.
 At capacity it refuses new request IDs with `store_full`; existing matching retries still return the same job.
 Capacity expansion and operator recovery require a separate design that preserves deduplication and job-status evidence.
@@ -154,6 +158,8 @@ with status 503 and `Retry-After: 1`; permanent admission failures do not advert
 Only engine exceptions synthesize `job_result_unknown`; persistence retries keep the same actual result.
 Transient completion-write failures have the same bounded retry budget. Permanent failure reports
 `job_result_persistence_failed` while retaining the computed result in the error; it does not establish durable completion.
+CLI apply prints that failure with the admitted job ID, normalized outcome/reason, lease retention and fixed cleanup codes
+in both human and JSON output, and exits 1. It never publishes raw result/error fields or reruns the installer to recover the receipt.
 Unknown result/cleanup codes are normalized to fixed-code uncertainty before writing, so they cannot poison later reads.
 Unsupported prefixes and unavailable lease storage are distinct from a held installation lease.
 Missing/unreadable CLI job status has a structured `job_unavailable` JSON error and a nonzero exit.
