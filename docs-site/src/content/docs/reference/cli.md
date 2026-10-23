@@ -156,7 +156,9 @@ a direct Bun/source launch has no such proof, ignores ambient and persisted cand
 a proof-captured absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain — prefix-local
 when present, otherwise the captured-PATH pair anchored to the launcher architecture — and a verified
 in-prefix platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred
-or unmanaged.
+or unmanaged. A `managed` Windows result classifies the observed installation layout only: the bound Node/npm
+is the updater's read-only metadata toolchain, never a claim about which interpreter a later `codex.cmd`
+invocation resolves, and planning stays read-only with apply disabled.
 The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
