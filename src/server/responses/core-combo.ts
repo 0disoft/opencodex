@@ -120,6 +120,7 @@ import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
 import { clientWireOf } from "../inference/client-wire";
+import { resolveContextPrincipal } from "../auth-cors";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -383,6 +384,10 @@ export async function executeComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // Resolve against the original request once; every bridge candidate receives the same trusted
+  // result after its provisional Authorization is removed, including an explicitly keyless result.
+  const replayPrincipal = options.replayPrincipal
+    ?? { clientPrincipalId: resolveContextPrincipal(req, config, options.admission) };
   // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
@@ -459,6 +464,7 @@ export async function executeComboResponses(
       const unavailable = mandatoryResponsesReasoningReplayUnavailable({
         body,
         clientThreadId: reasoningReplayConversationId,
+        clientPrincipalId: replayPrincipal.clientPrincipalId,
         providerName: route.providerName,
         provider: route.provider,
         adapterName: route.provider.adapter,
@@ -1059,6 +1065,7 @@ export async function executeComboResponses(
         },
       }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        replayPrincipal,
         // A bridge child is a concrete route; the native source belongs to this loop only.
         ...(options.protocolSource ? { protocolSource: undefined } : {}),
         // After the spread: the child must run on THIS target's ladder, not on the holder the
