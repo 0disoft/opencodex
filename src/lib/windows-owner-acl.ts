@@ -298,9 +298,15 @@ export function verifyWindowsPrivateEntries(entries: readonly WindowsPrivateEntr
 
 /**
  * Async counterpart of the sync runner: the PowerShell read is identical, but the
- * caller's event loop is not held for the child lifetime. The deadline is enforced by
- * the shared bounded-subprocess helper, which kills the child and still waits for the
- * kernel to release its handles before reporting the timeout.
+ * caller's event loop is not held while waiting. This read-only lookup opts out of the
+ * post-kill reap wait (`waitForSubprocessExit(..., 0)`: see the helper contract below):
+ * on timeout it requests termination and returns `timedOut` without waiting for the
+ * kernel to release the child's handles. The late exit/result is ignored and stdout is
+ * not read. Although this lookup holds no path its caller must release for its own
+ * writes, a stalled Get-Acl child may transiently touch owner, lock or ledger files and
+ * keep them busy (for example, causing a markDelete to fail) until the OS reaps it.
+ * This bounded availability risk avoids an unbounded caller stall; verification fails
+ * closed.
  */
 async function defaultWindowsOwnerAclAsyncRunner(
   entries: readonly WindowsAclEntry[],
