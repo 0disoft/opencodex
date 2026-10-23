@@ -8,7 +8,7 @@ import {
   CATALOG_HEAL_TICK_MS, CATALOG_HEAL_WINDOW_MS, startCodexCatalogSelfHeal,
   type CatalogSelfHealDeps, type CatalogSelfHealGates, type CatalogSelfHealHandle,
 } from "../../src/codex/catalog-self-heal";
-import { CATALOG_HEAL_MAX_BYTES, CATALOG_HEAL_MAX_PATH_READS, compareCatalogHealPaths, observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
+import { CATALOG_HEAL_MAX_BYTES, CATALOG_HEAL_MAX_LINKS, CATALOG_HEAL_MAX_PATH_READS, compareCatalogHealPaths, inspectHealPath, observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
 import type { CatalogPublicationEvent } from "../../src/codex/catalog/publication-observer";
 import type { RawCatalog } from "../../src/codex/catalog/parsing";
 import type { OcxConfig } from "../../src/types";
@@ -707,6 +707,19 @@ describe("catalog path comparison", () => {
     expect(sameCatalogHealPath(path, absolute)).toBe(true);
     expect(sameCatalogHealPath(leaf, sibling)).toBe(false);
     expect(sameCatalogHealPath(sibling, leaf)).toBe(false);
+  });
+
+  test("40-hop exhaustion stays uncertain independently of the comparator read budget", () => {
+    const root = temporaryRoot(), cycle = join(root, "cycle.json");
+    symlinkSync("cycle.json", cycle, "file");
+    let reads = 0;
+    const observed = inspectHealPath(cycle, read => { reads += 1; return read(); });
+    expect(CATALOG_HEAL_MAX_LINKS).toBe(40);
+    expect(CATALOG_HEAL_MAX_PATH_READS).toBe(64);
+    expect(reads).toBe(CATALOG_HEAL_MAX_LINKS * 4);
+    expect(reads).toBeGreaterThan(CATALOG_HEAL_MAX_PATH_READS);
+    // This marker forces compareCatalogHealPaths' unknown branch, never lexical fallback.
+    expect(observed).toEqual({ kind: "unavailable", hardlink: true });
   });
 
   test("unavailable paths retain lexical equality while cyclic lookup exhaustion stays unknown", () => {

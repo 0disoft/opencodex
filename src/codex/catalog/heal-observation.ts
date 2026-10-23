@@ -27,7 +27,8 @@ function unchanged(before: BigIntStats, after: BigIntStats): boolean {
     && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
 }
 
-function inspectHealPath(path: string, read: PathRead): PathObservation {
+/** @internal Path observation seam; production callers supply the fixed read budget below. */
+export function inspectHealPath(path: string, read: PathRead): PathObservation {
   let hardlink = false;
   const links: LinkObservation[] = [];
   try {
@@ -46,6 +47,8 @@ function inspectHealPath(path: string, read: PathRead): PathObservation {
       if (!parentStat.isDirectory() || !unchanged(parentStat, read(() => statSync(dirname(path), { bigint: true })))) throw new Error("Changed parent");
       return { kind: "hardlink", path, stat, links, parent, parentStat, canonical: join(parent, basename(path)) };
     }
+    // Hop exhaustion requires identity evidence; it must never fall back to lexical comparison.
+    return { kind: "unavailable", hardlink: true };
   } catch { /* Failed identity observations cannot establish a hardlink entry. */ }
   return { kind: "unavailable", hardlink };
 }
