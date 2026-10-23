@@ -14,8 +14,11 @@ function canonicalCatalogHealPath(path: string): string {
   for (let links = 0; links < 40; links += 1) {
     const entry = lstatSync(path);
     if (!entry.isFile() && !entry.isSymbolicLink()) return realpathSync.native(path);
+    // Preserve native leaf aliases (Windows short names, case-insensitive volumes).
+    if (entry.isFile() && (process.platform !== "darwin" || entry.nlink <= 1)) return realpathSync.native(path);
     const parent = realpathSync.native(dirname(path));
     // macOS Bun's file realpath can name another hardlink; preserve this entry.
+    // Case/normalization aliases of a multiply linked macOS leaf remain distinct here.
     if (entry.isFile()) return join(parent, basename(path));
     path = resolve(parent, readlinkSync(path));
   }

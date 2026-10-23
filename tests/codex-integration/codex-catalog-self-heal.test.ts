@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { linkSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -511,8 +512,52 @@ function aliasPaths(kind: "lexical" | "physical" | "case") {
   return { path, alias: kind === "case" ? path.toUpperCase() : `${home}/./catalog.json` };
 }
 
+async function withCatalogPlatform(platform: "win32" | "darwin", run: () => void | Promise<void>) {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  try { await run(); }
+  finally { Object.defineProperty(process, "platform", platformDescriptor); }
+}
+
+async function withNativeFileAlias(path: string, alias: string, platform: "win32" | "darwin", run: () => void | Promise<void>) {
+  const native = realpathSync.native, stat = fs.lstatSync;
+  // Model an OS filename alias, not a second directory entry. Linux need not expose it.
+  const aliasStat = spyOn(fs, "lstatSync").mockImplementation((input, options) =>
+    input === alias ? stat(path, options) : stat(input, options));
+  const aliasPath = spyOn(realpathSync, "native").mockImplementation(input =>
+    native(input === alias ? path : input));
+  try { await withCatalogPlatform(platform, run); }
+  finally {
+    aliasPath.mockRestore(); aliasStat.mockRestore();
+  }
+}
+
 describe("catalog path comparison", () => {
-  test("hardlink entries remain distinct when native realpath reports their sibling", () => {
+  test.each(["win32", "darwin"] as const)("%s single-link native filename aliases remain equivalent", async platform => {
+    const { path } = aliasPaths("lexical");
+    const alias = join(dirname(path), platform === "win32" ? "CATALO~9.JSO" : "CATALOG.JSON");
+    expect(lstatSync(path).nlink).toBe(1);
+    await withNativeFileAlias(path, alias, platform, () => {
+      expect(sameCatalogHealPath(path, alias)).toBe(true);
+      expect(sameCatalogHealPath(alias, path)).toBe(true);
+      expect(sameCatalogHealPath(alias, alias)).toBe(true);
+    });
+  });
+
+  test("Windows native filename aliases remain equivalent for multiply linked files", async () => {
+    const { path } = aliasPaths("lexical");
+    const sibling = join(temporaryRoot(), "catalog.json"), alias = join(dirname(path), "CATALO~9.JSO");
+    linkSync(path, sibling);
+    expect(lstatSync(path).nlink).toBe(2);
+    await withNativeFileAlias(path, alias, "win32", () => {
+      expect(sameCatalogHealPath(path, alias)).toBe(true);
+      expect(sameCatalogHealPath(alias, path)).toBe(true);
+      expect(sameCatalogHealPath(alias, sibling)).toBe(false);
+      expect(sameCatalogHealPath(sibling, alias)).toBe(false);
+    });
+  });
+
+  test("hardlink entries remain distinct when native realpath reports their sibling", async () => {
     const { path } = aliasPaths("lexical");
     const sibling = join(temporaryRoot(), "catalog.json");
     linkSync(path, sibling);
@@ -522,14 +567,16 @@ describe("catalog path comparison", () => {
     const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
       input === path || input === sibling ? path : native(input));
     try {
-      expect(sameCatalogHealPath(path, sibling)).toBe(false);
-      expect(sameCatalogHealPath(sibling, path)).toBe(false);
-      expect(sameCatalogHealPath(path, path)).toBe(true);
-      expect(sameCatalogHealPath(sibling, sibling)).toBe(true);
+      await withCatalogPlatform("darwin", () => {
+        expect(sameCatalogHealPath(path, sibling)).toBe(false);
+        expect(sameCatalogHealPath(sibling, path)).toBe(false);
+        expect(sameCatalogHealPath(path, path)).toBe(true);
+        expect(sameCatalogHealPath(sibling, sibling)).toBe(true);
+      });
     } finally { resolvePath.mockRestore(); }
   });
 
-  test("self comparison survives alternating native hardlink names", () => {
+  test("self comparison survives alternating native hardlink names", async () => {
     const { path } = aliasPaths("lexical");
     const sibling = join(temporaryRoot(), "catalog.json");
     linkSync(path, sibling);
@@ -537,7 +584,7 @@ describe("catalog path comparison", () => {
     let calls = 0;
     const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
       input === path ? (++calls % 2 ? path : sibling) : native(input));
-    try { expect(sameCatalogHealPath(path, path)).toBe(true); }
+    try { await withCatalogPlatform("darwin", () => { expect(sameCatalogHealPath(path, path)).toBe(true); }); }
     finally { resolvePath.mockRestore(); }
   });
 
@@ -589,6 +636,45 @@ describe("catalog path comparison", () => {
     }
     expect(sameCatalogHealPath(dangling, missing)).toBe(false);
     expect(sameCatalogHealPath(missing, dangling)).toBe(false);
+  });
+});
+
+for (const release of ["restore", "native-release"] as const) {
+  test(`native filename alias ${release} fences the known target while selection is unavailable`, async () => {
+    const { path } = aliasPaths("lexical");
+    const alias = join(dirname(path), "CATALO~9.JSO");
+    const h = harness({ path });
+    const entered = deferred(), finish = deferred();
+    let committed = false;
+    h.setHeal(async (_config, lifecycle) => {
+      entered.resolve(); await finish.promise;
+      committed = lifecycle.beforeCommit(); return { committed };
+    });
+    h.rewrite(empty);
+    const tick = h.handle.tickForTests();
+    await entered.promise;
+    await withNativeFileAlias(path, alias, "win32", async () => {
+      try {
+        h.setPath(null); // Restore can remove the journal before its notification.
+        h.publish(release === "restore" ? { kind: "published", path: alias, intent: "restore" }
+          : { kind: "native-released", path: alias });
+        h.setPath(path);
+        finish.resolve(); await tick;
+        expect(committed).toBe(false);
+      } finally { finish.resolve(); await tick; }
+    });
+  });
+}
+
+test("native filename alias owner publication accepts the equivalent target", async () => {
+  const { path } = aliasPaths("lexical");
+  const alias = join(dirname(path), "CATALO~9.JSO");
+  const h = harness({ path });
+  h.rewrite(empty);
+  await withNativeFileAlias(path, alias, "win32", async () => {
+    h.publish({ kind: "published", path: alias, intent: "refresh" });
+    await h.handle.tickForTests();
+    expect(h.converges).toHaveLength(0);
   });
 });
 
@@ -702,9 +788,11 @@ test("sibling hardlink release cannot fence a heal when native realpath collapse
   const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
     input === path || input === sibling ? path : native(input));
   try {
-    h.publish({ kind: "native-released", path: sibling });
-    finish.resolve(); await tick;
-    expect(committed).toBe(true);
+    await withCatalogPlatform("darwin", async () => {
+      h.publish({ kind: "native-released", path: sibling });
+      finish.resolve(); await tick;
+      expect(committed).toBe(true);
+    });
   } finally {
     finish.resolve(); await tick;
     resolvePath.mockRestore();
