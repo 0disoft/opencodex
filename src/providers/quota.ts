@@ -1,6 +1,8 @@
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-instance";
+import { ANTIGRAVITY_OAUTH_STORE_KEY } from "./antigravity-quota-identity";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
+import { thrownQuotaFailure } from "./quota/failure-codes";
 import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
 import { apiKeyPoolEntryId } from "./api-keys";
@@ -123,7 +125,7 @@ async function maybeFetchProviderQuota(
     }
     if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
     if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name, config);
-    if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
+    if (provider.authMode === "oauth" && name === ANTIGRAVITY_OAUTH_STORE_KEY) return await fetchAntigravityQuota(name, { ...provider });
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
     // meta-muse: a device-logged-in account can be probed at the key endpoint; an
     // imported or pasted one cannot, and falls back to its last in-band observation.
@@ -515,7 +517,10 @@ async function fetchAccountQuota(
       }
       return entry;
     } catch (error) {
-      if (provider === "google-antigravity") quotaFailure = "account_unavailable";
+      // The probe itself reports HTTP and transport failures as results; what throws here is the
+      // credential side (missing/paused account, failed refresh, no project). A refresh that hit
+      // its deadline is a timeout to retry, not an account the operator must re-sign.
+      if (provider === "google-antigravity") quotaFailure = thrownQuotaFailure(error) === "timeout" ? "timeout" : "account_unavailable";
       return unavailable();
     }
   })().finally(() => {
