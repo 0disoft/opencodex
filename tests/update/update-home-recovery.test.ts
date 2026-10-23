@@ -108,3 +108,35 @@ test("Bun home refusal preserves the refusal if the verified tray restore throws
     expect(starts).toBe(present ? 1 : 0);
   }
 });
+
+const postShimImport = extracted("    // Re-enter through the verified active package launcher.", "    // The stop above unloaded any managed service", '"continued"');
+const shimGateDeps = (check: () => boolean, events: { checks: number; restored: number; commands: string[][] }) => ({
+  homePolicy: { check: () => { events.checks++; return check(); } },
+  restoreOwnStoppedTray: () => { events.restored++; },
+  trayWasInstalled: true, trayWasRunning: true, postUpdateLauncher: "/verified/launcher",
+  existsSync: () => true, process: { execPath: "/fixture/bun" },
+  mutation: { unprivilegedEnvironment: () => ({ fixture: "unprivileged" }) },
+  planWindowsTrayUpdate: () => ({ installArgs: ["tray", "install"] }),
+  spawnSync: (_bin: string, args: string[]) => { events.commands.push(args); return { status: 0 }; },
+  console: { warn() {}, log() {} },
+});
+
+test("a home change during the shim import vetoes the shim rewrite and the tray refresh", async () => {
+  const events = { checks: 0, restored: 0, commands: [] as string[][] };
+  expect(await postShimImport(shimGateDeps(() => false, events))).toBe(1);
+  // Authority was re-read after the import await: the refusal restores only the own tray
+  // and no control command (shim rewrite, tray refresh) may run.
+  expect(events.checks).toBe(1);
+  expect(events.restored).toBe(1);
+  expect(events.commands).toEqual([]);
+});
+
+test("a stable home still runs the shim gate and the tray refresh in order", async () => {
+  const events = { checks: 0, restored: 0, commands: [] as string[][] };
+  expect(await postShimImport(shimGateDeps(() => true, events))).toBe("continued");
+  expect(events.checks).toBe(1);
+  expect(events.restored).toBe(0);
+  // The shim spawn is conditional on a real installation; the tray refresh is the always-on
+  // control action and must be the last command the gate released.
+  expect(events.commands[events.commands.length - 1]).toEqual(["/verified/launcher", "tray", "install"]);
+});

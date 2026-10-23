@@ -918,7 +918,7 @@ export async function runUpdate(): Promise<void> {
     }
     // Authority gates every post-replacement control action (shim, tray, service), like
     // the Node launcher; refusal may only restore the own tray stopped before replacement.
-    if (!homePolicy.check()) {
+    const restoreOwnStoppedTray = () => {
       if (trayWasRunning && postUpdateLauncherUsable && existsSync(postUpdateLauncher)) {
         try {
           spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], {
@@ -926,24 +926,39 @@ export async function runUpdate(): Promise<void> {
           });
         } catch { /* preserve the authority refusal */ }
       }
+    };
+    if (!homePolicy.check()) {
+      restoreOwnStoppedTray();
       return 1;
     }
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     // Re-enter through the verified active package launcher. This keeps the Codex
     // shim, tray, service and proxy recovery paths on the same package/group that
     // pnpm selected, including when the update changed the global link target.
+    let isCodexShimInstalled: (() => boolean) | undefined;
     try {
-      const { isCodexShimInstalled } = await import("../codex/shim");
-      if (isCodexShimInstalled()) {
+      ({ isCodexShimInstalled } = await import("../codex/shim"));
+    } catch {
+      console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
+    }
+    // The module load above is the last await before the control actions below; a home
+    // change landing while it was in flight must veto the shim rewrite and the tray
+    // refresh, not only the later service checks.
+    if (!homePolicy.check()) {
+      restoreOwnStoppedTray();
+      return 1;
+    }
+    if (isCodexShimInstalled?.()) {
+      try {
         const shim = spawnSync(process.execPath, [postUpdateLauncher, "codex-shim", "install"], {
           stdio: "inherit",
           windowsHide: true,
           env: mutation.unprivilegedEnvironment(),
         });
         if (shim.status !== 0) console.warn("⚠️  Shim repair skipped: run 'ocx codex-shim install'.");
+      } catch {
+        console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
       }
-    } catch {
-      console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
     }
     if (trayWasInstalled) {
       const trayArgs = planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs;

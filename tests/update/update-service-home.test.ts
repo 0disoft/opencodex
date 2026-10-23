@@ -206,6 +206,29 @@ test.each([
   expect(JSON.stringify(persisted)).not.toContain(statePath);
 });
 
+test("a home change during the service-args import refuses before wrapper stop or port reclaim", async () => {
+  record(b); const { calls, io } = workerIo();
+  // The launcher read runs immediately after `await import("../service")`: staging the
+  // flip there models authority changing while that import was in flight, before the
+  // wrapper stop and port reclaim that must not run under foreign authority.
+  io.packageLauncherPathFn = () => { record(a); return "/fixture/launcher"; };
+  expect(await restartAfterUpdateForTests(fixtureJob(), { port: 19001, hostname: "127.0.0.1" }, io)).toBe(false);
+  expect(calls).toEqual({ repair: 0, manager: 0, reclaim: 0, kill: 0, spawn: 0, wrappers: 0 });
+  const persisted = readUpdateJob("home-guard");
+  expect(persisted).toMatchObject({ status: "failed", restarted: false });
+  expect(persisted?.error).toContain("ocx service status");
+});
+
+test("a home change during the port reclaim wait refuses the repair and every later side effect", async () => {
+  record(b); const { calls, io } = workerIo();
+  // The reclaim itself started under the entry authority and cannot be preempted
+  // mid-wait; the check after the wait must refuse the repair and the manager.
+  io.waitForPort = async () => { calls.reclaim++; record(a); return true; };
+  expect(await restartAfterUpdateForTests(fixtureJob(), { port: 19001, hostname: "127.0.0.1" }, io)).toBe(false);
+  expect(calls).toEqual({ repair: 0, manager: 0, reclaim: 1, kill: 0, spawn: 0, wrappers: 1 });
+  expect(readUpdateJob("home-guard")).toMatchObject({ status: "failed", restarted: false });
+});
+
 test("confirmed absence after lease release skips repair and every later global service operation", async () => {
   record(b); const { calls, io } = workerIo();
   io.releaseForServiceManagerFn = () => unlinkSync(statePath);

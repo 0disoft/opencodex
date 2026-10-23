@@ -1145,8 +1145,8 @@ async function restartAfterUpdate(
     killAllOcxOnPort: true,
     onlyKillPids,
   });
-
   if (serviceInstalled) {
+    if (!homePolicy.check()) return false; // a home change during the service-args import refuses before stop/reclaim
     // schtasks /end often leaves the hidden cmd/wscript wrapper alive; its :loop
     // respawns `ocx start` a few seconds later and races port reclaim, so end the
     // task again and kill those wrappers before touching the socket, then reclaim it
