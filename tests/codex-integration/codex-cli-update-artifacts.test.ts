@@ -270,7 +270,7 @@ describe("Codex CLI apply consumer", () => {
       console.log = value => { logs.push(String(value)); };
       expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", planId, "--yes", "--json"], {
         applyUpdate: async (id, deps) => { calls++; expect(id).toBe(planId); expect(deps.inspectionDeps).toBeDefined(); return report; },
-      })).toBe(0);
+      })).toBe(1);
       expect(calls).toBe(1); expect(logs).toHaveLength(1);
       expect(fs.existsSync(join(configDir, "codex-cli-update-jobs", "jobs.json"))).toBe(true);
       const dto = JSON.parse(logs[0]!) as Record<string, unknown>;
