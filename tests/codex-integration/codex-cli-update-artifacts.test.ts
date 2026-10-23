@@ -142,8 +142,9 @@ describe("Codex CLI apply artifacts", () => {
       fs.writeSync(sentinel, "sentinel");
       for (let index = 0; index < 12; index++) {
         await verifyCodexCliArchive(path, f.artifacts.main);
-        const lease = acquireCodexCliApplyLease(root); expect(lease).not.toBeNull();
-        expect(lease!.release()).toBe(true);
+        const lease = acquireCodexCliApplyLease(root); expect(lease.kind).toBe("acquired");
+        if (lease.kind !== "acquired") throw new Error("fixture lease unavailable");
+        expect(lease.release()).toBe(true);
         await new Promise<void>(resolve => setImmediate(resolve));
         expect(fs.fstatSync(sentinel).size).toBe(8);
       }
@@ -152,7 +153,8 @@ describe("Codex CLI apply artifacts", () => {
   test.skipIf(process.platform === "win32")("lease descriptor-close failure is structured and still permits staging cleanup", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-close-failure-")));
     const stage = join(root, "stage"); mkdirSync(stage);
-    const lease = acquireCodexCliApplyLease(root); expect(lease).not.toBeNull();
+    const lease = acquireCodexCliApplyLease(root); expect(lease.kind).toBe("acquired");
+    if (lease.kind !== "acquired") throw new Error("fixture lease unavailable");
     const close = fs.closeSync;
     const spy = spyOn(fs, "closeSync").mockImplementation(fd => {
       close(fd); throw Object.assign(new Error("injected post-close failure"), { code: "EBADF" });

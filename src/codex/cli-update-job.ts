@@ -4,19 +4,14 @@ import { chmodSync, closeSync, constants, fsyncSync, fstatSync, lstatSync, mkdir
 import { dirname, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
 import type { CodexCliApplyResult } from "./cli-update-apply";
+import { CODEX_CLI_JOB_REASONS as SAFE_REASONS, CODEX_CLI_JOB_CLEANUP_ERRORS,
+  CodexCliJobStoreBusyError, normalizeCodexCliJobResult, runCodexCliUpdateJobWork } from "./cli-update-job-execution";
 
 const MAX_BYTES = 256 * 1024;
 const MAX_JOBS = 64;
 const JOB_DIR = "codex-cli-update-jobs";
 const FILE = "jobs.json";
 const LOCK = "admission.lock";
-const SAFE_REASONS = new Set(["invalid_plan_id", "windows_inspection_deferred", "cancelled", "mutation_evidence_unverified",
-  "installation_prefix_changed", "installation_busy", "plan_refused", "plan_changed", "target_artifacts_unverified",
-  "installation_changed", "npm_unavailable", "blocked_process_state_unknown", "blocked_active_session",
-  "installer_state_unknown", "version_process_state_unknown", "version_readback_unverified", "verified_target",
-  "original_install_unchanged", "installation_readback_unverified", "installer_or_readback_error",
-  "preparation_failed", "job_result_unknown", "not_managed", "installed_version_unverified",
-  "install_content_unverified", "target_unresolved", "already_current", "target_not_newer"]);
 type JobStatus = "queued" | "running" | "applied" | "not_applied" | "refused" | "ambiguous";
 
 interface StoredJob {
@@ -130,7 +125,7 @@ function readStore(configDir?: string): Store {
         || typeof job.planId !== "string" || !/^[0-9a-f]{32}$/.test(job.planId)
         || (job.reason !== null && (typeof job.reason !== "string" || !SAFE_REASONS.has(job.reason)))
         || !Array.isArray(job.cleanupErrors) || job.cleanupErrors.length > 8
-        || job.cleanupErrors.some((item: unknown) => !["lease_release_unverified", "lease_release_exception", "staging_cleanup_failed"].includes(String(item)))
+        || job.cleanupErrors.some((item: unknown) => typeof item !== "string" || !CODEX_CLI_JOB_CLEANUP_ERRORS.has(item))
         || typeof job.leaseRetained !== "boolean"
         || typeof job.createdAt !== "string" || typeof job.updatedAt !== "string")) throw new Error("invalid_store");
     return value;
@@ -143,7 +138,11 @@ function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof pa
   const owner = join(p.lock, "owner.json");
   const record = JSON.stringify({ version: 1, token: randomUUID() });
   try {
-    mkdirSync(p.lock, { mode: 0o700 });
+    try { mkdirSync(p.lock, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new CodexCliJobStoreBusyError();
+      throw error;
+    }
     const lockStat = lstatSync(p.lock);
     if (!lockStat.isDirectory() || lockStat.isSymbolicLink() || lockStat.uid !== process.geteuid?.()
       || (lockStat.mode & 0o077) !== 0 || realpathSync.native(p.lock) !== p.lock) throw new Error("unsafe_store");
@@ -264,35 +263,41 @@ export function finishCodexCliUpdateJob(jobId: string, generation: string, expec
     const index = store.jobs.findIndex(job => job.id === jobId);
     if (index < 0) return null;
     const current = store.jobs[index]!;
+    const safe = normalizeCodexCliJobResult(result);
+    // A rename can succeed before a directory-fsync error. Retry the same
+    // completed revision while this generation still owns it, never the engine.
+    if (current.generation === generation && current.revision === expectedRevision + 1
+      && live.get(jobId) === generation && started.has(jobId)
+      && current.outcome === safe.outcome && current.reason === safe.reason
+      && current.leaseRetained === safe.leaseRetained
+      && JSON.stringify(current.cleanupErrors) === JSON.stringify(safe.cleanupErrors)) {
+      writeStore(p, store); live.delete(jobId); started.delete(jobId); return dto(current);
+    }
     if (current.generation !== generation || current.revision !== expectedRevision
-      || !live.has(jobId) || !started.has(jobId)) return dto(current);
-    const next: StoredJob = { ...current, revision: current.revision + 1, status: result.outcome,
-      outcome: result.outcome, reason: result.reason, cleanupErrors: result.cleanupErrors, leaseRetained: result.leaseRetained, updatedAt: now() };
+      || live.get(jobId) !== generation || !started.has(jobId)) return dto(current);
+    const next: StoredJob = { ...current, revision: current.revision + 1, status: safe.outcome,
+      outcome: safe.outcome, reason: safe.reason, cleanupErrors: safe.cleanupErrors, leaseRetained: safe.leaseRetained, updatedAt: now() };
     store.jobs[index] = next; writeStore(p, store); live.delete(jobId); started.delete(jobId);
     return dto(next);
   });
 }
 
-export async function runCodexCliUpdateJob(jobId: string, generation: string, run: () => Promise<CodexCliApplyResult>, configDir?: string): Promise<CodexCliUpdateJobDto> {
-  let expectedRevision: number | undefined;
-  try {
-    expectedRevision = withLock(configDir, p => {
+export async function runCodexCliUpdateJob(jobId: string, generation: string, run: () => Promise<CodexCliApplyResult>, configDir?: string): Promise<CodexCliUpdateJobDto | null> {
+  let ownsExecution = false;
+  return runCodexCliUpdateJobWork(run, {
+    begin: () => withLock(configDir, p => {
       const store = validStore(configDir); const index = store.jobs.findIndex(job => job.id === jobId);
       if (index < 0 || store.jobs[index]!.generation !== generation) throw new Error("job_generation_changed");
-      if (!live.has(jobId) || started.has(jobId)) throw new Error("job_not_owned");
+      if (live.get(jobId) !== generation || started.has(jobId)) throw new Error("job_not_owned");
       const current = store.jobs[index]!; const next = { ...current, revision: current.revision + 1, status: "running" as const, updatedAt: now() };
-      store.jobs[index] = next; writeStore(p, store); started.add(jobId); return next.revision;
-    });
-    const result = await run();
-    return finishCodexCliUpdateJob(jobId, generation, expectedRevision, result, configDir) ?? readCodexCliUpdateJob(jobId, configDir)!;
-  } catch {
-    if (expectedRevision === undefined) return readCodexCliUpdateJob(jobId, configDir)!;
-    const result: CodexCliApplyResult = { outcome: "ambiguous", reason: "job_result_unknown", planId: "",
-      installedVersion: null, targetVersion: null, installerExitCode: null, leaseRetained: true,
-      verificationPid: null, cleanupErrors: [] };
-    return finishCodexCliUpdateJob(jobId, generation, expectedRevision, result, configDir) ?? readCodexCliUpdateJob(jobId, configDir)!;
-  } finally {
-    live.delete(jobId);
-    started.delete(jobId);
-  }
+      store.jobs[index] = next; writeStore(p, store); started.add(jobId); ownsExecution = true; return next.revision;
+    }),
+    finish: (revision, result) => finishCodexCliUpdateJob(jobId, generation, revision, result, configDir),
+    read: () => readCodexCliUpdateJob(jobId, configDir),
+    release: () => {
+      if (live.get(jobId) === generation && (ownsExecution || !started.has(jobId))) {
+        live.delete(jobId); if (ownsExecution) started.delete(jobId);
+      }
+    },
+  });
 }

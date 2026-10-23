@@ -1207,6 +1207,12 @@ Windows apply, shim repair, native apps and other installation managers remain u
 Apply returns a job with `applied`, `not_applied`, `refused` or `ambiguous` outcome. Status reads the
 same private job record without a running proxy or GUI token. Reuse the same optional request ID after
 a lost response: the same key and plan return the original job; a changed plan with that key refuses.
+The private ledger retains up to 64 jobs, including finished jobs, without automatic pruning. At that
+limit, new request IDs are refused with `store_full`; existing matching retries still return their
+original job. Capacity and operator recovery remain a separate follow-up that must preserve this
+deduplication contract. A busy admission ledger reports `job_store_busy`; missing or unreadable CLI
+status returns `job_unavailable` and a nonzero exit. Completion persistence failures do not rerun the
+installer or turn an uncertain job into a confirmed success.
 An ambiguous result is never automatically retried or rolled back. After an owner restart, an unfinished
 job reports unknown ownership instead of claiming the old process stopped. Inspect the job's outcome,
 child/lease state and cleanup errors; command exit status alone does not establish an installation result.

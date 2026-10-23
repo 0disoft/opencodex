@@ -45,6 +45,7 @@ export type ParsedCodexCliUpdateArgs =
   | Readonly<{ json: boolean; attest: CodexCliInstallationIdentityInput | "selected" }>;
 
 export interface CodexCliUpdateCommandDeps {
+  readonly readJob?: typeof readCodexCliUpdateJob;
   readonly inspectInstall?: (deps: CodexCliInstallProvenanceDeps) => Promise<CodexCliInstallReport>;
   readonly inspectIdentity?: (input: CodexCliInstallationIdentityInput) => Promise<CodexCliInstallationIdentityReport>;
   readonly deriveInstallationInput?: (
@@ -266,6 +267,11 @@ export async function handleCodexCliUpdateCommand(
   }
   // A refusal or an unapplied update is a legitimate answer rather than a crash, so the
   // outcome exit code is decided here and only a thrown error is left to runCliAction.
+  let resultCode = 0;
+  const unavailableJob = () => {
+    printData({ error: "job_unavailable" }, parsed.json, ["Codex CLI update job was not found or is unavailable."]);
+    resultCode = 1;
+  };
   const code = await runCliAction(async () => {
     if ("attest" in parsed) {
       let report: CodexCliInstallationIdentityReport;
@@ -303,8 +309,10 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "status") {
-      const job = readCodexCliUpdateJob(parsed.jobId);
-      if (!job) { console.error("Codex CLI update job was not found or is unavailable."); return; }
+      let job: ReturnType<typeof readCodexCliUpdateJob>;
+      try { job = (deps.readJob ?? readCodexCliUpdateJob)(parsed.jobId); }
+      catch { unavailableJob(); return; }
+      if (!job) { unavailableJob(); return; }
       printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
         `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);
       return;
@@ -325,9 +333,10 @@ export async function handleCodexCliUpdateCommand(
         ? await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
           () => apply(parsed.planId, { inspectionDeps: codexCliUpdateInspectionDeps(deps) }))
         : admitted.job;
+      if (!job) { unavailableJob(); return; }
       printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
         `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);
     }
   });
-  return code;
+  return code || resultCode;
 }

@@ -17,7 +17,7 @@ import {
   CODEX_CLI_REGISTRY,
   codexCliUpdatePlanId,
   createCodexCliUpdatePlan,
-  resolveCodexCliUpdateTarget,
+  resolveCodexCliUpdateArtifactTarget,
   type CodexCliUpdatePlan,
   type CodexCliUpdatePlanDeps,
   type CodexCliUpdateTarget,
@@ -33,6 +33,9 @@ import {
 } from "../helpers/codex-cli-content-fs";
 
 const REGISTRY_INTEGRITY = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
+function resolveArtifact(channel: "latest", spawn: typeof spawnSync = spawnSync, env?: NodeJS.ProcessEnv) {
+  return resolveCodexCliUpdateArtifactTarget(channel, spawn, env, "linux", "x64");
+}
 
 /**
  * Phase 2 of the Codex CLI update manager.
@@ -332,23 +335,27 @@ describe("strict Codex app-server process scan", () => {
 describe("registry target resolution", () => {
   function spawnStub(outputs: { status: number | null; stdout: string }[]) {
     let call = 0;
-    return (() => {
-      const next = outputs[call++] ?? { status: 1, stdout: "" };
-      return { status: next.status, stdout: next.stdout, stderr: "" };
+    return ((_bin: string, args: string[]) => {
+      const index = call++, version = outputs[0]?.stdout.trim();
+      const name = index === 2 ? "@openai/codex-linux-x64" : "@openai/codex";
+      return { status: outputs[index === 0 ? 0 : 1]?.status ?? 1,
+        stdout: JSON.stringify({ name, version, optionalDependencies: { "@openai/codex-linux-x64": version },
+          dist: { integrity: outputs[1]?.stdout.trim(), tarball: outputs[2]?.stdout.trim() } }), stderr: "" };
     }) as never;
   }
 
   test("an exact version with a sha512 token resolves", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+    const target = resolveArtifact("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
-      { status: 0, stdout: `'${REGISTRY_INTEGRITY}' sha1-old\n` },
+      { status: 0, stdout: `${REGISTRY_INTEGRITY}\n` },
       { status: 0, stdout: "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n" },
     ]));
-    expect(target).toEqual({ kind: "resolved", version: "1.4.2", integrity: REGISTRY_INTEGRITY });
+    expect(target).toMatchObject({ kind: "resolved", version: "1.4.2", integrity: REGISTRY_INTEGRITY,
+      artifacts: { platform: "linux", arch: "x64", backing: { name: "@openai/codex-linux-x64" } } });
   });
 
   test("a missing integrity token refuses instead of proceeding best-effort", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+    const target = resolveArtifact("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
       { status: 0, stdout: "sha1-onlythis\n" },
     ]));
@@ -356,19 +363,19 @@ describe("registry target resolution", () => {
   });
 
   test("a registry timeout refuses", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([{ status: null, stdout: "" }]));
+    const target = resolveArtifact("latest", spawnStub([{ status: null, stdout: "" }]));
     expect(target.kind).toBe("unresolved");
   });
 
   test("a non-version answer is not treated as a version", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+    const target = resolveArtifact("latest", spawnStub([
       { status: 0, stdout: "latest\n" },
     ]));
     expect(target.kind).toBe("unresolved");
   });
 
   test("a tarball outside the pinned registry origin is refused even with a valid digest", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+    const target = resolveArtifact("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
       { status: 0, stdout: `${REGISTRY_INTEGRITY}\n` },
       { status: 0, stdout: "https://evil.invalid/@openai/codex/-/codex-1.4.2.tgz\n" },
@@ -377,7 +384,7 @@ describe("registry target resolution", () => {
   });
 
   test("a tarball answer that is not a URL at all is refused", () => {
-    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+    const target = resolveArtifact("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
       { status: 0, stdout: `${REGISTRY_INTEGRITY}\n` },
       { status: 0, stdout: "not-a-url\n" },
@@ -482,7 +489,7 @@ describe("registry configuration isolation", () => {
         ownedRoot = options.cwd as string;
         return (capture.spawn as typeof spawnSync)(bin, args, options);
       }) as never;
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe(kind);
+      expect(resolveArtifact("latest", spawn).kind).toBe(kind);
       expect(cleanupAttempts).toBe(1);
       expect(existsSync(ownedRoot)).toBe(true);
     } finally {
@@ -493,11 +500,12 @@ describe("registry configuration isolation", () => {
 
   test("every query pins the official registry and substitutes a controlled npmrc", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    const target = resolveCodexCliUpdateTarget("latest", spawn);
+    const target = resolveArtifact("latest", spawn);
     expect(target.kind).toBe("resolved");
     expect(calls.length).toBe(3);
     for (const call of calls) {
       expect(argvLine(call)).toContain("--registry=" + CODEX_CLI_REGISTRY);
+      expect(argvLine(call)).toContain("--json"); expect(call.options.maxBuffer).toBe(1024 * 1024);
       // Both file configs use distinct controlled empty files inside the
       // isolation dir — a user ~/.npmrc or a global $PREFIX/etc/npmrc cannot answer.
       expect(argvLine(call)).toContain("--userconfig=");
@@ -519,7 +527,7 @@ describe("registry configuration isolation", () => {
     process.env["npm_config_@openai:registry"] = "https://evil.invalid/";
     try {
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-      const target = resolveCodexCliUpdateTarget("latest", spawn);
+      const target = resolveArtifact("latest", spawn);
       expect(target.kind).toBe("resolved");
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
@@ -537,7 +545,7 @@ describe("registry configuration isolation", () => {
     // A project .npmrc in the launch directory would otherwise redirect the scope;
     // the query must run from the sentinel-anchored isolation dir instead.
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+    expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
     expect(calls.length).toBe(3);
     for (const call of calls) {
       const cwd = call.options.cwd as string;
@@ -565,7 +573,7 @@ describe("registry configuration isolation", () => {
       process.env.HTTPS_PROXY = "http://project-dotenv-proxy";
       process.env.ALL_PROXY = "http://project-dotenv-fallback";
       process.env.NODE_EXTRA_CA_CERTS = "/project/dotenv-ca.pem";
-      expect(resolveCodexCliUpdateTarget("latest", spawn, boundEnv).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn, boundEnv).kind).toBe("resolved");
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
         expect(env.PATH).toBe(boundEnv.PATH);
@@ -610,7 +618,7 @@ describe("registry configuration isolation", () => {
     try {
       // Capture only: no loader, native child process or network is invoked.
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       expect(calls.length).toBe(3);
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
@@ -635,7 +643,7 @@ describe("registry configuration isolation", () => {
     process.env.NODE_REDIRECT_WARNINGS = "C:\\evil-warnings.log";
     try {
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-      const target = resolveCodexCliUpdateTarget("latest", spawn);
+      const target = resolveArtifact("latest", spawn);
       expect(target.kind).toBe("resolved");
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
@@ -669,7 +677,7 @@ describe("registry configuration isolation", () => {
     try {
       // Capture only: no child process, native provider or network is invoked.
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       expect(calls.length).toBe(3);
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
@@ -691,7 +699,7 @@ describe("registry configuration isolation", () => {
     try {
       Object.assign(process.env, sentinels);
       const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       for (const call of calls) {
         const env = call.options.env as NodeJS.ProcessEnv;
         for (const [key, value] of Object.entries(sentinels)) {
@@ -757,9 +765,9 @@ describe("registry configuration isolation", () => {
           checked = true;
         }
         const field = queriedField({ bin, args, options } as CapturedCall);
-        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        return (capturingSpawn(RESOLVE_OUTPUTS).spawn as typeof spawnSync)(bin, args, options);
       }) as never;
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       expect(checked).toBe(true);
       expect(existsSync(ownedRoot)).toBe(false);
     } finally {
@@ -774,7 +782,7 @@ describe("registry configuration isolation", () => {
 
   test("a trusted snapshot without PATH installs an explicit empty PATH and fails closed", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    resolveCodexCliUpdateTarget("latest", spawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    resolveArtifact("latest", spawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
     // With no trusted PATH the ambient PATH must never reach the child: Windows
     // resolves the binary itself and spawns nothing, while POSIX spawns the bare
     // npm name whose execvp lookup then fails under the explicit empty PATH.
@@ -785,13 +793,13 @@ describe("registry configuration isolation", () => {
     // spawn that honours the empty PATH fails and the target stays unresolved.
     const enoent = { status: null as number | null, stdout: "", stderr: "spawnSync npm ENOENT", error: new Error("spawnSync npm ENOENT") };
     const failingSpawn = (() => ({ ...enoent })) as never;
-    const refused = resolveCodexCliUpdateTarget("latest", failingSpawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
+    const refused = resolveArtifact("latest", failingSpawn, { PATHEXT: ".COM;.EXE;.BAT;.CMD" });
     expect(refused.kind).toBe("unresolved");
   });
 
   test("npm and Node caches and logs stay inside the owned temporary root", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    const target = resolveCodexCliUpdateTarget("latest", spawn);
+    const target = resolveArtifact("latest", spawn);
     expect(target.kind).toBe("resolved");
     expect(calls.length).toBe(3);
     for (const call of calls) {
@@ -830,9 +838,9 @@ describe("registry configuration isolation", () => {
           observedCache = env.NODE_COMPILE_CACHE;
         }
         // Only registry evidence is synthetic; npm startup above is real.
-        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        return (capturingSpawn(RESOLVE_OUTPUTS).spawn as typeof spawnSync)(bin, args, options);
       }) as never;
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       expect(calls).toBe(3);
       expect(existsSync(isolatedDir)).toBe(false);
       expect(readdirSync(temporaryRoot)).toEqual([]);
@@ -872,9 +880,9 @@ describe("registry configuration isolation", () => {
           expect(result.stderr).not.toContain("double-loading config");
           configReads++;
         }
-        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        return (capturingSpawn(RESOLVE_OUTPUTS).spawn as typeof spawnSync)(bin, args, options);
       }) as never;
-      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(resolveArtifact("latest", spawn).kind).toBe("resolved");
       expect(configReads).toBe(1);
       expect(existsSync(isolatedDir)).toBe(false);
       expect(readdirSync(fakeHome)).toEqual([]);
@@ -902,9 +910,12 @@ describe("registry configuration isolation", () => {
         };
         calls.push(call);
         const field = queriedField(call);
-        if (realRan) return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        if (realRan) return (capturingSpawn(RESOLVE_OUTPUTS).spawn as typeof spawnSync)(bin, args, options);
         const env = { ...(options.env as NodeJS.ProcessEnv), HOME: fakeHome, USERPROFILE: fakeHome, npm_config_offline: "true" };
-        const result = spawnSync(bin, args, { ...options, env, timeout: 30_000, windowsHide: true, encoding: "utf8" });
+        const offlineArgs = options.windowsVerbatimArguments
+          ? [...args.slice(0, 3), args[3]!.slice(0, -1) + ' --offline --fetch-retries=0 --fetch-timeout=1000"']
+          : [...args, "--offline", "--fetch-retries=0", "--fetch-timeout=1000"];
+        const result = spawnSync(bin, offlineArgs, { ...options, env, timeout: 10_000, windowsHide: true, encoding: "utf8" });
         realRan = true;
         // A spawn that never started (ENOENT, timeout kill) proves nothing; require
         // a real process exit so the residue assertions actually bound npm's writes.
@@ -914,9 +925,9 @@ describe("registry configuration isolation", () => {
         // The owned root is still live here, so residue inside it is observable
         // before the resolver's finally removes it.
         for (const name of readdirSync(cwd)) ownedDuringRun.push(name);
-        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+        return (capturingSpawn(RESOLVE_OUTPUTS).spawn as typeof spawnSync)(bin, args, options);
       }) as never;
-      resolveCodexCliUpdateTarget("latest", spawn);
+      resolveArtifact("latest", spawn);
       expect(realRan).toBe(true);
       const cwd = calls[0]!.options.cwd as string;
       // Anything npm persisted was inside the owned root and is removed with it;
@@ -929,5 +940,5 @@ describe("registry configuration isolation", () => {
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

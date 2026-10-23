@@ -7,7 +7,8 @@ import { join, resolve } from "node:path";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
 import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
-import { codexCliArtifactSet, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
+import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSet, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
+export { CODEX_CLI_REGISTRY } from "./cli-update-artifacts";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -43,18 +44,6 @@ import {
 
 export const CODEX_CLI_PACKAGE = "@openai/codex";
 export const CODEX_CLI_UPDATE_SCHEMA_VERSION = 1 as const;
-
-/**
- * The one registry this workflow is allowed to resolve, pack and install from.
- *
- * npm view/pack inherit the operator's npm configuration by default, so a project or
- * user .npmrc — or an npm_config_* env var — can redirect "@openai/codex" to another
- * registry whose version query, integrity query and tarball all agree with each
- * other. Every npm call below pins this registry explicitly AND runs with the
- * registry-affecting configuration isolated, so the pinned origin is the only source
- * the evidence can come from.
- */
-export const CODEX_CLI_REGISTRY = "https://registry.npmjs.org";
 
 /** Only the stable channel is exposed; a moving dist-tag is resolved before it is used. */
 export type CodexCliUpdateChannel = "latest";
@@ -130,16 +119,6 @@ export interface CodexCliUpdatePlanDeps {
 const PLAN_ID_LENGTH = 32;
 const PLAN_ID_RE = /^[0-9a-f]{32}$/;
 const REGISTRY_TIMEOUT_MS = 12_000;
-const SHA512_INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]{86}==$/;
-
-function isSha512Integrity(token: string): boolean {
-  if (!SHA512_INTEGRITY_RE.test(token)) return false;
-  const encoded = token.slice("sha512-".length);
-  // Base64 decoders accept truncated input and nonzero unused padding bits.
-  // Require exactly 64 bytes and the canonical encoding of those same bytes.
-  const digest = Buffer.from(encoded, "base64");
-  return digest.byteLength === 64 && digest.toString("base64") === encoded;
-}
 
 /** The install argv this plan quotes for the operator to read, in argv form. */
 export function codexCliUpdateCommand(version: string): readonly string[] {

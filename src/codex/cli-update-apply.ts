@@ -29,7 +29,7 @@ export type CodexCliApplyCleanupError = "lease_release_unverified" | "lease_rele
 /** Every cleanup phase is attempted even if another fails. Preserve the
  * computed readback outcome and expose path-free cleanup uncertainty separately.
  */
-export function cleanupCodexCliApply(lease: ReturnType<typeof acquireCodexCliApplyLease>, staging?: string) {
+export function cleanupCodexCliApply(lease: { release(): boolean } | null, staging?: string) {
   const cleanupErrors: CodexCliApplyCleanupError[] = [];
   let leaseRetained = false;
   try { if (lease && !lease.release()) { leaseRetained = true; cleanupErrors.push("lease_release_unverified"); } }
@@ -137,7 +137,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
   let installedVersion: string | null = null;
   let targetVersion: string | null = null;
   let exitCode: number | null = null;
-  let lease: ReturnType<typeof acquireCodexCliApplyLease> = null;
+  let lease: { release(): boolean } | null = null;
   let keepLease = false;
   let staging: string | undefined;
   let started = false;
@@ -157,8 +157,11 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     const prefix = realpathSync.native(evidence.prefix);
     if (prefix !== evidence.prefix) return result("refused", "installation_prefix_changed");
     const prefixIdentity = lstatSync(prefix);
-    lease = (deps.acquireLease ?? acquireCodexCliApplyLease)(prefix);
-    if (!lease) return result("refused", "installation_busy");
+    const acquired = (deps.acquireLease ?? acquireCodexCliApplyLease)(prefix);
+    if (acquired.kind === "prefix_unsupported") return result("refused", "installation_prefix_unsupported");
+    if (acquired.kind === "busy") return result("refused", "installation_busy");
+    if (acquired.kind !== "acquired") return result("refused", "installation_lease_unavailable");
+    lease = acquired;
     const freshPlan = () => createCodexCliUpdatePlan({ ...deps, inspectionDeps: freshInspection(deps) });
     const plan = await freshPlan();
     targetVersion = plan.targetVersion;
@@ -177,7 +180,6 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
         path = join(staging, `${index}.tgz`);
         writeFileSync(path, bytes, { flag: "wx", mode: 0o400 });
       } else path = await packArtifact(artifact, staging, deps.inspectionDeps?.env);
-      await verifyCodexCliArchive(path, artifact);
       paths.push(path);
     }
     if (deps.signal?.aborted) return result("refused", "cancelled");

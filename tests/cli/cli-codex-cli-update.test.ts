@@ -1,11 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { handleCodexCliUpdateCommand, parseCodexCliUpdateArgs } from "../../src/cli/codex-cli-update";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, projectCodexCliUpdateJobLifecycle, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
+import { CodexCliJobStoreBusyError, CodexCliJobResultPersistenceError, normalizeCodexCliJobResult,
+  retryCodexCliJobStoreOperation, runCodexCliUpdateJobWork } from "../../src/codex/cli-update-job-execution";
+import type { CodexCliApplyResult } from "../../src/codex/cli-update-apply";
+import type { CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import {
   initializeNodeLauncherContext,
   NODE_LAUNCH_CONTEXT_ENV,
@@ -105,6 +110,150 @@ function hasTrustedStickyTmp(): boolean {
   } catch { return false; }
 }
 
+describe("Codex CLI job persistence failures", () => {
+  const result: CodexCliApplyResult = { outcome: "applied", reason: "verified_target", planId: "a".repeat(32),
+    installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+    verificationPid: null, cleanupErrors: [] };
+  const terminal = { jobId: randomUUID(), status: "applied", outcome: "applied", reason: "verified_target" } as CodexCliUpdateJobDto;
+
+  test("a save failure retries the actual applied result without rerunning the engine", async () => {
+    const saved: CodexCliApplyResult[] = []; let runs = 0, released = 0;
+    const value = await runCodexCliUpdateJobWork(async () => { runs++; return result; }, {
+      begin: () => 1, read: () => null, release: () => { released++; },
+      finish: (_revision, value) => { saved.push(value); if (saved.length === 1) throw Object.assign(new Error("disk full"), { code: "ENOSPC" }); return terminal; },
+    });
+    expect(value).toBe(terminal); expect(runs).toBe(1); expect(released).toBe(1);
+    expect(saved).toEqual([result, result]); expect(saved.every(value => value === result)).toBe(true);
+  });
+
+  test("persistent save failure carries the actual result and never invents a replacement", async () => {
+    const saved: CodexCliApplyResult[] = [];
+    let failure: unknown;
+    try { await runCodexCliUpdateJobWork(async () => result, { begin: () => 1, read: () => null, release: () => {},
+      finish: (_revision, value) => { saved.push(value); throw new Error("unsafe_store"); } }); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(CodexCliJobResultPersistenceError);
+    expect((failure as CodexCliJobResultPersistenceError).result).toBe(result);
+    expect(saved).toEqual([result]);
+  });
+
+  test("bounded lock contention yields asynchronously and does not reclaim the lock", async () => {
+    let attempts = 0; const waits: number[] = [];
+    expect(await retryCodexCliJobStoreOperation(() => { if (++attempts < 3) throw new CodexCliJobStoreBusyError(); return 7; },
+      async ms => { waits.push(ms); })).toBe(7);
+    expect(attempts).toBe(3); expect(waits).toEqual([25, 25]);
+    attempts = 0; waits.length = 0;
+    await expect(retryCodexCliJobStoreOperation(() => { attempts++; throw new CodexCliJobStoreBusyError(); },
+      async ms => { waits.push(ms); })).rejects.toThrow("job_store_busy");
+    expect(attempts).toBe(8); expect(waits).toHaveLength(7);
+  });
+
+  test("unknown accepted result codes cannot poison a later store read", () => {
+    const safe = normalizeCodexCliJobResult({ ...result, reason: "private/unknown-reason",
+      cleanupErrors: ["private/cleanup"] as never });
+    expect(safe).toMatchObject({ outcome: "ambiguous", reason: "job_result_unknown", leaseRetained: true, cleanupErrors: [] });
+    expect(JSON.stringify(safe)).not.toContain("private/");
+    expect(normalizeCodexCliJobResult(result)).toEqual(result);
+  });
+
+  test("a missing generation returns null without running the engine", async () => {
+    let runs = 0, released = 0;
+    expect(await runCodexCliUpdateJobWork(async () => { runs++; return result; }, {
+      begin: () => { throw new Error("job_generation_changed"); }, finish: () => terminal,
+      read: () => null, release: () => { released++; },
+    })).toBeNull();
+    expect(runs).toBe(0); expect(released).toBe(1);
+  });
+
+  test("missing status is structured JSON and a nonzero exit", async () => {
+    const messages: string[] = [], previous = console.log;
+    try {
+      console.log = value => { messages.push(String(value)); };
+      expect(await handleCodexCliUpdateCommand(["status", randomUUID(), "--json"], { readJob: () => null })).toBe(1);
+      expect(JSON.parse(messages.join("\n"))).toEqual({ error: "job_unavailable" });
+    } finally { console.log = previous; }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a contended real store preserves the engine result until the owned lock is released", async () => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-retry-");
+    const lock = join(configDir, "codex-cli-update-jobs", "admission.lock");
+    let timer: ReturnType<typeof setTimeout> | undefined, runs = 0;
+    try {
+      const admitted = admitCodexCliUpdateJob({ requestId: "lock-retry-00001", planId: result.planId, confirmed: true, configDir });
+      const job = await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => {
+        runs++; mkdirSync(lock, { mode: 0o700 });
+        timer = setTimeout(() => fs.rmdirSync(lock), 50);
+        return result;
+      }, configDir);
+      expect(job).toMatchObject({ status: "applied", outcome: "applied", reason: "verified_target" });
+      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied" });
+      expect(runs).toBe(1);
+    } finally { clearTimeout(timer); rmSync(outer, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a rename followed by fsync failure retries the same completed revision", async () => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-fsync-retry-");
+    let sync: ReturnType<typeof spyOn> | undefined;
+    try {
+      const admitted = admitCodexCliUpdateJob({ requestId: "fsync-retry-0001", planId: result.planId, confirmed: true, configDir });
+      const nativeSync = fs.fsyncSync; let calls = 0;
+      const job = await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => {
+        sync = spyOn(fs, "fsyncSync").mockImplementation(fd => {
+          if (++calls === 3) throw Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
+          return nativeSync(fd);
+        });
+        return result;
+      }, configDir);
+      expect(job).toMatchObject({ status: "applied", reason: "verified_target" });
+      expect(calls).toBeGreaterThan(2);
+      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ outcome: "applied", reason: "verified_target" });
+      expect(JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")).jobs[0].revision).toBe(2);
+    } finally { sync?.mockRestore(); rmSync(outer, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("an accepted unknown result is persisted as readable fixed-code uncertainty", async () => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-unknown-result-");
+    try {
+      const admitted = admitCodexCliUpdateJob({ requestId: "unknown-result-01", planId: result.planId, confirmed: true, configDir });
+      await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
+        async () => ({ ...result, reason: "late_result", cleanupErrors: ["private/path"] as never }), configDir);
+      expect(readCodexCliUpdateJob(admitted.job.jobId, configDir)).toMatchObject({ status: "ambiguous",
+        reason: "job_result_unknown", leaseState: "unknown", cleanupErrors: [] });
+    } finally { rmSync(outer, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a duplicate worker cannot clear the active generation's completion ownership", async () => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-worker-fence-");
+    let release = () => {}, pending: Promise<unknown> | undefined;
+    try {
+      const admitted = admitCodexCliUpdateJob({ requestId: "worker-fence-001", planId: result.planId, confirmed: true, configDir });
+      pending = runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
+        () => new Promise(resolve => { release = () => resolve(result); }), configDir);
+      await Promise.resolve();
+      expect(await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
+        async () => { throw new Error("a duplicate worker must not invoke the engine"); }, configDir))
+        .toMatchObject({ status: "running", ownerState: "active" });
+      release();
+      expect(await pending).toMatchObject({ status: "applied", reason: "verified_target" });
+    } finally { release(); await pending?.catch(() => undefined); rmSync(outer, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("64 retained terminal jobs refuse new admission while preserving the first request dedupe", async () => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-full-store-");
+    try {
+      let first = "";
+      for (let index = 0; index < 64; index++) {
+        const admitted = admitCodexCliUpdateJob({ requestId: `retained-key-${index}`, planId: result.planId, confirmed: true, configDir });
+        if (index === 0) first = admitted.job.jobId;
+        expect(await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation, async () => result, configDir)).toMatchObject({ outcome: "applied" });
+      }
+      expect(() => admitCodexCliUpdateJob({ requestId: "retained-key-65", planId: result.planId, confirmed: true, configDir })).toThrow("store_full");
+      expect(admitCodexCliUpdateJob({ requestId: "retained-key-0", planId: result.planId, confirmed: true, configDir }))
+        .toMatchObject({ kind: "duplicate", job: { jobId: first, outcome: "applied" } });
+    } finally { rmSync(outer, { recursive: true }); }
+  }, 30_000);
+});
+
 describe("Codex CLI update CLI", () => {
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed admission creates one missing config root without making reads write", () => {
     const { outer, parent } = privateStoreParent("ocx-cli-update-missing-parent-");
@@ -190,6 +339,7 @@ describe("Codex CLI update CLI", () => {
           installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
           verificationPid: null, cleanupErrors: [] });
       }), configDir);
+      await Promise.resolve(); // Worker admission now yields before invoking the engine.
       if (!release) throw new Error("fixture job owner did not enter its awaited operation");
       const ledger = join(configDir, "codex-cli-update-jobs", "jobs.json");
       const before = readFileSync(ledger);
@@ -287,6 +437,7 @@ describe("Codex CLI update CLI", () => {
           installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
           verificationPid: null, cleanupErrors: [] });
       }), configDir);
+      await Promise.resolve();
       expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;

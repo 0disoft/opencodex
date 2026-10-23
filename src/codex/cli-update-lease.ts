@@ -3,8 +3,10 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
   realpathSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+export type CodexCliApplyLeaseResult = { readonly kind: "acquired"; release(): boolean }
+  | { readonly kind: "busy" | "prefix_unsupported" | "unavailable" };
 /** Installation-unit mutex. No stale/empty-owner recovery and no token delegation. */
-export function acquireCodexCliApplyLease(prefix: string): { release(): boolean } | null {
+export function acquireCodexCliApplyLease(prefix: string): CodexCliApplyLeaseResult {
   let fd: number | undefined;
   let lockIdentity: { dev: number; ino: number } | undefined;
   let ownerIdentity: { dev: number; ino: number } | undefined;
@@ -39,8 +41,12 @@ export function acquireCodexCliApplyLease(prefix: string): { release(): boolean 
   try {
     const root = lstatSync(prefix);
     if (!root.isDirectory() || root.isSymbolicLink() || realpathSync.native(prefix) !== prefix
-      || (root.mode & 0o022) !== 0 || root.uid !== process.geteuid?.()) return null;
-    mkdirSync(path, { mode: 0o700 });
+      || (root.mode & 0o022) !== 0 || root.uid !== process.geteuid?.()) return { kind: "prefix_unsupported" };
+    try { mkdirSync(path, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return { kind: "busy" };
+      throw error;
+    }
     lockIdentity = lstatSync(path);
     fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     ownerIdentity = fstatSync(fd);
@@ -48,15 +54,15 @@ export function acquireCodexCliApplyLease(prefix: string): { release(): boolean 
     const completed = fd;
     fd = undefined;
     closeSync(completed);
-    return { release };
+    return { kind: "acquired", release };
   } catch {
     if (fd !== undefined) {
       const owned = fd; fd = undefined;
-      try { closeSync(owned); } catch { return null; }
+      try { closeSync(owned); } catch { return { kind: "unavailable" }; }
     }
     // Only a positively identified owner is eligible for cleanup. Empty or
     // suspicious directories intentionally remain busy for operator inspection.
     if (ownerIdentity) release();
-    return null;
+    return { kind: "unavailable" };
   }
 }

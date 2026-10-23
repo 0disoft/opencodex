@@ -271,6 +271,19 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
   expect(existsSync(installTrace)).toBe(false);
 });
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
+  test("a held lease and an unsupported prefix are distinct refusal inputs", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-policy-"))); roots.push(root);
+    chmodSync(root, 0o700);
+    const first = acquireCodexCliApplyLease(root);
+    expect(first.kind).toBe("acquired");
+    if (first.kind !== "acquired") throw new Error("owned private prefix lease unavailable");
+    try { expect(acquireCodexCliApplyLease(root)).toEqual({ kind: "busy" }); }
+    finally { expect(first.release()).toBe(true); }
+    chmodSync(root, 0o770);
+    expect(acquireCodexCliApplyLease(root)).toEqual({ kind: "prefix_unsupported" });
+    expect(existsSync(join(root, ".ocx-codex-cli-apply.lock"))).toBe(false);
+  });
+
   test("published Node launcher -> real resolver/provenance -> plan/apply -> verified new files", () => {
     const f = fixture();
     const plan = cli(f, ["plan"]);
@@ -301,7 +314,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     let jobId: string | undefined;
     let lostSocket: ReturnType<typeof connect> | undefined;
     let finishOldOwner: (() => void) | undefined;
-    let oldOwnerWork: Promise<CodexCliUpdateJobDto> | undefined;
+    let oldOwnerWork: Promise<CodexCliUpdateJobDto | null> | undefined;
     try {
       await waitForManagementServer(base, server.child, server.closed, server.output);
       session = await issueFixtureGuiSession(base);
@@ -627,7 +640,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const result = await first;
     expect(result.outcome).toBe("ambiguous"); expect(result.leaseRetained).toBe(true);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
-    expect(acquireCodexCliApplyLease(f.prefix)).toBeNull();
+    expect(acquireCodexCliApplyLease(f.prefix)).toEqual({ kind: "busy" });
     // The uncertain child is a test double; no real installer survives teardown.
   }, 120_000);
   test("original file mode damage is ambiguous, not not_applied", async () => {
@@ -672,8 +685,8 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const f = fixture(); const id = await approved(f);
     const result = await applyCodexCliUpdate(id, depsFor(f, {
       acquireLease: prefix => {
-        const owned = acquireCodexCliApplyLease(prefix); if (!owned) return null;
-        return { release: () => { owned.release(); throw new Error("injected cleanup failure"); } };
+        const owned = acquireCodexCliApplyLease(prefix); if (owned.kind !== "acquired") return owned;
+        return { kind: "acquired", release: () => { owned.release(); throw new Error("injected cleanup failure"); } };
       },
       install: async () => ({ terminal: true, exitCode: 0 }),
     }));
