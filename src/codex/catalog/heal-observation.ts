@@ -30,11 +30,13 @@ function unchanged(before: BigIntStats, after: BigIntStats): boolean {
 /** @internal Path observation seam; production callers supply the fixed read budget below. */
 export function inspectHealPath(path: string, read: PathRead): PathObservation {
   let hardlink = false;
+  let observedSymlink = false;
   const links: LinkObservation[] = [];
   try {
     for (let count = 0; count < CATALOG_HEAL_MAX_LINKS; count += 1) {
       const stat = read(() => lstatSync(path, { bigint: true }));
       if (stat.isSymbolicLink()) {
+        observedSymlink = true;
         const parent = dirname(path), parentStat = read(() => statSync(parent, { bigint: true })), value = read(() => readlinkSync(path));
         links.push({ path, stat, value, parent, parentStat });
         path = resolve(read(() => realpathSync.native(parent)), value);
@@ -49,8 +51,8 @@ export function inspectHealPath(path: string, read: PathRead): PathObservation {
     }
     // Hop exhaustion requires identity evidence; it must never fall back to lexical comparison.
     return { kind: "unavailable", hardlink: true };
-  } catch { /* Failed identity observations cannot establish a hardlink entry. */ }
-  return { kind: "unavailable", hardlink };
+  } catch { /* An observed link cannot fall back to lexical identity after a failed lookup. */ }
+  return { kind: "unavailable", hardlink: hardlink || observedSymlink };
 }
 
 function revalidateHealPath(seen: Exclude<PathObservation, { kind: "unavailable" }>, read: PathRead): boolean {

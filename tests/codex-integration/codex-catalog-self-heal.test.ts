@@ -722,21 +722,79 @@ describe("catalog path comparison", () => {
     expect(observed).toEqual({ kind: "unavailable", hardlink: true });
   });
 
-  test("unavailable paths retain lexical equality while cyclic lookup exhaustion stays unknown", () => {
+  test.each([
+    [1, "initial leaf lstat", false],
+    [2, "symlink parent stat", true],
+    [3, "symlink readlink", true],
+    [4, "symlink parent realpath", true],
+    [5, "symlink target lstat", true],
+    [6, "symlink target realpath", true],
+  ] as const)("path failure at %s (%s) preserves observed-symlink uncertainty", (failAt, _stage, uncertain) => {
+    const root = temporaryRoot(), target = join(root, "target.json"), alias = join(root, "alias.json");
+    writeFileSync(target, JSON.stringify(full));
+    symlinkSync(target, alias, "file");
+    let reads = 0;
+    const observed = inspectHealPath(alias, read => {
+      if (++reads === failAt) throw new Error("Fixture filesystem observation failed");
+      return read();
+    });
+    expect(reads).toBe(failAt);
+    expect(observed).toEqual({ kind: "unavailable", hardlink: uncertain });
+  });
+
+  test("initial unavailable leaves retain lexical equality while observed dangling links stay unknown", () => {
     const root = temporaryRoot(), missing = join(root, "missing.json");
     const dangling = join(root, "dangling.json"), cycle = join(root, "cycle.json");
     symlinkSync("missing.json", dangling, "file");
     symlinkSync("cycle.json", cycle, "file");
-    for (const path of [missing, dangling]) {
-      expect(sameCatalogHealPath(path, `${root}/./${path.slice(root.length + 1)}`)).toBe(true);
-      expect(sameCatalogHealPath(path, path)).toBe(true);
-    }
+    expect(compareCatalogHealPaths(missing, `${root}/./missing.json`)).toBe("same");
+    expect(compareCatalogHealPaths(missing, join(root, "other-missing.json"))).toBe("different");
+    expect(inspectHealPath(missing, read => read())).toEqual({ kind: "unavailable", hardlink: false });
+    expect(compareCatalogHealPaths(dangling, dangling)).toBe("unknown");
+    expect(compareCatalogHealPaths(dangling, missing)).toBe("unknown");
+    expect(compareCatalogHealPaths(missing, dangling)).toBe("unknown");
     expect(sameCatalogHealPath(dangling, missing)).toBe(false);
     expect(sameCatalogHealPath(missing, dangling)).toBe(false);
     expect(compareCatalogHealPaths(cycle, cycle)).toBe("unknown");
     expect(sameCatalogHealPath(cycle, cycle)).toBe(false);
   });
 });
+
+for (const release of ["restore", "native-release"] as const) {
+  test(`observed-symlink lookup failure ${release} fences the known target while selection is unavailable`, async () => {
+    const root = temporaryRoot(), target = join(root, "target.json"), alias = join(root, "alias.json");
+    writeFileSync(target, JSON.stringify(full));
+    linkSync(target, join(root, "sibling.json"));
+    symlinkSync(target, alias, "file");
+    const known = join(root, "missing-known.json"), h = harness({ path: known });
+    const entered = deferred(), finish = deferred();
+    let committed = false;
+    h.setHeal(async (_config, lifecycle) => {
+      entered.resolve(); await finish.promise;
+      committed = lifecycle.beforeCommit(); return { committed };
+    });
+    h.rewrite(empty);
+    const tick = h.handle.tickForTests();
+    await entered.promise;
+    const originalReadlink = fs.readlinkSync;
+    const readlink = spyOn(fs, "readlinkSync").mockImplementation((path, options) => {
+      if (path === alias) throw new Error("Fixture readlink observation failed");
+      return originalReadlink(path, options);
+    });
+    try {
+      await withCatalogPlatform("darwin", async () => {
+        h.setPath(null);
+        const comparison = compareCatalogHealPaths(alias, known);
+        h.publish(release === "restore" ? { kind: "published", path: alias, intent: "restore" }
+          : { kind: "native-released", path: alias });
+        h.setPath(known);
+        finish.resolve(); await tick;
+        expect(committed).toBe(false);
+        expect(comparison).toBe("unknown");
+      });
+    } finally { finish.resolve(); await tick; readlink.mockRestore(); }
+  });
+}
 
 test("unknown Mac target identity defers observation reuse and healing", async () => {
   const { path } = aliasPaths("lexical"), alias = join(dirname(path), "CATALOG.JSON");
