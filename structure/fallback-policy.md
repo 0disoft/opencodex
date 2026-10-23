@@ -49,7 +49,8 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 | Subagent model fallback, `src/codex/subagent-model-fallback.ts` | `applySubagentModelFallback`, before the spawn's model is rewritten; the caller in `src/server/responses/request-prepare.ts` returns the refusal | — | `unavailable`, 503 |
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |
 
-A refused hop never contacts the fallback target and leaves the request body untouched.
+A refused hop never contacts its refused destination. Hard-lock pre-admission refuses before
+rewriting the body; its first-profile-selection check can refuse after that rewrite.
 
 The combo and routing-profile sites classify a hop by resolved destinations: both ends pass through
 `routeConcreteModel`, so provider aliases and `blockedModelRedirects` are applied, and the end a hop
@@ -62,6 +63,13 @@ combo, account namespace or concrete target through `previewRouteModel`, and a r
 its declared candidates (any candidate on another provider makes a provider hop) without running the
 evaluator, which would open `routing-history.sqlite` under `OPENCODEX_HOME`. The profile's own
 dispatch still evaluates it.
+
+For a hard-lock profile rewrite, `src/server/responses/request-prepare.ts` checks the actual first
+ranked destination against the original OpenAI model with `trigger: hard_lock`. A declared provider
+hop does not admit a same-provider model hop when model fallback is off. The guard records an allowed
+selection when it is accepted; later authentication or preparation can still refuse it.
+`tests/codex-integration/main-account-hard-lock-profile-dispatch.test.ts` covers refusal and allowed
+dispatch with a synthetic caller-owned credential and a fetch stub.
 
 ## Refusal contract
 
@@ -88,9 +96,9 @@ opt-in per device"); OpenCodex never acts on it and keeps answering `home_unreac
 ## State and surfaces
 
 Every guarded hop, taken or refused, is recorded in a 20-entry in-memory ring (`recentFallbackEvents`).
-A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` after the
-dispatch is admitted (the combo send-budget reservation passed, a profile candidate was not locally
-skipped), so the ring never names a target that was not contacted. Each event carries
+A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` at its
+admission boundary. A `taken` event records admission, not upstream contact or billing; later
+preparation or authentication can still refuse. Each event carries
 time, site, route, kind, from, to, trigger, outcome, deciding scope and the device id. No body, key,
 account id, label or email. `src/routing/fallback-state.ts` builds the `ocx.fallback/1` view and applies
 the one scoped write.
