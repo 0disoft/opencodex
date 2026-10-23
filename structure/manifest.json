@@ -182,6 +182,7 @@
         "src/codex/cli-update-apply.ts",
         "src/codex/cli-update-job.ts",
         "src/codex/cli-update-job-execution.ts",
+        "src/server/management/codex-cli-update-routes.ts",
         "src/codex/cli-update-inspection-context.ts",
         "bin/ocx.mjs",
         "src/codex/cli-update-artifacts.ts",
