@@ -50,7 +50,7 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |
 
 A refused hop never contacts its refused destination. Hard-lock pre-admission refuses before
-rewriting the body; its first-profile-selection check can refuse after that rewrite.
+rewriting the body; its first combo dispatch or profile selection can refuse after that rewrite.
 
 The combo and routing-profile sites classify a hop by resolved destinations: both ends pass through
 `routeConcreteModel`, so provider aliases and `blockedModelRedirects` are applied, and the end a hop
@@ -63,6 +63,12 @@ combo, account namespace or concrete target through `previewRouteModel`, and a r
 its declared candidates (any candidate on another provider makes a provider hop) without running the
 evaluator, which would open `routing-history.sqlite` under `OPENCODEX_HOME`. The profile's own
 dispatch still evaluates it.
+
+That pre-admission destination is not necessarily the first dispatch: a random combo picks again.
+A hard-lock rewrite therefore checks the actual first combo destination in `core-combo.ts` against
+the locked OpenAI source, with `trigger: hard_lock`. A prior provider-hop admission cannot authorize
+a same-provider model hop when model fallback is off. The combo records an allowed first hop after
+its send-budget reservation.
 
 For a hard-lock profile rewrite, `src/server/responses/request-prepare.ts` checks the actual first
 ranked destination against the original OpenAI model with `trigger: hard_lock`. A declared provider
@@ -97,8 +103,9 @@ opt-in per device"); OpenCodex never acts on it and keeps answering `home_unreac
 
 Every guarded hop, taken or refused, is recorded in a 20-entry in-memory ring (`recentFallbackEvents`).
 A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` at its
-admission boundary. A `taken` event records admission, not upstream contact or billing; later
-preparation or authentication can still refuse. Each event carries
+admission boundary (body rewrite, combo send-budget reservation, or accepted profile selection).
+`taken` records that guard admission, not an upstream contact or a billed send; later preparation,
+authentication or dispatch may still refuse. Each event carries
 time, site, route, kind, from, to, trigger, outcome, deciding scope and the device id. No body, key,
 account id, label or email. `src/routing/fallback-state.ts` builds the `ocx.fallback/1` view and applies
 the one scoped write.
