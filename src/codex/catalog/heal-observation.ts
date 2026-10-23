@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync, statSync, type BigIntStats, type Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { readCodexHomeJournal } from "../codex-home-owner";
 import { samePath, type RawCatalog } from "./parsing";
@@ -10,25 +10,93 @@ export interface CatalogObservation {
   readonly catalog: RawCatalog | null;
 }
 
-function canonicalCatalogHealPath(path: string): string {
-  for (let links = 0; links < 40; links += 1) {
-    const entry = lstatSync(path);
-    if (!entry.isFile() && !entry.isSymbolicLink()) return realpathSync.native(path);
-    // Preserve native leaf aliases (Windows short names, case-insensitive volumes).
-    if (entry.isFile() && (process.platform !== "darwin" || entry.nlink <= 1)) return realpathSync.native(path);
-    const parent = realpathSync.native(dirname(path));
-    // macOS Bun's file realpath can name another hardlink; preserve this entry.
-    // Case/normalization aliases of a multiply linked macOS leaf remain distinct here.
-    if (entry.isFile()) return join(parent, basename(path));
-    path = resolve(parent, readlinkSync(path));
-  }
-  throw new Error("Catalog path symlink limit reached");
+export type CatalogHealPathComparison = "same" | "different" | "unknown";
+export const CATALOG_HEAL_MAX_LINKS = 40;
+// Small catalog-path comparisons need only a handful of reads; unusual paths defer.
+export const CATALOG_HEAL_MAX_PATH_READS = 64;
+type PathRead = <T>(read: () => T) => T;
+type LinkObservation = { path: string; stat: BigIntStats; value: string; parent: string; parentStat: BigIntStats };
+type PathObservation = {
+  kind: "native" | "hardlink"; path: string; stat: BigIntStats; links: LinkObservation[];
+  canonical: string; parent?: string; parentStat?: BigIntStats;
+} | { kind: "unavailable"; hardlink: boolean };
+
+function unchanged(before: BigIntStats, after: BigIntStats): boolean {
+  return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode
+    && before.nlink === after.nlink && before.size === after.size
+    && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
 }
 
-/** Canonical entry equality when available; unavailable paths retain lexical equality. */
+function inspectHealPath(path: string, read: PathRead): PathObservation {
+  let hardlink = false;
+  const links: LinkObservation[] = [];
+  try {
+    for (let count = 0; count < CATALOG_HEAL_MAX_LINKS; count += 1) {
+      const stat = read(() => lstatSync(path, { bigint: true }));
+      if (stat.isSymbolicLink()) {
+        const parent = dirname(path), parentStat = read(() => statSync(parent, { bigint: true })), value = read(() => readlinkSync(path));
+        links.push({ path, stat, value, parent, parentStat });
+        path = resolve(read(() => realpathSync.native(parent)), value);
+        continue;
+      }
+      // Keep native leaf aliases outside the macOS multi-link FD-name bug.
+      hardlink = process.platform === "darwin" && stat.isFile() && stat.nlink > 1n;
+      if (!hardlink) return { kind: "native", path, stat, links, canonical: read(() => realpathSync.native(path)) };
+      const parent = read(() => realpathSync.native(dirname(path))), parentStat = read(() => statSync(parent, { bigint: true }));
+      if (!parentStat.isDirectory() || !unchanged(parentStat, read(() => statSync(dirname(path), { bigint: true })))) throw new Error("Changed parent");
+      return { kind: "hardlink", path, stat, links, parent, parentStat, canonical: join(parent, basename(path)) };
+    }
+  } catch { /* Failed identity observations cannot establish a hardlink entry. */ }
+  return { kind: "unavailable", hardlink };
+}
+
+function revalidateHealPath(seen: Exclude<PathObservation, { kind: "unavailable" }>, read: PathRead): boolean {
+  if (!unchanged(seen.stat, read(() => lstatSync(seen.path, { bigint: true })))) return false;
+  for (const link of seen.links) {
+    if (!unchanged(link.stat, read(() => lstatSync(link.path, { bigint: true }))) || read(() => readlinkSync(link.path)) !== link.value
+      || !unchanged(link.parentStat, read(() => statSync(link.parent, { bigint: true })))) return false;
+  }
+  return seen.kind !== "hardlink" || (unchanged(seen.parentStat!, read(() => statSync(seen.parent!, { bigint: true })))
+    && unchanged(seen.parentStat!, read(() => statSync(dirname(seen.path), { bigint: true }))));
+}
+
+/** Entry uncertainty is distinct from a proven different path, especially for releases. */
+export function compareCatalogHealPaths(left: string, right: string): CatalogHealPathComparison {
+  let reads = 0, exhausted = false;
+  const read: PathRead = fn => {
+    if (reads >= CATALOG_HEAL_MAX_PATH_READS) { exhausted = true; throw new Error("Catalog path read limit reached"); }
+    reads += 1;
+    return fn();
+  };
+  const a = inspectHealPath(left, read), b = inspectHealPath(right, read);
+  if (exhausted) return "unknown";
+  const needsEntry = a.kind === "hardlink" || b.kind === "hardlink"
+    || (a.kind === "unavailable" && a.hardlink) || (b.kind === "unavailable" && b.hardlink);
+  if (!needsEntry) {
+    if (a.kind === "unavailable" || b.kind === "unavailable") return samePath(left, right) ? "same" : "different";
+    const result = samePath(a.canonical, b.canonical) ? "same" : "different";
+    // A new hardlink during native resolution must not evade the macOS branch.
+    try {
+      return process.platform !== "darwin" || (revalidateHealPath(a, read) && revalidateHealPath(b, read)) ? result : "unknown";
+    } catch { return "unknown"; }
+  }
+  if (a.kind === "unavailable" || b.kind === "unavailable") return "unknown";
+  try {
+    let result: CatalogHealPathComparison = "unknown";
+    if (a.stat.dev !== b.stat.dev || a.stat.ino !== b.stat.ino) result = "different";
+    else if (a.kind === "hardlink" && b.kind === "hardlink") {
+      if (a.parentStat!.dev !== b.parentStat!.dev || a.parentStat!.ino !== b.parentStat!.ino) result = "different";
+      else if (basename(a.path) === basename(b.path)) result = "same";
+      // Bun 1.4.3 opendir/Glob eagerly enumerate the whole directory. Without a
+      // bounded entry-name primitive, aliases and sibling hardlinks stay unknown.
+    }
+    return revalidateHealPath(a, read) && revalidateHealPath(b, read) ? result : "unknown";
+  } catch { return "unknown"; }
+}
+
+/** Admission-style convenience; release consumers must retain the unknown result. */
 export function sameCatalogHealPath(left: string, right: string): boolean {
-  try { return samePath(canonicalCatalogHealPath(left), canonicalCatalogHealPath(right)); }
-  catch { return samePath(left, right); }
+  return compareCatalogHealPaths(left, right) === "same";
 }
 
 /** Resolve authority without reading catalog bytes or cleaning journal evidence. */

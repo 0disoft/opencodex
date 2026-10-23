@@ -8,7 +8,7 @@ import {
   CATALOG_HEAL_TICK_MS, CATALOG_HEAL_WINDOW_MS, startCodexCatalogSelfHeal,
   type CatalogSelfHealDeps, type CatalogSelfHealGates, type CatalogSelfHealHandle,
 } from "../../src/codex/catalog-self-heal";
-import { CATALOG_HEAL_MAX_BYTES, observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
+import { CATALOG_HEAL_MAX_BYTES, CATALOG_HEAL_MAX_PATH_READS, compareCatalogHealPaths, observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
 import type { CatalogPublicationEvent } from "../../src/codex/catalog/publication-observer";
 import type { RawCatalog } from "../../src/codex/catalog/parsing";
 import type { OcxConfig } from "../../src/types";
@@ -533,6 +533,90 @@ async function withNativeFileAlias(path: string, alias: string, platform: "win32
 }
 
 describe("catalog path comparison", () => {
+  test.each(["CAFÉ-CATALOG.JSON", "cafe\u0301-catalog.json"])("Mac hardlink alias %s stays unknown without entry-name evidence", async leaf => {
+    const root = temporaryRoot(), path = join(root, "café-catalog.json"), alias = join(root, leaf);
+    writeFileSync(path, JSON.stringify(full));
+    const sibling = join(temporaryRoot(), "catalog.json");
+    linkSync(path, sibling);
+    await withNativeFileAlias(path, alias, "darwin", () => {
+      expect(compareCatalogHealPaths(path, alias)).toBe("unknown");
+      expect(compareCatalogHealPaths(alias, path)).toBe("unknown");
+      expect(compareCatalogHealPaths(path, path)).toBe("same");
+      expect(compareCatalogHealPaths(path, sibling)).toBe("different");
+    });
+  });
+
+  test("Mac same-parent hardlink names are not guessed distinct or enumerated eagerly", async () => {
+    const { path } = aliasPaths("lexical"), sibling = join(dirname(path), "sibling.json");
+    linkSync(path, sibling);
+    const readdir = spyOn(fs, "readdirSync").mockImplementation(() => { throw new Error("Unbounded listing"); });
+    const opendir = spyOn(fs, "opendirSync").mockImplementation(() => { throw new Error("Eager Bun opendir"); });
+    try {
+      await withCatalogPlatform("darwin", () => {
+        expect(compareCatalogHealPaths(path, sibling)).toBe("unknown");
+        expect(compareCatalogHealPaths(sibling, path)).toBe("unknown");
+        expect(readdir).not.toHaveBeenCalled();
+        expect(opendir).not.toHaveBeenCalled();
+      });
+    } finally { readdir.mockRestore(); opendir.mockRestore(); }
+  });
+
+  test.each(["input", "parent"] as const)("Mac %s identity drift prevents a same result", async kind => {
+    const { path } = aliasPaths("lexical");
+    linkSync(path, join(temporaryRoot(), "catalog.json"));
+    const lstat = fs.lstatSync, stat = fs.statSync;
+    let reads = 0;
+    const changed = (value: ReturnType<typeof lstatSync>) => Object.assign(Object.create(Object.getPrototypeOf(value)), value,
+      { ctimeNs: typeof value.ctimeNs === "bigint" ? value.ctimeNs + 1n : value.ctimeNs + 1 });
+    const input = spyOn(fs, "lstatSync").mockImplementation((value, options) => {
+      const result = lstat(value, options);
+      return kind === "input" && value === path && ++reads >= 3 ? changed(result) : result;
+    });
+    const parent = spyOn(fs, "statSync").mockImplementation((value, options) => {
+      const result = stat(value, options);
+      return kind === "parent" && ++reads >= 5 ? changed(result) : result;
+    });
+    try { await withCatalogPlatform("darwin", () => { expect(compareCatalogHealPaths(path, path)).toBe("unknown"); }); }
+    finally { input.mockRestore(); parent.mockRestore(); }
+  });
+
+  test("a new hardlink during native resolution cannot evade Mac identity checks", async () => {
+    const { path } = aliasPaths("lexical"), sibling = join(temporaryRoot(), "catalog.json");
+    const native = realpathSync.native;
+    let calls = 0;
+    const nativePath = spyOn(realpathSync, "native").mockImplementation(input => {
+      const result = native(input);
+      if (input === path && ++calls === 2) linkSync(path, sibling);
+      return result;
+    });
+    try { await withCatalogPlatform("darwin", () => { expect(compareCatalogHealPaths(path, path)).toBe("unknown"); }); }
+    finally { nativePath.mockRestore(); }
+  });
+
+  test("path lookup stops at its I/O budget and reports unknown", async () => {
+    const { path } = aliasPaths("lexical");
+    linkSync(path, join(temporaryRoot(), "catalog.json"));
+    let alias = path;
+    for (let i = 0; i < 20; i += 1) {
+      const next = join(dirname(path), `link-${i}.json`);
+      symlinkSync(alias, next, "file"); alias = next;
+    }
+    const lstat = fs.lstatSync, stat = fs.statSync, readlink = fs.readlinkSync, native = realpathSync.native;
+    let reads = 0;
+    const spies = [
+      spyOn(fs, "lstatSync").mockImplementation((...args) => { reads++; return lstat(...args); }),
+      spyOn(fs, "statSync").mockImplementation((...args) => { reads++; return stat(...args); }),
+      spyOn(fs, "readlinkSync").mockImplementation((...args) => { reads++; return readlink(...args); }),
+      spyOn(realpathSync, "native").mockImplementation((...args) => { reads++; return native(...args); }),
+    ];
+    try {
+      await withCatalogPlatform("darwin", () => {
+        expect(compareCatalogHealPaths(alias, path)).toBe("unknown");
+        expect(reads).toBeLessThanOrEqual(CATALOG_HEAL_MAX_PATH_READS);
+      });
+    } finally { for (const spy of spies) spy.mockRestore(); }
+  });
+
   test.each(["win32", "darwin"] as const)("%s single-link native filename aliases remain equivalent", async platform => {
     const { path } = aliasPaths("lexical");
     const alias = join(dirname(path), platform === "win32" ? "CATALO~9.JSO" : "CATALOG.JSON");
@@ -625,17 +709,160 @@ describe("catalog path comparison", () => {
     expect(sameCatalogHealPath(sibling, leaf)).toBe(false);
   });
 
-  test("unavailable paths retain lexical equality, including dangling and cyclic links", () => {
+  test("unavailable paths retain lexical equality while cyclic lookup exhaustion stays unknown", () => {
     const root = temporaryRoot(), missing = join(root, "missing.json");
     const dangling = join(root, "dangling.json"), cycle = join(root, "cycle.json");
     symlinkSync("missing.json", dangling, "file");
     symlinkSync("cycle.json", cycle, "file");
-    for (const path of [missing, dangling, cycle]) {
+    for (const path of [missing, dangling]) {
       expect(sameCatalogHealPath(path, `${root}/./${path.slice(root.length + 1)}`)).toBe(true);
       expect(sameCatalogHealPath(path, path)).toBe(true);
     }
     expect(sameCatalogHealPath(dangling, missing)).toBe(false);
     expect(sameCatalogHealPath(missing, dangling)).toBe(false);
+    expect(compareCatalogHealPaths(cycle, cycle)).toBe("unknown");
+    expect(sameCatalogHealPath(cycle, cycle)).toBe(false);
+  });
+});
+
+test("unknown Mac target identity defers observation reuse and healing", async () => {
+  const { path } = aliasPaths("lexical"), alias = join(dirname(path), "CATALOG.JSON");
+  linkSync(path, join(temporaryRoot(), "catalog.json"));
+  const h = harness({ path });
+  h.rewrite(empty);
+  await withNativeFileAlias(path, alias, "darwin", async () => {
+    h.setPath(alias);
+    await h.handle.tickForTests();
+    expect(h.reads()).toBe(1);
+    expect(h.converges).toHaveLength(0);
+  });
+});
+
+test("unknown Mac precommit identity refuses a suspended heal", async () => {
+  const { path } = aliasPaths("lexical"), alias = join(dirname(path), "CATALOG.JSON");
+  linkSync(path, join(temporaryRoot(), "catalog.json"));
+  const h = harness({ path });
+  const entered = deferred(), finish = deferred();
+  let committed = true;
+  h.setHeal(async (_config, lifecycle) => {
+    entered.resolve(); await finish.promise;
+    committed = lifecycle.beforeCommit(); return { committed };
+  });
+  h.rewrite(empty);
+  const tick = h.handle.tickForTests(); await entered.promise;
+  await withNativeFileAlias(path, alias, "darwin", async () => {
+    try {
+      h.setPath(alias); finish.resolve(); await tick;
+      expect(committed).toBe(false);
+      expect(h.handle.lastHeal()).toBeNull();
+    } finally { finish.resolve(); await tick; }
+  });
+});
+
+test("a precommit parent race refuses a suspended heal", async () => {
+  const { path } = aliasPaths("lexical");
+  linkSync(path, join(temporaryRoot(), "catalog.json"));
+  const h = harness({ path });
+  const entered = deferred(), finish = deferred();
+  let committed = true;
+  h.setHeal(async (_config, lifecycle) => {
+    entered.resolve(); await finish.promise;
+    committed = lifecycle.beforeCommit(); return { committed };
+  });
+  h.rewrite(empty);
+  const tick = h.handle.tickForTests(); await entered.promise;
+  const stat = fs.statSync;
+  let reads = 0;
+  const parent = spyOn(fs, "statSync").mockImplementation((value, options) => {
+    const result = stat(value, options);
+    return ++reads >= 5 ? Object.assign(Object.create(Object.getPrototypeOf(result)), result, { ctimeNs: result.ctimeNs + 1n }) : result;
+  });
+  try {
+    await withCatalogPlatform("darwin", async () => {
+      finish.resolve(); await tick;
+      expect(committed).toBe(false);
+    });
+  } finally { finish.resolve(); await tick; parent.mockRestore(); }
+});
+
+test("a release whose lookup exceeds the I/O budget fences a suspended heal", async () => {
+  const { path } = aliasPaths("lexical");
+  let alias = path;
+  for (let i = 0; i < 20; i += 1) {
+    const next = join(dirname(path), `release-${i}.json`);
+    symlinkSync(alias, next, "file"); alias = next;
+  }
+  const h = harness({ path });
+  const entered = deferred(), finish = deferred();
+  let committed = true;
+  h.setHeal(async (_config, lifecycle) => {
+    entered.resolve(); await finish.promise;
+    committed = lifecycle.beforeCommit(); return { committed };
+  });
+  h.rewrite(empty);
+  const tick = h.handle.tickForTests(); await entered.promise;
+  try {
+    expect(compareCatalogHealPaths(alias, path)).toBe("unknown");
+    h.publish({ kind: "native-released", path: alias });
+    finish.resolve(); await tick;
+    expect(committed).toBe(false);
+  } finally { finish.resolve(); await tick; }
+});
+
+for (const release of ["restore", "native-release"] as const) {
+  test(`unknown Mac ${release} fences; unknown owner publication cannot rearm`, async () => {
+    const { path } = aliasPaths("lexical"), alias = join(dirname(path), "CATALOG.JSON");
+    linkSync(path, join(temporaryRoot(), "catalog.json"));
+    const h = harness({ path });
+    const entered = deferred(), finish = deferred();
+    let committed = true;
+    h.setHeal(async (_config, lifecycle) => {
+      entered.resolve(); await finish.promise;
+      committed = lifecycle.beforeCommit(); return { committed };
+    });
+    h.rewrite(empty);
+    const tick = h.handle.tickForTests(); await entered.promise;
+    await withNativeFileAlias(path, alias, "darwin", async () => {
+      try {
+        h.setPath(null);
+        h.publish(release === "restore" ? { kind: "published", path: alias, intent: "restore" }
+          : { kind: "native-released", path: alias });
+        h.setPath(path); finish.resolve(); await tick;
+        expect(committed).toBe(false);
+        const reads = h.reads();
+        h.publish({ kind: "published", path: alias, intent: "refresh" });
+        expect(h.reads()).toBe(reads);
+        h.advance(CATALOG_HEAL_WINDOW_MS); await h.handle.tickForTests();
+        expect(h.converges).toHaveLength(1);
+        h.rewrite(full); h.publish({ kind: "published", path, intent: "refresh" });
+        h.rewrite(empty); await h.handle.tickForTests();
+        expect(h.converges).toHaveLength(2);
+        expect(committed).toBe(true);
+      } finally { finish.resolve(); await tick; }
+    });
+  });
+}
+
+test("unknown Mac owner publication invalidates pending work without accepting a baseline", async () => {
+  const { path } = aliasPaths("lexical"), alias = join(dirname(path), "CATALOG.JSON");
+  linkSync(path, join(temporaryRoot(), "catalog.json"));
+  const h = harness({ path });
+  const entered = deferred(), finish = deferred();
+  let committed = true;
+  h.setHeal(async (_config, lifecycle) => {
+    entered.resolve(); await finish.promise;
+    committed = lifecycle.beforeCommit(); return { committed };
+  });
+  h.rewrite(empty);
+  const tick = h.handle.tickForTests(); await entered.promise;
+  await withNativeFileAlias(path, alias, "darwin", async () => {
+    try {
+      const reads = h.reads();
+      h.publish({ kind: "published", path: alias, intent: "refresh" });
+      expect(h.reads()).toBe(reads);
+      finish.resolve(); await tick;
+      expect(committed).toBe(false);
+    } finally { finish.resolve(); await tick; }
   });
 });
 
