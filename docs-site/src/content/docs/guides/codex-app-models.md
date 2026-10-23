@@ -278,8 +278,9 @@ preserved, so Luna has `max` but no `ultra`.
 On the wire, routed adapters map or clamp unsupported tiers. For older native models whose real
 ladder stops at `xhigh`, `nativeEffortClamp` maps a direct `max` or an `ultra` selection to `xhigh`
 (for example, GPT-5.5). Sol, Terra, and Luna have a real `max` rung.
-The ChatGPT backend itself accepts `none` through `max`, so `ultra` is always sent as `max` on
-native models, including Astra and GPT-6.1 Sol whose ladders list `ultra`. This applies to
+The ChatGPT backend itself accepts `none` through `max`, so `ultra` is never forwarded as-is:
+native models with a real `max` rung receive `max`, including Astra and GPT-6.1 Sol whose ladders
+list `ultra`, while older models such as GPT-5.5 receive `xhigh` as above. This applies to
 `/v1/responses` and `/v1/chat/completions` alike.
 
 Catalog advertisement of the two top tiers is unconditional: `ocx sync` no longer removes `max` or
