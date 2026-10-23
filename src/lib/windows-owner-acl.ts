@@ -302,9 +302,8 @@ export function verifyWindowsPrivateEntries(entries: readonly WindowsPrivateEntr
  * post-kill reap wait (`waitForSubprocessExit(..., 0)`: see the helper contract below):
  * on timeout it requests termination and returns `timedOut` without waiting for the
  * kernel to release the child's handles. The late exit/result is ignored and stdout is
- * not read. Although this lookup holds no path its caller must release for its own
- * writes, a stalled Get-Acl child may transiently touch owner, lock or ledger files and
- * keep them busy (for example, causing a markDelete to fail) until the OS reaps it.
+ * not read. A stalled Get-Acl child may transiently touch owner, lock or ledger files
+ * and keep them busy (for example, causing a markDelete to fail) until the OS reaps it.
  * This bounded availability risk avoids an unbounded caller stall; verification fails
  * closed.
  */
