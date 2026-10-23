@@ -21,7 +21,7 @@ CLI installation inspection reason codes, including Windows deferral, follow the
 
 ## Plaintext V2 agent messages
 
-`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting.
+`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting. Catalog pins affect new sessions, but the compiler predicate is evaluated for every eligible request, including later requests from existing V2 sessions. Disabling this setting does not delete retained history, provider, response-cache or diagnostic copies.
 A default collaboration catalog is required: top-level `tools`, or, when that field is absent,
 the first input item's developer `additional_tools` catalog used by Responses Lite. Explicit
 top-level catalogs take precedence; user-role and later historical catalogs do not opt in.

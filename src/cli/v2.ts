@@ -109,7 +109,7 @@ export function v2StatusLine(enabled: boolean): string {
 export function multiAgentModeLine(mode: string, keepNativeChatGptOnV1 = false): string {
   switch (mode) {
     case "v1": return "multi_agent_mode: v1 — ALL models forced to v1 surface (upstream pins overridden)";
-    case "v2-plaintext": return "multi_agent_mode: v2-plaintext — new sessions select V2; canonical ChatGPT task messages use experimental plaintext over HTTPS; global override stays OFF";
+    case "v2-plaintext": return "multi_agent_mode: v2-plaintext — new sessions select V2; subsequent eligible canonical ChatGPT requests, including existing V2 sessions, use experimental plaintext over HTTPS; global override stays OFF";
     case "v2": return keepNativeChatGptOnV1
       ? "multi_agent_mode: v2 hybrid — ChatGPT-native models use v1; routed models use v2"
       : "multi_agent_mode: v2 — ALL models forced to v2 surface (upstream pins overridden)";
@@ -202,7 +202,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     let unchangedKeep: boolean | undefined;
     if (parsed.verb === "mode") {
       if (parsed.value === "v2-plaintext" && config.multiAgentMode !== "v2-plaintext" && !parsed.plaintextAcknowledged) {
-        return emit(false, ["Entering v2-plaintext requires --acknowledge-plaintext-agent-messages. Task text can remain in Codex history, provider requests and local debug state; TLS and authentication stay enabled."]);
+        return emit(false, ["Entering v2-plaintext requires --acknowledge-plaintext-agent-messages. Enabled compilation also affects subsequent eligible canonical ChatGPT requests from existing V2 sessions. Task text can remain in Codex history, provider requests and local response/debug state; TLS and authentication stay enabled. Existing ciphertext is not decrypted, and disabling does not delete retained copies."]);
       }
       changed = (config.multiAgentMode ?? "default") !== parsed.value;
       if (parsed.value !== "default") {
@@ -215,7 +215,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       else config.multiAgentMode = parsed.value;
       saveConfig(config);
       successLines = [multiAgentModeLine(parsed.value, config.keepNativeChatGptOnV1 === true),
-        "Applies to NEW sessions; running sessions keep their pinned multi-agent version."];
+        "Catalog pins apply to NEW sessions; running sessions keep their pinned multi-agent version. Plaintext compilation follows the current setting for subsequent eligible canonical ChatGPT requests, including existing V2 sessions. Existing ciphertext is not decrypted, stored history is not rewritten, and disabling does not delete retained copies."];
     } else if (parsed.verb === "keep-native-v1") {
       unchangedKeep = (config.keepNativeChatGptOnV1 === true) === parsed.value;
       changed = !unchangedKeep;

@@ -9,7 +9,7 @@ export type V2ParsedCommand = V2Controls & (
   | { verb: "mode-hint"; value: string | null }
 );
 
-export const V2_USAGE = "Usage: ocx v2 [status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>] [--live] [--json]\nEntering v2-plaintext requires --acknowledge-plaintext-agent-messages: task text may remain in history, provider requests and local debug state.\nFor literal reserved hint text: ocx v2 mode-hint [--live] [--json] -- <text>\nOnly live mode accepts --acknowledge-surface-advisory.";
+export const V2_USAGE = "Usage: ocx v2 [status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>] [--live] [--json]\nEntering v2-plaintext requires --acknowledge-plaintext-agent-messages: task text may remain in history, provider requests and local response/debug state. Catalog pins affect new sessions; enabled compilation also affects subsequent eligible canonical ChatGPT requests from existing V2 sessions. Existing ciphertext is not decrypted, stored history is not rewritten, and disabling does not delete retained copies.\nFor literal reserved hint text: ocx v2 mode-hint [--live] [--json] -- <text>\nOnly live mode accepts --acknowledge-surface-advisory.";
 
 /** Parse all controls before touching native/config state. A terminator protects literal hints. */
 export function parseV2Command(argv: readonly string[]): V2ParsedCommand {
