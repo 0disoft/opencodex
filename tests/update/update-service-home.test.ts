@@ -229,6 +229,28 @@ test("a home change during the port reclaim wait refuses the repair and every la
   expect(readUpdateJob("home-guard")).toMatchObject({ status: "failed", restarted: false });
 });
 
+test("the reclaim wait hands the real reclaimer a live home-authority gate", async () => {
+  record(b); const { calls, io } = workerIo();
+  // The real reclaimer consults this gate immediately before every kill and
+  // TCP-row drop; the injected wait flips the registration mid-wait and exercises
+  // the gate itself, the same way an in-flight availability await would.
+  let gateDenied = false;
+  io.waitForPort = async (_port, _hostname, opts) => {
+    calls.reclaim++;
+    record(a);
+    gateDenied = opts?.mayMutateFn?.() === false;
+    return false;
+  };
+  expect(await restartAfterUpdateForTests(fixtureJob(), { port: 19001, hostname: "127.0.0.1" }, io)).toBe(false);
+  expect(gateDenied).toBe(true);
+  expect(calls).toEqual({ repair: 0, manager: 0, reclaim: 1, kill: 0, spawn: 0, wrappers: 1 });
+  const persisted = readUpdateJob("home-guard");
+  expect(persisted).toMatchObject({ status: "failed", restarted: false });
+  expect(persisted?.error).toContain("ocx service status");
+  // A denied reclaim must not be misclassified as a busy-port timeout.
+  expect(JSON.stringify(persisted)).not.toContain("still busy");
+});
+
 test("confirmed absence after lease release skips repair and every later global service operation", async () => {
   record(b); const { calls, io } = workerIo();
   io.releaseForServiceManagerFn = () => unlinkSync(statePath);

@@ -948,17 +948,19 @@ export async function runUpdate(): Promise<void> {
       restoreOwnStoppedTray();
       return 1;
     }
-    if (isCodexShimInstalled?.()) {
-      try {
+    // The filesystem probe is part of the guarded recovery: a throw after package
+    // replacement degrades to the warning below instead of escaping the update.
+    try {
+      if (isCodexShimInstalled?.()) {
         const shim = spawnSync(process.execPath, [postUpdateLauncher, "codex-shim", "install"], {
           stdio: "inherit",
           windowsHide: true,
           env: mutation.unprivilegedEnvironment(),
         });
         if (shim.status !== 0) console.warn("⚠️  Shim repair skipped: run 'ocx codex-shim install'.");
-      } catch {
-        console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
       }
+    } catch {
+      console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
     }
     if (trayWasInstalled) {
       const trayArgs = planWindowsTrayUpdate({ installed: trayWasInstalled, running: trayWasRunning }).installArgs;
@@ -1001,7 +1003,10 @@ export async function runUpdate(): Promise<void> {
         scanIntervalMs: 500,
         killOcxHolders: capturedListen.oldPid != null,
         onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
+        // The wait's internal awaits can span a home change; gate each kill/drop.
+        mayMutateFn: () => homePolicy.check(),
       });
+      if (!freed && !homePolicy.check()) return 1; // a denied reclaim already refused
       if (!freed) {
         console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }

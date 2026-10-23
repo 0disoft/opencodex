@@ -140,3 +140,40 @@ test("a stable home still runs the shim gate and the tray refresh in order", asy
   // control action and must be the last command the gate released.
   expect(events.commands[events.commands.length - 1]).toEqual(["/verified/launcher", "tray", "install"]);
 });
+
+// Extracted after the shim-module import so the probe itself is injectable: filesystem
+// failures inside it must degrade inside the guarded block, not escape the update.
+const postShimGate = extracted("    // The module load above is the last await", "    // The stop above unloaded any managed service", '"continued"');
+const shimProbeDeps = (probe: () => boolean, events: { checks: number; restored: number; commands: string[][]; warnings: number }) => ({
+  homePolicy: { check: () => { events.checks++; return true; } },
+  restoreOwnStoppedTray: () => { events.restored++; },
+  isCodexShimInstalled: probe,
+  trayWasInstalled: true, trayWasRunning: true, postUpdateLauncher: "/verified/launcher",
+  process: { execPath: "/fixture/bun" },
+  mutation: { unprivilegedEnvironment: () => ({ fixture: "unprivileged" }) },
+  planWindowsTrayUpdate: () => ({ installArgs: ["tray", "install"] }),
+  spawnSync: (_bin: string, args: string[]) => { events.commands.push(args); return { status: 0 }; },
+  console: { warn: () => { events.warnings++; }, log() {} },
+});
+
+test("a throwing shim probe degrades to a warning and authorized recovery continues", async () => {
+  const events = { checks: 0, restored: 0, commands: [] as string[][], warnings: 0 };
+  const result = await postShimGate(shimProbeDeps(() => { throw new Error("fixture probe failure"); }, events));
+  expect(result).toBe("continued");
+  expect(events.checks).toBe(1);
+  expect(events.restored).toBe(0);
+  expect(events.warnings).toBeGreaterThanOrEqual(1);
+  // No shim rewrite ran; the authorized tray refresh still runs afterwards.
+  expect(events.commands).toEqual([["/verified/launcher", "tray", "install"]]);
+});
+
+test("an installed shim is repaired inside the same guarded block before the tray refresh", async () => {
+  const events = { checks: 0, restored: 0, commands: [] as string[][], warnings: 0 };
+  const result = await postShimGate(shimProbeDeps(() => true, events));
+  expect(result).toBe("continued");
+  expect(events.warnings).toBe(0);
+  expect(events.commands).toEqual([
+    ["/verified/launcher", "codex-shim", "install"],
+    ["/verified/launcher", "tray", "install"],
+  ]);
+});

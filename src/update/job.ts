@@ -1144,16 +1144,16 @@ async function restartAfterUpdate(
     // listener, not only the pre-wait snapshot; foreign claimants stay protected.
     killAllOcxOnPort: true,
     onlyKillPids,
+    mayMutateFn: () => homePolicy.check(), // the wait's awaits can span a home change; gate each kill/drop
   });
   if (serviceInstalled) {
     if (!homePolicy.check()) return false; // a home change during the service-args import refuses before stop/reclaim
-    // schtasks /end often leaves the hidden cmd/wscript wrapper alive; its :loop
-    // respawns `ocx start` a few seconds later and races port reclaim, so end the
-    // task again and kill those wrappers before touching the socket, then reclaim it
-    // for wrappers that bake `--port`.
+    // schtasks /end often leaves the hidden wrapper alive; its :loop respawns
+    // `ocx start` and races reclaim, so end wrappers before the socket.
     (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)();
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
+    if (!freed && !homePolicy.check()) return false; // a denied reclaim already refused the job
     let skipServiceInstall = false;
     // `service repair` reuses the live task and refreshes a stale definition through
     // its guarded create/elevation path, so the old install-only skip no longer
@@ -1281,10 +1281,10 @@ async function restartAfterUpdate(
     }
   }
   if (serviceInstalled && homePolicy.serviceAllowed) (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)();
-  // Reclaim before the pinned start: spawning `--port` while the old socket is busy
-  // is how updates used to fail health checks or hop ports.
+  // Reclaim before the pinned start: a busy old socket used to hop ports or fail health.
   const directAllow = reclaimKillAllowlist();
   const freed = await waitFn(port, hostname, reclaimOptsFor(directAllow));
+  if (!freed && !homePolicy.check()) return false;
   if (!freed) {
     const liveHolders = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
     updateJob(
