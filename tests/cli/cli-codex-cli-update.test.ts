@@ -170,16 +170,19 @@ describe("Codex CLI job persistence failures", () => {
     const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");
     const nativeOpen = fs.openSync, nativeWrite = fs.writeFileSync;
     let ownerFd: number | undefined;
+    let originalLock: ReturnType<typeof lstatSync> | undefined, originalOwner: ReturnType<typeof fs.fstatSync> | undefined;
     const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-      if (String(args[0]) === owner && replaced === "directory") {
-        fs.renameSync(lock, `${lock}-original`); mkdirSync(lock, { mode: 0o700 }); nativeWrite(owner, "replacement");
-        throw Object.assign(new Error("injected owner open after replacement"), { code: "ENOSPC" });
-      }
       const fd = nativeOpen(...args); if (String(args[0]) === owner) ownerFd = fd; return fd;
     });
     const write = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
-      if (args[0] === ownerFd && replaced === "owner-file") {
-        nativeWrite(ownerFd!, "{"); fs.renameSync(owner, `${owner}-original`); nativeWrite(owner, "replacement");
+      if (args[0] === ownerFd) {
+        nativeWrite(ownerFd!, "{"); originalLock = lstatSync(lock); originalOwner = fs.fstatSync(ownerFd!);
+        if (replaced === "directory") {
+          fs.renameSync(lock, `${lock}-original`); mkdirSync(lock, { mode: 0o700 });
+          // Keep the owner inode valid so only the changed directory identity refuses cleanup.
+          fs.renameSync(join(`${lock}-original`, "owner.json"), owner);
+        } else { fs.renameSync(owner, `${owner}-original`); }
+        nativeWrite(owner, "replacement", { mode: 0o600 });
         throw Object.assign(new Error("injected owner write after replacement"), { code: "ENOSPC" });
       }
       return nativeWrite(...args);
@@ -187,6 +190,16 @@ describe("Codex CLI job persistence failures", () => {
     try {
       expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-01", planId: result.planId, confirmed: true, configDir })).toThrow();
       open.mockRestore(); write.mockRestore();
+      const replacementLock = lstatSync(lock), replacementOwner = lstatSync(owner);
+      expect(replacementLock.mode & 0o777).toBe(0o700);
+      expect(replacementOwner.mode & 0o777).toBe(0o600);
+      expect(replacementOwner.uid).toBe(process.geteuid!()); expect(replacementOwner.nlink).toBe(1);
+      expect(replacementLock.dev).toBe(originalLock!.dev); expect(replacementOwner.dev).toBe(originalOwner!.dev);
+      if (replaced === "directory") {
+        expect(replacementLock.ino).not.toBe(originalLock!.ino); expect(replacementOwner.ino).toBe(originalOwner!.ino);
+      } else {
+        expect(replacementLock.ino).toBe(originalLock!.ino); expect(replacementOwner.ino).not.toBe(originalOwner!.ino);
+      }
       expect(readFileSync(owner, "utf8")).toBe("replacement");
       expect(existsSync(replaced === "directory" ? `${lock}-original` : `${owner}-original`)).toBe(true);
       expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-02", planId: result.planId, confirmed: true, configDir })).toThrow("job_store_busy");
