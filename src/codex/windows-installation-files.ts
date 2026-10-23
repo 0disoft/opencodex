@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Library, Symbols } from "bun:ffi";
+import { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
 
 const KERNEL_SYMBOLS = {
   GetDriveTypeW: { args: ["ptr"], returns: "u32" },
@@ -53,6 +54,9 @@ class InspectionRefusal extends Error {
   constructor(readonly reason: Refusal) { super(reason); }
 }
 const MIB = 1024 * 1024;
+// One native backing, the unchanged production Node bound, and at most twelve
+// bounded text requests. This is an I/O ceiling; hash-only buffers stay empty.
+const MAX_REQUEST_BYTES = MAX_NATIVE_BACKING_BYTES + (128 + 12) * MIB;
 const REPARSE = 0x400;
 const DIRECTORY = 0x10;
 const INVALID_HANDLE = 0xffffffffffffffffn;
@@ -81,6 +85,7 @@ function components(path: string): { drive: string; names: string[] } | null {
  */
 export async function inspectWindowsInstallationFiles(
   requests: readonly WindowsInstallationFileRequest[],
+  finalize?: (files: Extract<WindowsInstallationFilesResult, { kind: "observed" }>["files"]) => boolean | Promise<boolean>,
 ): Promise<WindowsInstallationFilesResult> {
   if (!Array.isArray(requests) || requests.length === 0 || requests.length > 12) {
     return { kind: "refused", reason: "invalid-request" };
@@ -92,11 +97,11 @@ export async function inspectWindowsInstallationFiles(
       || (request.hashOnly !== undefined && typeof request.hashOnly !== "boolean")
       || (request.metadataOnly !== undefined && typeof request.metadataOnly !== "boolean")
       || (request.prefixOnly !== undefined && typeof request.prefixOnly !== "boolean")
-      || request.maxBytes > (request.hashOnly ? 256 * MIB : MIB)) return null;
+      || request.maxBytes > (request.hashOnly ? MAX_NATIVE_BACKING_BYTES : MIB)) return null;
     ceiling += request.maxBytes;
     return parsedPath;
   });
-  if (parsed.some(path => path === null) || ceiling > 300 * MIB) {
+  if (parsed.some(path => path === null) || ceiling > MAX_REQUEST_BYTES) {
     return { kind: "refused", reason: "invalid-request" };
   }
   if (process.platform !== "win32" || process.arch !== "x64") {
@@ -230,6 +235,7 @@ export async function inspectWindowsInstallationFiles(
       }
       return { path: request.path, identity, bytes, digest: truncated ? "" : hash.digest("hex") };
     });
+    if (finalize && !await finalize(observed)) throw new InspectionRefusal("identity-changed");
     for (const file of files) {
       if (JSON.stringify(inspect(file.handle, false)) !== JSON.stringify(file.identity)) {
         throw new InspectionRefusal("identity-changed");

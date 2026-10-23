@@ -9,6 +9,7 @@ import { npmInvocation } from "../update/npm-invocation.mjs";
 import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
 import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSet, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
 export { CODEX_CLI_REGISTRY } from "./cli-update-artifacts";
+import { windowsCodexCliPlanEvidence, withWindowsCodexCliPlanToolchain } from "./cli-windows-plan-provenance";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -50,6 +51,7 @@ export type CodexCliUpdateChannel = "latest";
 
 export type CodexCliUpdateRefusal =
   | "windows_inspection_deferred"
+  | "windows_apply_disabled"
   | "not_managed"
   | "installed_version_unverified"
   | "install_content_unverified"
@@ -82,7 +84,7 @@ export interface CodexCliUpdatePlan {
   readonly channel: CodexCliUpdateChannel;
   readonly applicable: boolean;
   readonly refusal: CodexCliUpdateRefusal | null;
-  /** Present only for an applicable plan; there is nothing to quote for a refusal. */
+  /** Also present for a proven Windows read-only plan whose apply remains disabled. */
   readonly planId: string | null;
   readonly provenance: CodexCliInstallKind;
   readonly managed: boolean;
@@ -434,12 +436,16 @@ export function resolveCodexCliUpdateTarget(
 /** Resolve both exact archives, including the publisher's platform-package alias. */
 export function resolveCodexCliUpdateArtifactTarget(channel: CodexCliUpdateChannel,
   spawn: typeof spawnSync = spawnSync, boundEnv?: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform, arch: string = process.arch): CodexCliUpdateTarget {
+  platform: NodeJS.Platform = process.platform, arch: string = process.arch,
+  windowsToolchain?: { readonly node: string; readonly npmCli: string }): CodexCliUpdateTarget {
   let isolation: NpmConfigIsolation | undefined;
   try {
     isolation = createNpmConfigIsolation(undefined, boundEnv);
     const query = (spec: string) => {
-      const invocation = isolatedNpmTarget(["view", spec, "--json"], isolation!);
+      const args = isolatedNpmArgs(["view", spec, "--json"], isolation!);
+      const invocation = windowsToolchain
+        ? { bin: windowsToolchain.node, args: [windowsToolchain.npmCli, ...args], options: { cwd: isolation!.dir, env: isolation!.env } }
+        : isolatedNpmTarget(["view", spec, "--json"], isolation!);
       if (!invocation) throw new Error("npm unavailable");
       const result = spawn(invocation.bin, invocation.args, { encoding: "utf8", timeout: REGISTRY_TIMEOUT_MS,
         maxBuffer: 1024 * 1024, windowsHide: true, ...invocation.options });
@@ -507,11 +513,10 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   // pays the bounded content read; a bare ownership check leaves it unobserved.
   const report = await inspect({ ...(deps.inspectionDeps ?? {}), observeInstallContent: true });
 
-  // Phase 1 performs no candidate filesystem I/O at all on Windows, so there is no
-  // ownership evidence to build a plan on. This stays dormant until the handle-bound
-  // provenance layer exists; pretending otherwise would require exactly the reads phase 1
-  // refused to perform.
-  if (platform === "win32" || report.reason === "windows_inspection_deferred") {
+  // Windows planning requires private evidence from the production handle-bound
+  // predicate. A synthetic/copyable public managed flag cannot open this lane.
+  const windowsEvidence = windowsCodexCliPlanEvidence(report);
+  if ((platform === "win32" && !windowsEvidence) || report.reason === "windows_inspection_deferred") {
     return refusedPlan("windows_inspection_deferred", report, channel, null, NOT_EVALUATED);
   }
   if (!report.managed || report.provenance !== "npm-global") {
@@ -539,8 +544,11 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
   const resolveTarget = deps.resolveTarget
     ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnSync, deps.inspectionDeps?.env,
-      platform, deps.inspectionDeps?.arch ?? process.arch));
-  const target = resolveTarget(channel);
+      platform, windowsEvidence?.arch ?? deps.inspectionDeps?.arch ?? process.arch, windowsEvidence ?? undefined));
+  const target = windowsEvidence
+    ? await withWindowsCodexCliPlanToolchain(report, () => resolveTarget(channel))
+      ?? Object.freeze({ kind: "unresolved" as const, reason: "Windows toolchain identity changed" })
+    : resolveTarget(channel);
   if (target.kind !== "resolved") {
     return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
   }
@@ -575,8 +583,8 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
     package: CODEX_CLI_PACKAGE,
     channel,
-    applicable: true,
-    refusal: null,
+    applicable: platform !== "win32",
+    refusal: platform === "win32" ? "windows_apply_disabled" : null,
     planId: codexCliUpdatePlanId({
       platform,
       provenance: report.provenance,

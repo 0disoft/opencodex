@@ -52,7 +52,7 @@ export function backingReference(main: Metadata, installName: string): { name: s
 export function codexCliArtifactSet(main: Metadata, query: (spec: string) => Metadata,
   platform: NodeJS.Platform, arch: string): CodexCliArtifactSet {
   const layout = codexCliPlatformBacking(platform, arch);
-  if (!layout || platform === "win32" || main.name !== "@openai/codex") throw new Error("artifact_platform_unverified");
+  if (!layout || main.name !== "@openai/codex") throw new Error("artifact_platform_unverified");
   const mainArtifact = artifact(main, "@openai/codex");
   const reference = backingReference(main, layout.package);
   const backing = artifact(query(reference.spec), layout.package);
