@@ -1,4 +1,5 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { readCodexHomeJournal } from "../codex-home-owner";
 import { samePath, type RawCatalog } from "./parsing";
 
@@ -9,9 +10,21 @@ export interface CatalogObservation {
   readonly catalog: RawCatalog | null;
 }
 
-/** Canonical path equality when available; unavailable paths retain lexical equality. */
+function canonicalCatalogHealPath(path: string): string {
+  for (let links = 0; links < 40; links += 1) {
+    const entry = lstatSync(path);
+    if (!entry.isFile() && !entry.isSymbolicLink()) return realpathSync.native(path);
+    const parent = realpathSync.native(dirname(path));
+    // macOS Bun's file realpath can name another hardlink; preserve this entry.
+    if (entry.isFile()) return join(parent, basename(path));
+    path = resolve(parent, readlinkSync(path));
+  }
+  throw new Error("Catalog path symlink limit reached");
+}
+
+/** Canonical entry equality when available; unavailable paths retain lexical equality. */
 export function sameCatalogHealPath(left: string, right: string): boolean {
-  try { return samePath(realpathSync.native(left), realpathSync.native(right)); }
+  try { return samePath(canonicalCatalogHealPath(left), canonicalCatalogHealPath(right)); }
   catch { return samePath(left, right); }
 }
 

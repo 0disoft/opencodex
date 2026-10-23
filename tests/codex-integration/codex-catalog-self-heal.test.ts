@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   CATALOG_HEAL_MAX_ATTEMPTS, CATALOG_HEAL_MAX_HEALS, CATALOG_HEAL_RECHECK_MS,
   CATALOG_HEAL_TICK_MS, CATALOG_HEAL_WINDOW_MS, startCodexCatalogSelfHeal,
   type CatalogSelfHealDeps, type CatalogSelfHealGates, type CatalogSelfHealHandle,
 } from "../../src/codex/catalog-self-heal";
-import { CATALOG_HEAL_MAX_BYTES, observeCatalogHealFile, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
+import { CATALOG_HEAL_MAX_BYTES, observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath } from "../../src/codex/catalog/heal-observation";
 import type { CatalogPublicationEvent } from "../../src/codex/catalog/publication-observer";
 import type { RawCatalog } from "../../src/codex/catalog/parsing";
 import type { OcxConfig } from "../../src/types";
@@ -511,6 +511,87 @@ function aliasPaths(kind: "lexical" | "physical" | "case") {
   return { path, alias: kind === "case" ? path.toUpperCase() : `${home}/./catalog.json` };
 }
 
+describe("catalog path comparison", () => {
+  test("hardlink entries remain distinct when native realpath reports their sibling", () => {
+    const { path } = aliasPaths("lexical");
+    const sibling = join(temporaryRoot(), "catalog.json");
+    linkSync(path, sibling);
+    expect(lstatSync(sibling).ino).toBe(lstatSync(path).ino);
+    const native = realpathSync.native;
+    // macOS Bun can return the other hardlink's name for either opened file.
+    const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
+      input === path || input === sibling ? path : native(input));
+    try {
+      expect(sameCatalogHealPath(path, sibling)).toBe(false);
+      expect(sameCatalogHealPath(sibling, path)).toBe(false);
+      expect(sameCatalogHealPath(path, path)).toBe(true);
+      expect(sameCatalogHealPath(sibling, sibling)).toBe(true);
+    } finally { resolvePath.mockRestore(); }
+  });
+
+  test("self comparison survives alternating native hardlink names", () => {
+    const { path } = aliasPaths("lexical");
+    const sibling = join(temporaryRoot(), "catalog.json");
+    linkSync(path, sibling);
+    const native = realpathSync.native;
+    let calls = 0;
+    const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
+      input === path ? (++calls % 2 ? path : sibling) : native(input));
+    try { expect(sameCatalogHealPath(path, path)).toBe(true); }
+    finally { resolvePath.mockRestore(); }
+  });
+
+  test("lexical and directory aliases are symmetric without merging distinct files", () => {
+    const { path, alias } = aliasPaths("physical");
+    const distinct = join(temporaryRoot(), "catalog.json");
+    writeFileSync(distinct, JSON.stringify(full));
+    expect(sameCatalogHealPath(path, alias)).toBe(true);
+    expect(sameCatalogHealPath(alias, path)).toBe(true);
+    expect(sameCatalogHealPath(alias, alias)).toBe(true);
+    expect(sameCatalogHealPath(`${dirname(path)}/./catalog.json`, alias)).toBe(true);
+    expect(sameCatalogHealPath(alias, distinct)).toBe(false);
+    expect(sameCatalogHealPath(distinct, alias)).toBe(false);
+  });
+
+  test("relative leaf symlinks use their canonical parent and preserve hardlink names", () => {
+    const root = temporaryRoot(), home = join(root, "home"), inner = join(home, "inner");
+    mkdirSync(inner, { recursive: true });
+    const path = join(home, "catalog.json"), sibling = join(root, "catalog.json");
+    writeFileSync(path, JSON.stringify(full));
+    linkSync(path, sibling);
+    const parentAlias = join(root, "alias");
+    symlinkSync(inner, parentAlias, process.platform === "win32" ? "junction" : "dir");
+    const leaf = join(parentAlias, "link.json");
+    symlinkSync("../catalog.json", join(inner, "link.json"), "file");
+    const chain = join(inner, "chain.json");
+    symlinkSync("link.json", chain, "file");
+    const absolute = join(root, "absolute.json");
+    symlinkSync(path, absolute, "file");
+    expect(statSync(leaf).ino).toBe(lstatSync(path).ino);
+    expect(sameCatalogHealPath(leaf, path)).toBe(true);
+    expect(sameCatalogHealPath(path, leaf)).toBe(true);
+    expect(sameCatalogHealPath(chain, path)).toBe(true);
+    expect(sameCatalogHealPath(path, chain)).toBe(true);
+    expect(sameCatalogHealPath(absolute, path)).toBe(true);
+    expect(sameCatalogHealPath(path, absolute)).toBe(true);
+    expect(sameCatalogHealPath(leaf, sibling)).toBe(false);
+    expect(sameCatalogHealPath(sibling, leaf)).toBe(false);
+  });
+
+  test("unavailable paths retain lexical equality, including dangling and cyclic links", () => {
+    const root = temporaryRoot(), missing = join(root, "missing.json");
+    const dangling = join(root, "dangling.json"), cycle = join(root, "cycle.json");
+    symlinkSync("missing.json", dangling, "file");
+    symlinkSync("cycle.json", cycle, "file");
+    for (const path of [missing, dangling, cycle]) {
+      expect(sameCatalogHealPath(path, `${root}/./${path.slice(root.length + 1)}`)).toBe(true);
+      expect(sameCatalogHealPath(path, path)).toBe(true);
+    }
+    expect(sameCatalogHealPath(dangling, missing)).toBe(false);
+    expect(sameCatalogHealPath(missing, dangling)).toBe(false);
+  });
+});
+
 for (const kind of ["lexical", "physical", ...(process.platform === "win32" ? ["case" as const] : [])] as const) {
   for (const release of ["restore", "native-release"] as const) {
     test(`${kind} alias ${release} during suspended heal fences publication`, async () => {
@@ -601,6 +682,33 @@ test.each(["distinct", "hardlink"] as const)("%s restore target remains unrelate
   h.publish({ kind: "native-released", path: unrelated });
   finish.resolve(); await tick;
   expect(committed).toBe(true);
+});
+
+test("sibling hardlink release cannot fence a heal when native realpath collapses entries", async () => {
+  const { path } = aliasPaths("lexical");
+  const sibling = join(temporaryRoot(), "catalog.json");
+  linkSync(path, sibling);
+  const h = harness({ path });
+  const entered = deferred(), finish = deferred();
+  let committed = false;
+  h.setHeal(async (_config, lifecycle) => {
+    entered.resolve(); await finish.promise;
+    committed = lifecycle.beforeCommit(); return { committed };
+  });
+  h.rewrite(empty);
+  const tick = h.handle.tickForTests();
+  await entered.promise;
+  const native = realpathSync.native;
+  const resolvePath = spyOn(realpathSync, "native").mockImplementation(input =>
+    input === path || input === sibling ? path : native(input));
+  try {
+    h.publish({ kind: "native-released", path: sibling });
+    finish.resolve(); await tick;
+    expect(committed).toBe(true);
+  } finally {
+    finish.resolve(); await tick;
+    resolvePath.mockRestore();
+  }
 });
 
 for (const stage of ["Claude", "Desktop"] as const) {
