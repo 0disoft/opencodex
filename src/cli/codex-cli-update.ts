@@ -28,6 +28,7 @@ import { trustedNodeLauncherContext } from "./launcher-context";
 import type { CodexCliApplyDeps, CodexCliApplyResult } from "../codex/cli-update-apply";
 import { randomUUID } from "node:crypto";
 import { admitCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../codex/cli-update-job";
+import { CodexCliJobResultPersistenceError, normalizeCodexCliJobResult } from "../codex/cli-update-job-execution";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
@@ -329,10 +330,27 @@ export async function handleCodexCliUpdateCommand(
     if (parsed.action === "apply") {
       const apply = deps.applyUpdate ?? (await import("../codex/cli-update-apply")).applyCodexCliUpdate;
       const admitted = admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId, confirmed: true });
-      const job = admitted.kind === "accepted"
-        ? await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
-          () => apply(parsed.planId, { inspectionDeps: codexCliUpdateInspectionDeps(deps) }))
-        : admitted.job;
+      let job: Awaited<ReturnType<typeof runCodexCliUpdateJob>>;
+      try {
+        job = admitted.kind === "accepted"
+          ? await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
+            () => apply(parsed.planId, { inspectionDeps: codexCliUpdateInspectionDeps(deps) }))
+          : admitted.job;
+      } catch (error) {
+        if (!(error instanceof CodexCliJobResultPersistenceError)) throw error;
+        // Preserve the computed outcome without claiming durable completion or
+        // retrying work. Project fixed fields, never the raw result/error object.
+        const safe = normalizeCodexCliJobResult(error.result);
+        const receipt = { error: "job_result_persistence_failed", jobId: admitted.job.jobId,
+          outcome: safe.outcome, reason: safe.reason, leaseRetained: safe.leaseRetained,
+          cleanupErrors: safe.cleanupErrors };
+        printData(receipt, parsed.json, [`job: ${receipt.jobId}`,
+          "persistence: unverified (job_result_persistence_failed)", `outcome: ${receipt.outcome}`,
+          `reason: ${receipt.reason}`, `lease-retained: ${receipt.leaseRetained}`,
+          `cleanup-errors: ${receipt.cleanupErrors.join(", ") || "none"}`]);
+        resultCode = 1;
+        return;
+      }
       if (!job) { unavailableJob(); return; }
       printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
         `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);

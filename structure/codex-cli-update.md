@@ -152,6 +152,8 @@ with status 503 and `Retry-After: 1`; permanent admission failures do not advert
 Only engine exceptions synthesize `job_result_unknown`; persistence retries keep the same actual result.
 Transient completion-write failures have the same bounded retry budget. Permanent failure reports
 `job_result_persistence_failed` while retaining the computed result in the error; it does not establish durable completion.
+CLI apply prints that failure with the admitted job ID, normalized outcome/reason, lease retention and fixed cleanup codes
+in both human and JSON output, and exits 1. It never publishes raw result/error fields or reruns the installer to recover the receipt.
 Unknown result/cleanup codes are normalized to fixed-code uncertainty before writing, so they cannot poison later reads.
 Unsupported prefixes and unavailable lease storage are distinct from a held installation lease.
 Missing/unreadable CLI job status has a structured `job_unavailable` JSON error and a nonzero exit.
