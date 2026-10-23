@@ -49,6 +49,8 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
   } catch (error) {
     const code = error instanceof Error ? error.message : "admission_failed";
     const status = code === "idempotency_conflict" ? 409 : code === "invalid_request" ? 400 : 503;
-    return jsonResponse({ error: ["invalid_request", "idempotency_conflict", "store_full", "job_store_busy", "unsupported_store", "unsafe_store"].includes(code) ? code : "admission_failed" }, status, ctx.req, ctx.config);
+    const response = jsonResponse({ error: ["invalid_request", "idempotency_conflict", "store_full", "job_store_busy", "unsupported_store", "unsafe_store"].includes(code) ? code : "admission_failed" }, status, ctx.req, ctx.config);
+    if (code === "job_store_busy") response.headers.set("Retry-After", "1");
+    return response;
   }
 }

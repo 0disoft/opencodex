@@ -114,7 +114,8 @@ The ledger retains at most 64 jobs, including terminal jobs, and never prunes re
 At capacity it refuses new request IDs with `store_full`; existing matching retries still return the same job.
 Capacity expansion and operator recovery require a separate design that preserves deduplication and job-status evidence.
 `src/codex/cli-update-job-execution.ts` allows at most eight worker start/completion lock attempts,
-with asynchronous 25 ms waits and no stale-lock reclamation. Admission reports `job_store_busy` separately.
+with asynchronous 25 ms waits and no stale-lock reclamation. HTTP admission reports `job_store_busy`
+with status 503 and `Retry-After: 1`; permanent admission failures do not advertise a retry delay.
 Only engine exceptions synthesize `job_result_unknown`; persistence retries keep the same actual result.
 Transient completion-write failures have the same bounded retry budget. Permanent failure reports
 `job_result_persistence_failed` while retaining the computed result in the error; it does not establish durable completion.

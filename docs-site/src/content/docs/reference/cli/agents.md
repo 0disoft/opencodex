@@ -1210,7 +1210,8 @@ a lost response: the same key and plan return the original job; a changed plan w
 The private ledger retains up to 64 jobs, including finished jobs, without automatic pruning. At that
 limit, new request IDs are refused with `store_full`; existing matching retries still return their
 original job. Capacity and operator recovery remain a separate follow-up that must preserve this
-deduplication contract. A busy admission ledger reports `job_store_busy`; missing or unreadable CLI
+deduplication contract. A busy admission ledger reports `job_store_busy` (HTTP 503 with `Retry-After: 1`);
+permanent admission failures have no retry-delay header. Missing or unreadable CLI
 status returns `job_unavailable` and a nonzero exit. Completion persistence failures do not rerun the
 installer or turn an uncertain job into a confirmed success.
 An ambiguous result is never automatically retried or rolled back. After an owner restart, an unfinished

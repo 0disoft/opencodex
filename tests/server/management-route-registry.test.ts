@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
+import * as updateJobs from "../../src/codex/cli-update-job";
 import type { ManagementContext } from "../../src/server/management/context";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
@@ -112,6 +113,26 @@ describe("management route registry reconciliation", () => {
     expect(clientEvidence?.status).toBe(400);
   });
 
+  test.each(["job_store_busy", "store_full"])("HTTP admission %s schedules no worker and only contention advertises retry", async code => {
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob").mockImplementation(() => { throw new Error(code); });
+    const worker = spyOn(updateJobs, "runCodexCliUpdateJob");
+    try {
+      const req = new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId: "busy-response-01", planId: "e".repeat(32), confirmed: true }) });
+      const ctx: ManagementContext = { req, url: new URL(req.url),
+        config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
+        principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toEqual({ error: code });
+      expect(response?.headers.get("Retry-After")).toBe(code === "job_store_busy" ? "1" : null);
+      expect(worker).not.toHaveBeenCalled();
+    } finally { admission.mockRestore(); worker.mockRestore(); }
+  });
+
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
     const outer = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-")));
     const parent = join(outer, "private-parent"), configDir = join(parent, "ocx");
@@ -129,6 +150,19 @@ describe("management route registry reconciliation", () => {
         principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
         convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
         syncClaudeAgentDefsBestEffort: async () => {} };
+      const storeDir = join(configDir, "codex-cli-update-jobs"), heldLock = join(storeDir, "admission.lock");
+      mkdirSync(storeDir, { mode: 0o700 }); chmodSync(storeDir, 0o700);
+      mkdirSync(heldLock, { mode: 0o700 });
+      const worker = spyOn(updateJobs, "runCodexCliUpdateJob");
+      try {
+        const busy = await handleCodexCliUpdateRoutes(ctx);
+        expect(busy?.status).toBe(503);
+        expect(await busy?.json()).toEqual({ error: "job_store_busy" });
+        expect(busy?.headers.get("Retry-After")).toBe("1");
+        expect(worker).not.toHaveBeenCalled();
+        expect(existsSync(join(storeDir, "jobs.json"))).toBe(false);
+      } finally { worker.mockRestore(); rmSync(heldLock, { recursive: true }); }
+      ctx.req = makeRequest();
       const first = await handleCodexCliUpdateRoutes(ctx);
       const firstBody = await first!.json();
       ctx.req = makeRequest();
