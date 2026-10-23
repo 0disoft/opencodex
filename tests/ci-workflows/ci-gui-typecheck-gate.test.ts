@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repoPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -190,7 +190,11 @@ describe("gui typecheck if-changed gate", () => {
 const scripts = JSON.parse(readFileSync(repoPath("package.json"), "utf8")).scripts as Record<string, string>;
 const config = readFileSync(repoPath("tsconfig.json"), "utf8");
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
+const compilerLinks: string[] = [];
+afterEach(() => {
+  for (const path of compilerLinks.splice(0)) unlinkSync(path);
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
+});
 
 function nativeTypecheckFixture(): string {
   const root = mkdtempSync(join(tmpdir(), "ocx-native-typecheck-"));
@@ -260,4 +264,78 @@ test("native and reference typecheck reject strict errors in an unimported sourc
     expect(codes.sort((left, right) => left - right), result.output).toEqual([2322, 2578, 2741, 7006, 18048]);
     expect(existsSync(join(root, "dist"))).toBe(false);
   }
+}, SPAWN_BUDGET_MS);
+
+function prepublishFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "ocx-prepublish-typecheck-"));
+  roots.push(root);
+  mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+  const compiler = join(root, "node_modules", "typescript");
+  symlinkSync(repoPath("node_modules", "typescript"), compiler, process.platform === "win32" ? "junction" : "dir");
+  compilerLinks.push(compiler);
+  if (process.platform === "win32") {
+    for (const name of ["tsc.exe", "tsc.bunx"]) {
+      copyFileSync(repoPath("node_modules", ".bin", name), join(root, "node_modules", ".bin", name));
+    }
+  } else {
+    const shim = join(root, "node_modules", ".bin", "tsc");
+    symlinkSync(repoPath("node_modules", "typescript", "bin", "tsc"), shim);
+    compilerLinks.push(shim);
+  }
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", scripts: {
+    // Exercise the real hook and compiler; only audit/build side effects are replaced.
+    prepublishOnly: scripts.prepublishOnly,
+    "typecheck:tsc": `${scripts["typecheck:tsc"]} && bun phase.ts compiler`,
+    typecheck: `${scripts.typecheck} && bun phase.ts native`,
+    "audit:high": "bun phase.ts audit",
+    "build:gui": "bun phase.ts build",
+  } }));
+  writeFileSync(join(root, "phase.ts"), [
+    'import { appendFileSync } from "node:fs";',
+    'appendFileSync("phases.log", process.argv[2] + "\\n");',
+    'if (process.env.FAIL_PHASE === process.argv[2]) process.exit(29);',
+  ].join("\n"));
+  writeFileSync(join(root, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { strict: true, types: [], outDir: "dist" }, files: ["main.ts"],
+  }));
+  writeFileSync(join(root, "main.ts"), "export const count: number = 1;\n");
+  return root;
+}
+
+function runPrepublish(root: string, failPhase?: string) {
+  // Reuse the caller runtime, without the repository's installed Bun shadowing it.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"));
+  const result = Bun.spawnSync([process.execPath, "run", "prepublishOnly"], {
+    cwd: root, timeout: INTERNAL_DEADLINE_MS, killSignal: "SIGKILL", stdin: "ignore",
+    env: { ...env, PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`, FAIL_PHASE: failPhase ?? "" },
+  });
+  return {
+    exitCode: result.exitCode,
+    output: result.stdout.toString() + result.stderr.toString(),
+    phases: readFileSync(join(root, "phases.log"), "utf8").trim().split(/\r?\n/),
+  };
+}
+
+test("prepublishOnly runs the reference compiler between audit and build without emitting files", () => {
+  const root = prepublishFixture();
+  const result = runPrepublish(root);
+  expect(result.exitCode, result.output).toBe(0);
+  expect(result.phases).toEqual(["audit", "compiler", "build"]);
+  expect(existsSync(join(root, "dist"))).toBe(false);
+  expect(existsSync(join(root, "main.js"))).toBe(false);
+}, SPAWN_BUDGET_MS);
+
+test("prepublishOnly stops before typecheck and build when audit fails", () => {
+  const result = runPrepublish(prepublishFixture(), "audit");
+  expect(result.exitCode, result.output).toBe(29);
+  expect(result.phases).toEqual(["audit"]);
+}, SPAWN_BUDGET_MS);
+
+test("prepublishOnly stops before build when the reference compiler rejects strict errors", () => {
+  const root = prepublishFixture();
+  writeFileSync(join(root, "main.ts"), 'export const count: number = "bad";\n');
+  const result = runPrepublish(root);
+  expect(result.exitCode, result.output).not.toBe(0);
+  expect(result.output).toContain("TS2322");
+  expect(result.phases).toEqual(["audit"]);
 }, SPAWN_BUDGET_MS);

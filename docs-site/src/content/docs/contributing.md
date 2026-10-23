@@ -51,6 +51,8 @@ and strict compiler options without emitting files. `--no-script` keeps it on th
 if a `check` package script is added later. The installed Bun dependency supplies the checker;
 `typecheck:tsc` retains the TypeScript compiler for comparisons and fallback. CI and release preflight
 continue to invoke `tsc` directly, and the GUI retains its own TypeScript build check.
+The `prepublishOnly` hook also uses `typecheck:tsc`, between the audit and GUI build steps;
+an audit or compiler failure stops the remaining steps.
 
 The suite uses Bun 1.4.3 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.4.
 `scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.

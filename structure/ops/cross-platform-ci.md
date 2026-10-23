@@ -107,8 +107,11 @@ Local `bun run typecheck` uses the installed Bun runtime's native checker with t
 script from replacing type checking, and the command emits no files. `bun run typecheck:tsc`
 retains the installed TypeScript compiler for comparison and fallback. CI and release preflight
 invoke `tsc` directly; GUI build checks and the separate `testRunnerBun` pin keep their own roles.
+The `prepublishOnly` hook runs `typecheck:tsc` after `audit:high` and before `build:gui`,
+stopping on either audit or compiler failure.
 `tests/ci-workflows/ci-gui-typecheck-gate.test.ts` exercises both package commands against the root
-compiler options, including strict failures in unimported source files and a conflicting `check` script.
+compiler options, including strict failures in unimported source files and a conflicting `check` script,
+and runs the publish hook with safe audit/build recorders to verify compiler selection and fail-fast order.
 Across the jobs, the workflow runs:
 
 ```bash
