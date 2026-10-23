@@ -251,6 +251,45 @@ test("the reclaim wait hands the real reclaimer a live home-authority gate", asy
   expect(JSON.stringify(persisted)).not.toContain("still busy");
 });
 
+test("a latched reclaim denial outranks a transient re-match before the wait ends", async () => {
+  record(b); const { calls, io } = workerIo();
+  // The mid-wait denial latches; restoring B's record before the wait returns must
+  // not re-arm the busy-port repair path — the recorded refusal stands.
+  let deniedInWait = false;
+  io.waitForPort = async (_port, _hostname, opts) => {
+    calls.reclaim++;
+    record(a);
+    deniedInWait = opts?.mayMutateFn?.() === false;
+    record(b); // transient re-match before the wait returns
+    return false;
+  };
+  expect(await restartAfterUpdateForTests(fixtureJob(), { port: 19001, hostname: "127.0.0.1" }, io)).toBe(false);
+  expect(deniedInWait).toBe(true);
+  expect(calls).toEqual({ repair: 0, manager: 0, reclaim: 1, kill: 0, spawn: 0, wrappers: 1 });
+  const persisted = readUpdateJob("home-guard");
+  expect(persisted).toMatchObject({ status: "failed", restarted: false });
+  expect(persisted?.error).toContain("ocx service status");
+  expect(JSON.stringify(persisted)).not.toContain("still busy");
+});
+
+test("the direct recovery reclaim also keeps a transient authority denial latched", async () => {
+  record(a); const { calls, io } = workerIo();
+  let deniedInWait = false;
+  io.waitForPort = async (_port, _hostname, opts) => {
+    calls.reclaim++;
+    record(b);
+    deniedInWait = opts?.mayMutateFn?.() === false;
+    record(a);
+    return false;
+  };
+  expect(await restartAfterUpdateForTests(fixtureJob(), { port: 19001, hostname: "127.0.0.1" }, io)).toBe(false);
+  expect(deniedInWait).toBe(true);
+  expect(calls).toEqual({ repair: 0, manager: 0, reclaim: 1, kill: 1, spawn: 0, wrappers: 0 });
+  const persisted = readUpdateJob("home-guard");
+  expect(persisted).toMatchObject({ status: "failed", restarted: false });
+  expect(JSON.stringify(persisted)).not.toContain("still busy");
+});
+
 test("confirmed absence after lease release skips repair and every later global service operation", async () => {
   record(b); const { calls, io } = workerIo();
   io.releaseForServiceManagerFn = () => unlinkSync(statePath);

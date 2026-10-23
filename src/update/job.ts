@@ -1123,9 +1123,8 @@ async function restartAfterUpdate(
   const listPids = io.listListenPidsFn ?? listListenPids;
   const verifyOcx = io.verifyOcxFn ?? verifyPidIdentity;
   const aliveFn = io.isAliveFn ?? isProcessAlive;
-  // Pre-update PID plus any ocx still LISTENing on the captured port: a self-update
-  // often leaves a respawned bun/node child that is not the captured PID, and
-  // treating it as protected blocks reclaim so the direct start never binds.
+  // Pre-update PID plus live ocx listeners on the captured port: a self-update can
+  // leave a respawned child whose protected status would block reclaim and the start.
   const reclaimKillAllowlist = (): number[] => {
     const allow = new Set<number>();
     if (oldPid != null) allow.add(oldPid);
@@ -1134,6 +1133,12 @@ async function restartAfterUpdate(
       if (verifyOcx(pid) === pid) allow.add(pid);
     }
     return [...allow];
+  };
+  // Latched reclaim gate: a mid-wait denial stays denied for this job's waits.
+  let reclaimDenied = false;
+  const reclaimGate = () => {
+    try { reclaimDenied ||= !homePolicy.check(); } catch { reclaimDenied = true; }
+    return !reclaimDenied;
   };
   const reclaimOptsFor = (onlyKillPids: number[]) => ({
     timeoutMs: RESTART_PORT_RECLAIM_MS,
@@ -1144,7 +1149,7 @@ async function restartAfterUpdate(
     // listener, not only the pre-wait snapshot; foreign claimants stay protected.
     killAllOcxOnPort: true,
     onlyKillPids,
-    mayMutateFn: () => homePolicy.check(), // the wait's awaits can span a home change; gate each kill/drop
+    mayMutateFn: reclaimGate, // the wait's awaits can span a home change; gate each kill/drop
   });
   if (serviceInstalled) {
     if (!homePolicy.check()) return false; // a home change during the service-args import refuses before stop/reclaim
@@ -1153,11 +1158,10 @@ async function restartAfterUpdate(
     (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)();
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
-    if (!freed && !homePolicy.check()) return false; // a denied reclaim already refused the job
+    if (!freed && !reclaimGate()) return false; // a latched denial already refused the job
     let skipServiceInstall = false;
-    // `service repair` reuses the live task and refreshes a stale definition through
-    // its guarded create/elevation path, so the old install-only skip no longer
-    // applies; only a caller that still passes install argv keeps that behavior.
+    // `service repair` reuses the live task and refreshes stale definitions via its
+    // guarded path; only a caller still passing install argv keeps the old skip.
     const refreshRegisters = (svcArgs ?? []).includes("install");
     if ((io.platform ?? process.platform) === "win32" && process.env.OCX_SERVICE === "1" && refreshRegisters) {
       updateJob(job, {}, "Skipping service re-registration from the non-elevated update worker; falling back to a direct proxy start.");
@@ -1187,9 +1191,8 @@ async function restartAfterUpdate(
       }
     }
     if (!skipServiceInstall) {
-      // `service repair` re-activates a manager whose `ocx start` child is not a
-      // process descendant and cannot join this lease; held through its serving
-      // wait, the lease makes that child die at the acquire deadline (#5760).
+      // `service repair` re-activates a manager whose `ocx start` child cannot join
+      // this lease; holding it through the serving wait kills that child at the deadline (#5760).
       io.releaseForServiceManagerFn?.();
       if (!homePolicy.check()) return false;
       const prevBake = process.env.OCX_BAKE_PORT;
@@ -1230,9 +1233,8 @@ async function restartAfterUpdate(
       if (!homePolicy.check()) return false;
       if (serviceOk && homePolicy.serviceAllowed) {
         // Registration state cannot distinguish a serving supervisor from one that
-        // registered and bound nothing — `launchctl list` reports both, `schtasks`
-        // reports a task whose child exited immediately, a flapping supervisor can
-        // satisfy one probe — so ask the port before skipping the fallback.
+        // registered and bound nothing — `launchctl list`/`schtasks` report both, and
+        // a flapping supervisor can satisfy one probe — so ask the port first.
         const viable = (io.serviceViableFn ?? isServiceViable)();
         if (viable) {
           if (await serviceRestartServed(job, port, hostname, io)) return;
@@ -1269,7 +1271,6 @@ async function restartAfterUpdate(
     return false;
   }
   if (!homePolicy.check()) return false;
-
   const pid = (io.readPidFn ?? readPid)();
   if (pid) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
@@ -1284,7 +1285,7 @@ async function restartAfterUpdate(
   // Reclaim before the pinned start: a busy old socket used to hop ports or fail health.
   const directAllow = reclaimKillAllowlist();
   const freed = await waitFn(port, hostname, reclaimOptsFor(directAllow));
-  if (!freed && !homePolicy.check()) return false;
+  if (!freed && !reclaimGate()) return false;
   if (!freed) {
     const liveHolders = listPids(port).filter(pid => pid !== process.pid && aliveFn(pid));
     updateJob(
@@ -1297,8 +1298,7 @@ async function restartAfterUpdate(
       updateJob(job, {}, `Live holder(s) remain on port ${port}; not starting on another port. Retry 'ocx start --port ${port}'.`);
       return fallback;
     }
-    // Dead PIDs can still own LISTEN rows. SetTcpEntry needs elevation (rc 317 on a
-    // normal update worker), so poll until netstat is empty and the start runtime can bind.
+    // Dead PIDs can still own LISTEN rows (SetTcpEntry needs elevation); poll netstat until bindable.
     updateJob(
       job,
       {},

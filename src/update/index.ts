@@ -997,6 +997,13 @@ export async function runUpdate(): Promise<void> {
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
       if (!homePolicy.check()) return 1;
+      // Latched reclaim authority: once a mid-wait probe denies, the latch stays
+      // closed — a transient re-match must not reopen kill/drop or the busy-port path.
+      let reclaimDenied = false;
+      const reclaimGate = () => {
+        try { reclaimDenied ||= !homePolicy.check(); } catch { reclaimDenied = true; }
+        return !reclaimDenied;
+      };
       const freed = await reclaimListenPort(capturedListen.port, capturedListen.hostname, {
         timeoutMs: 30_000,
         intervalMs: 100,
@@ -1004,9 +1011,9 @@ export async function runUpdate(): Promise<void> {
         killOcxHolders: capturedListen.oldPid != null,
         onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
         // The wait's internal awaits can span a home change; gate each kill/drop.
-        mayMutateFn: () => homePolicy.check(),
+        mayMutateFn: reclaimGate,
       });
-      if (!freed && !homePolicy.check()) return 1; // a denied reclaim already refused
+      if (!freed && !reclaimGate()) return 1; // a latched denial already refused
       if (!freed) {
         console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }

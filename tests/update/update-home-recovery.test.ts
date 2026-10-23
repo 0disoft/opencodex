@@ -5,9 +5,11 @@ import { createUpdateServiceHomePolicy, type UpdateServiceHomeAuthority } from "
 import { planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
 
 const source = readFileSync(repoPath("src/update/index.ts"), "utf8");
-function extracted(start: string, end: string, result: string) {
-  const from = source.indexOf(start), to = source.indexOf(end, from);
-  expect(from).toBeGreaterThan(0); expect(to).toBeGreaterThan(from);
+function extracted(start: string, end: string, result: string, afterStart = false) {
+  const marker = source.indexOf(start);
+  expect(marker).toBeGreaterThan(0);
+  const from = marker + (afterStart ? start.length : 0), to = source.indexOf(end, from);
+  expect(to).toBeGreaterThan(from);
   const code = new Bun.Transpiler({ loader: "ts" }).transformSync(`async function run() {
     ${source.slice(from, to)}
     return ${result};
@@ -176,4 +178,65 @@ test("an installed shim is repaired inside the same guarded block before the tra
     ["/verified/launcher", "codex-shim", "install"],
     ["/verified/launcher", "tray", "install"],
   ]);
+});
+
+// The CLI's reclaim wait gets its own latched gate: a mid-wait denial must stay
+// recorded even if the registration re-matches before the wait returns false.
+const reclaimLatchSlice = extracted(
+  '      const { reclaimListenPort } = await import("../server/port-reclaim");',
+  "      // \x60service repair\x60 re-activates",
+  '"continued"',
+  true,
+);
+
+test("a latched reclaim denial outranks a transient re-match before the wait ends", async () => {
+  const warnings: string[] = [];
+  let home: "same" | "foreign" = "same";
+  let deniedInWait = false;
+  const result = await reclaimLatchSlice({
+    capturedListen: { port: 12345, hostname: "127.0.0.1", oldPid: 4242 },
+    homePolicy: { check: () => home === "same" },
+    reclaimListenPort: async (_port: number, _host: string, opts: { mayMutateFn?: () => boolean }) => {
+      home = "foreign";
+      deniedInWait = opts?.mayMutateFn?.() === false;
+      home = "same"; // a transient re-match must not reopen the recorded denial
+      return false;
+    },
+    console: { warn: (line: string) => warnings.push(line) },
+  });
+  expect(result).toBe(1);
+  expect(deniedInWait).toBe(true);
+  expect(warnings.some(line => line.includes("still busy"))).toBe(false);
+});
+
+test("an ordinary reclaim timeout under stable authority still warns and continues", async () => {
+  const warnings: string[] = [];
+  const result = await reclaimLatchSlice({
+    capturedListen: { port: 12345, hostname: "127.0.0.1", oldPid: null },
+    homePolicy: { check: () => true },
+    reclaimListenPort: async () => false,
+    console: { warn: (line: string) => warnings.push(line) },
+  });
+  expect(result).toBe("continued");
+  expect(warnings.some(line => line.includes("still busy"))).toBe(true);
+});
+
+test("a throwing reclaim authority gate stays denied after the probe recovers", async () => {
+  const warnings: string[] = [];
+  let throwProbe = false, deniedInWait = false;
+  const result = await reclaimLatchSlice({
+    capturedListen: { port: 12345, hostname: "127.0.0.1", oldPid: 4242 },
+    homePolicy: { check: () => { if (throwProbe) throw new Error("fixture authority unavailable"); return true; } },
+    reclaimListenPort: async (_port: number, _host: string, opts: { mayMutateFn?: () => boolean }) => {
+      throwProbe = true;
+      try { deniedInWait = opts?.mayMutateFn?.() === false; }
+      catch { deniedInWait = false; }
+      throwProbe = false;
+      return false;
+    },
+    console: { warn: (line: string) => warnings.push(line) },
+  });
+  expect(result).toBe(1);
+  expect(deniedInWait).toBe(true);
+  expect(warnings.some(line => line.includes("still busy"))).toBe(false);
 });
