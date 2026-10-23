@@ -743,7 +743,7 @@
   "google-ai-studio-foreign-call-signature.test.ts": "adapters/google", "google-signature-history-roundtrip.test.ts": "adapters/google",
   "google-strict-tool-validated-mode.test.ts": "adapters/google", "google-structured-output.test.ts": "adapters/google",
   "google-tool-result-adjacency.test.ts": "adapters/google", "google-tool-schema-contract.test.ts": "adapters/google",
-  "google-tool-schema.test.ts": "adapters/google", "google-vertex-http.test.ts": "adapters/google",
+  "google-tool-schema.test.ts": "adapters/google", "google-vertex-http.test.ts": "adapters/google", "google-vertex-key-project.test.ts": "adapters/google",
   "google-vertex-stream.test.ts": "adapters/google", "google-vertex-thought-signature.test.ts": "adapters/google",
   "google-wire-compiler.test.ts": "adapters/google", "google-wire-shape.test.ts": "adapters/google",
   "gpt6-native-rows.test.ts": "codex-integration", "gpt61-sol-rows.test.ts": "codex-integration",
