@@ -483,18 +483,25 @@ describe("Codex CLI update CLI", () => {
 
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("existing config root refuses unsafe ancestry before admission or completion writes", async () => {
     const { outer, parent, configDir } = privateStoreRoot("ocx-cli-update-existing-shared-ancestor-");
-    let release: (() => void) | undefined;
+    let release!: () => void;
+    let signalEngineEntered!: () => void;
+    const engineEntered = new Promise<void>(resolve => { signalEngineEntered = resolve; });
+    const engineResult = new Promise<CodexCliApplyResult>(resolve => {
+      release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "f".repeat(32),
+        installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+        verificationPid: null, cleanupErrors: [] });
+    });
     let pending: Promise<unknown> | undefined;
     try {
       const accepted = await admitCodexCliUpdateJob({ requestId: "existing-shared-admission-001", planId: "f".repeat(32),
         confirmed: true, configDir });
-      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise(resolve => {
-        release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "f".repeat(32),
-          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
-          verificationPid: null, cleanupErrors: [] });
-      }), configDir);
-      await Promise.resolve(); // Worker admission now yields before invoking the engine.
-      if (!release) throw new Error("fixture job owner did not enter its awaited operation");
+      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => {
+        signalEngineEntered();
+        return engineResult;
+      }, configDir);
+      await Promise.race([engineEntered, pending.then(() => {
+        throw new Error("fixture job owner completed before entering its awaited operation");
+      })]);
       const ledger = join(configDir, "codex-cli-update-jobs", "jobs.json");
       const before = readFileSync(ledger);
       chmodSync(outer, 0o777);
@@ -510,7 +517,7 @@ describe("Codex CLI update CLI", () => {
       expect(readFileSync(ledger)).toEqual(before);
     } finally {
       chmodSync(outer, 0o700);
-      release?.();
+      release();
       if (pending) await pending.catch(() => undefined);
       rmSync(outer, { recursive: true });
     }
