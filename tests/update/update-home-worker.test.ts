@@ -85,6 +85,10 @@ for (const installer of ["npm", "bun"] as const) test(`worker ${installer} insta
     expect(events).toEqual(["update"]);
     const job = readUpdateJob(`unknown-${installer}`);
     expect(job).toMatchObject({ status: "succeeded", restarted: false });
+    // The persisted command must survive renderSafeCommand: bare node name plus the launcher
+    // path placeholder, like the ordinary npm/pnpm worker display — never an ocx literal that
+    // would be withheld as an unrecognized shape.
+    expect(job?.command).toBe("node <path> update --tag latest --update-package-only");
     expect(JSON.stringify(job?.log)).toContain("ownership could not be verified");
     expect(JSON.stringify(job?.log)).toContain("Restart the proxy manually");
   } finally { box.remove(); }

@@ -35,7 +35,10 @@ export function prepareWorkerUpdateHome(command: { bin: string; args: string[]; 
     // The package-only protocol promises this restrictive flag is honored by both Node and Bun updaters.
     command.bin = node;
     command.args = [launcher, "update", "--tag", channel, "--update-package-only"];
-    command.display = `ocx update --tag ${channel} --update-package-only`;
+    // Persist the already-sanitized shape renderSafeCommand produces: a raw launcher path
+    // with spaces would still split on \s and be withheld, and `node.exe` is not a recognized
+    // tool token either. `command.bin`/`command.args` keep the real spawn target unchanged.
+    command.display = `node <path> update --tag ${channel} --update-package-only`;
   }
   if (delegated) {
     // Pin the verified baseline: without it the child inspects fresh and an unknown or

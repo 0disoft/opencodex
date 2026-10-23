@@ -589,6 +589,10 @@ describe("GUI update execution decisions", () => {
     let now = 0;
     await runGuiUpdateWorker("pnpm-active-launcher", "latest", true, {
       launcherSupportsUpdateHomeFn: () => true,
+      // Pin the worker's home policy the way the restart IO already does: without this the
+      // real inspector answers foreign on any host with a registered service and the job
+      // fails before the restart path this test measures.
+      serviceHomeAuthorityFn: () => ({ kind: "absent" }),
       checkForUpdateFn: () => ({
         currentVersion: "2.7.40",
         latestVersion: "2.7.41",
