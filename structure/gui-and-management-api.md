@@ -431,7 +431,7 @@ routes to its Home, serves its own read-only `GET /api/link/status` ([Remote Lin
 and relays allowlisted management reads to the Home under `/api/machine/hub-relay/api/*` for a Child dashboard session
 ([Remote Link](remote-link.md#child-management-relay-and-home-codex-settings)). Every other `/api/*` and `/v1/*` path is
 refused before dispatch with a JSON 404 naming the method and path. There is no second management port on such a machine:
-management rides the same listener a standalone or hub install runs, so a connected client has no mutating `/api/*` surface.
+management rides the same listener a standalone or hub install runs, so a connected client has no mutating `/api/*` surface. In link mode its `/readyz` also says whether the link can carry a request right now ([Remote Link](remote-link.md)); its `/healthz` does not.
 
 The discriminator is `role` on `/healthz` and `/readyz`. The machine listener reports
 `role: "client"`; the standalone and hub server omit the field. `src/server/proxy-liveness.ts` parses
