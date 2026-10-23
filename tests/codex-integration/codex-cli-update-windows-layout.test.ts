@@ -72,6 +72,8 @@ describe("independent Windows x64 artifact layout", () => {
     expect(matchesWindowsCodexCliLayout(layout, [...layout.files].reverse())).toBe(true);
   });
   test("three exact npm shim expectations match independently captured cmd-shim 8 output", async () => {
+    // Offline byte-contract regression only. The fixture records the separately verified
+    // registry artifact, raw source hashes and actual exported-function generation receipt.
     const capture = JSON.parse(readFileSync(fixturePath("codex-windows-npm-shims.json"), "utf8"));
     const layout = await verify(fixture());
     expect(capture.source).toContain("cmd-shim@8.0.0");

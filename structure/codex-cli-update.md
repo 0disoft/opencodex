@@ -104,8 +104,11 @@ The full native member still streams into its digest; at most 4 KiB from that sa
 for the AMD64 PE32+ header check. This does not prove a complete valid image, signature or execution.
 Native members remain unbuffered and Windows does not use POSIX executable-bit admission.
 The exact codex/codex.cmd/codex.ps1 size/hash expectations model npm cmd-shim 8.0.0's node-shebang
-output; independent captured output is in tests/fixtures/codex-windows-npm-shims.json. Other shim
-grammars remain unsupported. All archive auxiliary files enter the expected set and digest, and
+output; tests/fixtures/codex-windows-npm-shims.json records the official npm tarball URL/integrity,
+raw archive source-file hashes and actual exported-function generation with intercepted filesystem
+calls. All three generated strings matched the retained bytes. No npm installation or lifecycle
+script ran; the offline fixture test checks byte consistency, not registry provenance afresh.
+Other shim grammars remain unsupported. All archive auxiliary files enter the expected set and digest, and
 readback comparison requires the complete set. A future consumer must separately prove live held
 file identities, package lookup, selected Node/shim and write authority; a matching DTO grants none.
 Coverage: `tests/codex-integration/codex-cli-update-windows-layout.test.ts` uses only synthetic
