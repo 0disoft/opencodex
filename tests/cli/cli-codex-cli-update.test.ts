@@ -589,16 +589,24 @@ describe("Codex CLI update CLI", () => {
 
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a new owner reports a live owner's job unknown; the original generation can finish without stale overwrite", async () => {
     const { outer, configDir } = privateStoreRoot("ocx-cli-update-restart-test-");
-    let release: () => void = () => {};
+    let release!: () => void;
+    let signalEngineEntered!: () => void;
+    const engineEntered = new Promise<void>(resolve => { signalEngineEntered = resolve; });
+    const engineResult = new Promise<CodexCliApplyResult>(resolve => {
+      release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "c".repeat(32),
+        installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+        verificationPid: null, cleanupErrors: [] });
+    });
     let pending: Promise<unknown> | undefined;
     try {
       const accepted = await admitCodexCliUpdateJob({ requestId: "restart-key-00001", planId: "c".repeat(32), confirmed: true, configDir });
-      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise(resolve => {
-        release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "c".repeat(32),
-          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
-          verificationPid: null, cleanupErrors: [] });
-      }), configDir);
-      await Promise.resolve();
+      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => {
+        signalEngineEntered();
+        return engineResult;
+      }, configDir);
+      await Promise.race([engineEntered, pending.then(() => {
+        throw new Error("fixture job owner completed before entering its awaited operation");
+      })]);
       expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
