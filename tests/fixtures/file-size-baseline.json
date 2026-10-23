@@ -19,7 +19,6 @@
     ".github/scripts/issue-quality.test.cjs": 2143,
     "gui/src/pages/Models.tsx": 2792,
     "gui/src/styles.css": 2958,
-    "scripts/test-layout/layout.json": 2000,
     "src/adapters/openai-chat.ts": 822,
     "src/adapters/openai-responses.ts": 6,
     "src/bridge.ts": 7,

@@ -319,11 +319,15 @@ async function defaultWindowsOwnerAclAsyncRunner(
   } catch {
     return { success: false, timedOut: false, stdout: new Uint8Array() };
   }
-  // No reap wait: the post-kill wait exists for handle-bearing children whose open
-  // handles gate a later removal (the icacls hardening case). This read-only lookup
-  // holds no such path, and waiting for a child that survived kill() would turn one
-  // transient stall into an unbounded caller stall; the principal-lookup runner in
-  // windows-user-principal.ts opts out for the same reason.
+  // No post-kill reap wait: that wait exists for children whose still-open handles
+  // gate a later removal (the icacls hardening case). This lookup holds no path it
+  // must release for the caller's own writes, but its transient Get-Acl handle can
+  // touch the verified owner, lock or ledger files, so abandoning a stalled child
+  // is not free: while it lingers it can refuse a markDelete and leave the lock
+  // busy until the kernel reaps it. That residual availability cost beats an
+  // unbounded caller stall — the verdict stays timedOut, the late result is never
+  // read, and the runner fails closed. windows-user-principal.ts opts out the
+  // same way for its read-only lookup.
   const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs, 0);
   const stdout = !timedOut && proc.stdout
     ? await new Response(proc.stdout).text().catch(() => "")
