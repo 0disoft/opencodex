@@ -131,6 +131,29 @@ function readStore(configDir?: string): Store {
     return value;
   } finally { if (fd !== undefined) closeSync(fd); }
 }
+function rollbackInitializingLock(p: ReturnType<typeof paths>, lockIdentity: { dev: number; ino: number }, ownerIdentity?: { dev: number; ino: number }) {
+  try {
+    const ownsDirectory = () => {
+      const stat = lstatSync(p.lock);
+      return stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === lockIdentity.dev && stat.ino === lockIdentity.ino
+        && stat.uid === process.geteuid?.() && (stat.mode & 0o077) === 0 && realpathSync.native(p.lock) === p.lock;
+    };
+    if (!ownsDirectory()) return;
+    if (ownerIdentity) {
+      const owner = join(p.lock, "owner.json");
+      const fd = openSync(owner, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = fstatSync(fd), lexical = lstatSync(owner);
+        if (!stat.isFile() || stat.uid !== process.geteuid?.() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0
+          || stat.dev !== ownerIdentity.dev || stat.ino !== ownerIdentity.ino || lexical.isSymbolicLink()
+          || lexical.dev !== stat.dev || lexical.ino !== stat.ino || !ownsDirectory()) return;
+      } finally { closeSync(fd); }
+      unlinkSync(owner);
+    }
+    // This call created the directory. Never remove a replacement or nonempty lock.
+    if (ownsDirectory()) rmdirSync(p.lock);
+  } catch { /* Unprovable initialization ownership stays fail-closed. */ }
+}
 function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof paths>) => T, createConfigRoot = false): T {
   const p = prepare(configDir, true, createConfigRoot);
   let lockIdentity: { dev: number; ino: number } | undefined;
@@ -147,8 +170,14 @@ function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof pa
     if (!lockStat.isDirectory() || lockStat.isSymbolicLink() || lockStat.uid !== process.geteuid?.()
       || (lockStat.mode & 0o077) !== 0 || realpathSync.native(p.lock) !== p.lock) throw new Error("unsafe_store");
     lockIdentity = { dev: lockStat.dev, ino: lockStat.ino };
-    const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { ownerIdentity = fstatSync(fd); writeFileSync(fd, record); fsyncSync(fd); } finally { closeSync(fd); }
+    try {
+      const fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try { ownerIdentity = fstatSync(fd); writeFileSync(fd, record); fsyncSync(fd); } finally { closeSync(fd); }
+    } catch (error) {
+      rollbackInitializingLock(p, lockIdentity, ownerIdentity);
+      lockIdentity = undefined;
+      throw error;
+    }
     return fn(p);
   } finally {
     if (lockIdentity && ownerIdentity) {

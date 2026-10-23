@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { handleCodexCliUpdateCommand, parseCodexCliUpdateArgs } from "../../src/cli/codex-cli-update";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, projectCodexCliUpdateJobLifecycle, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
+import * as updateJobs from "../../src/codex/cli-update-job";
 import { CodexCliJobStoreBusyError, CodexCliJobResultPersistenceError, normalizeCodexCliJobResult,
   retryCodexCliJobStoreOperation, runCodexCliUpdateJobWork } from "../../src/codex/cli-update-job-execution";
 import type { CodexCliApplyResult } from "../../src/codex/cli-update-apply";
@@ -115,6 +116,82 @@ describe("Codex CLI job persistence failures", () => {
     installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
     verificationPid: null, cleanupErrors: [] };
   const terminal = { jobId: randomUUID(), status: "applied", outcome: "applied", reason: "verified_target" } as CodexCliUpdateJobDto;
+
+  test.each(["applied", "refused", "ambiguous", "not_applied", "queued", "running"] as const)("apply exit code reflects %s, including JSON and pending duplicate jobs", async status => {
+    const job = { ...terminal, status, outcome: status === "queued" || status === "running" ? null : status,
+      ownerState: status === "queued" || status === "running" ? "active" : "finished" } as CodexCliUpdateJobDto;
+    const admission = spyOn(updateJobs, "admitCodexCliUpdateJob");
+    const worker = spyOn(updateJobs, "runCodexCliUpdateJob").mockImplementation(async (_id, _generation, run) => { await run(); return job; });
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    let runs = 0;
+    try {
+      const kinds = status === "queued" || status === "running" ? ["duplicate"] as const : ["accepted", "duplicate"] as const;
+      for (const kind of kinds) {
+        admission.mockReturnValue({ kind, job, generation: randomUUID() }); runs = 0; worker.mockClear();
+        for (const json of [false, true]) {
+          log.mockClear();
+          expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", result.planId, "--yes", ...(json ? ["--json"] : [])],
+            { applyUpdate: async () => { runs++; return result; } })).toBe(status === "applied" ? 0 : 1);
+          expect(log).toHaveBeenCalled();
+          if (json) expect(JSON.parse(String(log.mock.calls[0]![0]))).toMatchObject({ jobId: job.jobId, status, outcome: job.outcome });
+        }
+        expect(runs).toBe(kind === "accepted" ? 2 : 0);
+        expect(worker).toHaveBeenCalledTimes(kind === "accepted" ? 2 : 0);
+      }
+    } finally { log.mockRestore(); admission.mockRestore(); worker.mockRestore(); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["open", "partial-write"] as const)("owned lock initialization %s failure rolls back and permits later admission", failure => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-init-");
+    const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");
+    const nativeOpen = fs.openSync, nativeWrite = fs.writeFileSync;
+    let ownerFd: number | undefined;
+    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      if (String(args[0]) === owner && failure === "open") throw Object.assign(new Error("injected owner open"), { code: "ENOSPC" });
+      const fd = nativeOpen(...args); if (String(args[0]) === owner) ownerFd = fd; return fd;
+    });
+    const write = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (args[0] === ownerFd && failure === "partial-write") {
+        nativeWrite(ownerFd!, "{"); throw Object.assign(new Error("injected partial owner write"), { code: "ENOSPC" });
+      }
+      return nativeWrite(...args);
+    });
+    try {
+      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir })).toThrow();
+      expect(existsSync(lock)).toBe(false);
+      open.mockRestore(); write.mockRestore();
+      expect(admitCodexCliUpdateJob({ requestId: "initializer-fault-01", planId: result.planId, confirmed: true, configDir }).kind).toBe("accepted");
+      expect(existsSync(lock)).toBe(false);
+    } finally { open.mockRestore(); write.mockRestore(); rmSync(outer, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined).each(["directory", "owner-file"] as const)("initialization rollback refuses a replaced %s identity", replaced => {
+    const { outer, configDir } = privateStoreRoot("ocx-cli-update-lock-replaced-");
+    const lock = join(configDir, "codex-cli-update-jobs", "admission.lock"), owner = join(lock, "owner.json");
+    const nativeOpen = fs.openSync, nativeWrite = fs.writeFileSync;
+    let ownerFd: number | undefined;
+    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof fs.openSync>) => {
+      if (String(args[0]) === owner && replaced === "directory") {
+        fs.renameSync(lock, `${lock}-original`); mkdirSync(lock, { mode: 0o700 }); nativeWrite(owner, "replacement");
+        throw Object.assign(new Error("injected owner open after replacement"), { code: "ENOSPC" });
+      }
+      const fd = nativeOpen(...args); if (String(args[0]) === owner) ownerFd = fd; return fd;
+    });
+    const write = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (args[0] === ownerFd && replaced === "owner-file") {
+        nativeWrite(ownerFd!, "{"); fs.renameSync(owner, `${owner}-original`); nativeWrite(owner, "replacement");
+        throw Object.assign(new Error("injected owner write after replacement"), { code: "ENOSPC" });
+      }
+      return nativeWrite(...args);
+    });
+    try {
+      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-01", planId: result.planId, confirmed: true, configDir })).toThrow();
+      open.mockRestore(); write.mockRestore();
+      expect(readFileSync(owner, "utf8")).toBe("replacement");
+      expect(existsSync(replaced === "directory" ? `${lock}-original` : `${owner}-original`)).toBe(true);
+      expect(() => admitCodexCliUpdateJob({ requestId: "initializer-replaced-02", planId: result.planId, confirmed: true, configDir })).toThrow("job_store_busy");
+    } finally { open.mockRestore(); write.mockRestore(); rmSync(outer, { recursive: true }); }
+  });
 
   test("a save failure retries the actual applied result without rerunning the engine", async () => {
     const saved: CodexCliApplyResult[] = []; let runs = 0, released = 0;

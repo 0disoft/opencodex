@@ -336,6 +336,7 @@ export async function handleCodexCliUpdateCommand(
       if (!job) { unavailableJob(); return; }
       printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
         `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);
+      resultCode = job.status === "applied" ? 0 : 1;
     }
   });
   return code || resultCode;

@@ -419,6 +419,7 @@ Drives no management route.
 
 - Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a trusted loopback GUI session.
 - Admission is stored under the protected current-user config root before the installer can run.
+- Exit 0 requires an applied job; refused, not_applied, ambiguous and pending duplicate jobs exit 1, including with --json.
 - Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused.
 
 ### `ocx system codex-cli-update status`

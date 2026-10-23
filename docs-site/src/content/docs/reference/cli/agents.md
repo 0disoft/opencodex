@@ -1204,7 +1204,8 @@ offline with lifecycle scripts disabled, and checks installed files and the sele
 Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
 Windows apply, shim repair, native apps and other installation managers remain unsupported.
 
-Apply returns a job with `applied`, `not_applied`, `refused` or `ambiguous` outcome. Status reads the
+Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
+exit 1, including with `--json`. Status reads the
 same private job record without a running proxy or GUI token. Reuse the same optional request ID after
 a lost response: the same key and plan return the original job; a changed plan with that key refuses.
 The private ledger retains up to 64 jobs, including finished jobs, without automatic pruning. At that

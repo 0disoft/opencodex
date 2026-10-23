@@ -122,3 +122,6 @@ Transient completion-write failures have the same bounded retry budget. Permanen
 Unknown result/cleanup codes are normalized to fixed-code uncertainty before writing, so they cannot poison later reads.
 Unsupported prefixes and unavailable lease storage are distinct from a held installation lease.
 Missing/unreadable CLI job status has a structured `job_unavailable` JSON error and a nonzero exit.
+CLI apply exits 0 only for an `applied` job; other outcomes and pending duplicates exit 1, including JSON output.
+Failed lock initialization rolls back only the fresh directory and partial owner file whose identities this call proves;
+replacement identities or unprovable ownership remain fail-closed. Fully initialized locks retain token-fenced cleanup.
