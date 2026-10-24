@@ -132,7 +132,7 @@ native("a Windows plan id with applicable=false cannot enter a management apply 
     const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
       acquireLease: () => { leaseAttempts += 1; return null; },
       install: async () => { installAttempts += 1; return { terminal: true, exitCode: 0 }; } });
-    expect(apply).toMatchObject({ outcome: "refused", reason: "windows_inspection_deferred" });
+    expect(apply).toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
     expect(leaseAttempts).toBe(0);
     expect(installAttempts).toBe(0);
   } finally {
