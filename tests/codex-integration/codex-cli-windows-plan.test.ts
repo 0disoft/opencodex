@@ -6,9 +6,10 @@ import { dirname, join, parse } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
+import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
-import { setWindowsInstallationFilesOpenedForTests } from "../../src/codex/windows-installation-files";
+import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
 import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
 import { spawnTestChild } from "../helpers/spawn-test-child";
@@ -21,6 +22,7 @@ const roots: string[] = [];
 afterEach(async () => {
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
+  setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) await removeTreeAfterBackgroundWork(root);
 });
 // npm's independent cmd-shim fixture; no candidate is ever executed.
@@ -64,6 +66,33 @@ native("production Windows inspector binds selected npm shim, package, backing a
   expect((await inspectCodexCliInstall(f.deps)).installContentDigest).toBe(report.installContentDigest);
   expect(JSON.stringify(report)).not.toContain(f.root);
   expect([...f.files].map(([path]) => readFileSync(path))).toEqual(before);
+});
+
+native("a bare Windows check honors the bounded content-observation opt-in", async () => {
+  const f = fixture();
+  // Production check context: selectionAttested without observeInstallContent.
+  const deps = { env: f.deps.env, configDir: f.deps.configDir,
+    selectionAttested: f.deps.selectionAttested, arch: f.deps.arch };
+  const reads: { path: string; bytes: number }[] = [];
+  setWindowsInstallationFilesReadForTests((path, bytes) => reads.push({ path, bytes }));
+  const report = await inspectCodexCliInstall(deps);
+  expect(report).toMatchObject({ managed: true, selectionAttested: true, provenance: "npm-global",
+    reason: "managed_npm_global", packageVersion: "1.2.3", installContentDigest: null });
+  expect(report.evidence).not.toContain("install_content_digest");
+  // The same files stay opened, held and identity-bound; only the content streams stop.
+  const bytesFor = (suffix: string) => reads.filter(read => read.path.endsWith(suffix)).map(read => read.bytes);
+  expect(bytesFor("codex.exe")).toEqual([0]);
+  for (const suffix of ["codex.js", "npm-cli.js"]) {
+    const fileReads = bytesFor(suffix);
+    expect(fileReads.length).toBeGreaterThan(0);
+    expect(fileReads.every(bytes => bytes === 0)).toBe(true);
+  }
+  const nodeReads = bytesFor("node.exe");
+  expect(nodeReads.length).toBeGreaterThan(0);
+  expect(nodeReads.filter(bytes => bytes > 0)).toEqual([128]);
+  // Only bounded ownership reads remain: nothing exceeds the 4 KiB Node header bound.
+  expect(Math.max(0, ...reads.map(read => read.bytes))).toBeLessThanOrEqual(4096);
+  expect(reads.some(read => read.path.endsWith("codex.cmd") && read.bytes > 0)).toBe(true);
 });
 
 native("a production plan is deterministic while Windows apply stays explicitly disabled", async () => {
@@ -172,6 +201,41 @@ native("npm toolchain drift after inspection refuses metadata without executing 
     }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });
     expect(queries).toBe(0); expect(plan.refusal).toBe("target_unresolved");
   }
+});
+
+native("the observed toolchain denies replacement until an asynchronous resolver settles", async () => {
+  const f = fixture(); const report = await inspectCodexCliInstall(f.deps);
+  expect(report.managed).toBe(true);
+  const node = join(f.toolchainPrefix, "node.exe");
+  const npmCli = join(f.npmRoot, "bin", "npm-cli.js");
+  const moved = f.prefix + "-moved";
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let settled = false;
+  const held = withWindowsCodexCliPlanToolchain(report, async () => {
+    enter(); await gate; return "resolved";
+  }).then(value => { settled = true; return value; });
+  let result: string | null;
+  try {
+    await Promise.race([entered, held.then(() => { throw new Error("toolchain resolver was not entered"); })]);
+    // A sync finalize returning an unawaited Promise can close its handles in a
+    // microtask; cross an event-loop turn before checking the still-pending gate.
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    expect(settled).toBe(false);
+    for (const path of [node, npmCli]) expect(() => writeFileSync(path, "replacement")).toThrow();
+    expect(() => renameSync(f.prefix, moved)).toThrow();
+  } finally {
+    release(); result = await held;
+  }
+  expect(result).toBe("resolved");
+  expect(settled).toBe(true);
+  for (const path of [node, npmCli]) {
+    writeFileSync(path, "replacement");
+    expect(readFileSync(path, "utf8")).toBe("replacement");
+  }
+  renameSync(f.prefix, moved);
+  expect(readFileSync(join(moved, "node_modules", "npm", "bin", "npm-cli.js"), "utf8")).toBe("replacement");
 });
 
 native("a separate PATH Node/npm toolchain binds for read-only planning under the launcher arch anchor", async () => {

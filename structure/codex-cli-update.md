@@ -41,7 +41,7 @@ observes linkage at that boundary and does not prevent later symlink mutation. A
 no bound content is refused install_content_unverified before any registry query. The digest is
 observation only — it carries no execution guarantee — so the apply phase re-observes
 rather than rely on it. The observation is opt-in: the plan path requests it because the planId
-binds it, while a bare POSIX check leaves the digest null rather than paying the bounded read.
+binds it, while a bare check leaves the digest null rather than paying the bounded read.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows supports the restricted handle-bound plan predicate below; other Windows layouts remain deferred.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
@@ -49,8 +49,14 @@ provider/engine search variables; proxy settings and `NODE_EXTRA_CA_CERTS` remai
 Ambient NODE_COMPILE_CACHE is replaced with an owned path inside the isolation directory because
 npm's own enableCompileCache() otherwise recreates a default cache outside that directory.
 Distinct npm config files, npm/Node caches and logs stay under the owned temporary root with best-effort
-cleanup; a cleanup error does not replace the computed plan/refusal. The POSIX update
-scan includes all readable users by default, retaining an explicitly injected UID scope.
+cleanup; a cleanup error does not replace the computed plan/refusal. Registry metadata
+and the request-path process-table scan wait off the server event loop: the bounded npm
+children and the darwin/Windows enumerations resolve asynchronously while keeping the
+per-query deadline, bounded output, termination and status-null refusal lanes of the
+synchronous contract, so a stalled registry cannot park unrelated proxy requests or
+streaming; the apply re-scan uses the same async scan. Linux /proc observation remains
+synchronous underneath as bounded filesystem reads rather than a child-process wait.
+The POSIX update scan includes all readable users by default, retaining an explicitly injected UID scope.
 Linux per-process `status`/`cmdline` read failures invalidate a complete observation except for `ENOENT`
 (a process that disappeared); incomplete observation refuses with `blocked_process_state_unknown`;
 the restart/kill path skips unreadable entries while retaining independently verified same-user app-server targets. This plan neither installs a runtime nor signals
@@ -79,6 +85,10 @@ to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
 `MAX_NATIVE_BACKING_BYTES` as POSIX, defined in `src/codex/cli-installation-limits.ts`.
 The native reader bounds aggregate requests to that backing plus 128 MiB Node
 and twelve 1 MiB text requests; hash-only bytes are never buffered whole.
+Only the opt-in content observation streams the entrypoint, npm CLI, Node and native bytes. The
+plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare check holds the
+same files — Node and native included — open and identity-checked metadata-only, with zero content
+bytes read and a null `installContentDigest`.
 
 PATH-only candidate selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
@@ -225,7 +235,9 @@ precedes explicit stream destruction, and verification waits for the close event
 pipeline settlement alone is not close completion and the caller never closes that raw fd again.
 
 After artifact preparation, selection/content, the approved metadata and active/unknown process blockers
-are re-observed. npm receives only two verified local tarball specs and an explicit canonical prefix,
+are re-observed. The awaited process scan is the last yield before install; in the same event-loop turn
+as the spawn a synchronous guard re-checks the signal, prefix identity, the byte-level preimage and the
+launcher's live canonical selection. npm receives only two verified local tarball specs and an explicit canonical prefix,
 with offline mode, optional dependencies omitted, lifecycle scripts disabled and no audit/fund/lockfile
 side effects. Main manifests are not rewritten to make installation succeed. Cancelled preparation
 refuses; cancellation during an admitted npm child waits for its close rather than killing it. The lease

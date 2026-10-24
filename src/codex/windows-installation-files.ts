@@ -67,6 +67,11 @@ let openedForTests: (() => void) | undefined;
 export function setWindowsInstallationFilesOpenedForTests(callback?: () => void): void {
   openedForTests = callback;
 }
+let readForTests: ((path: string, bytesRead: number) => void) | undefined;
+/** Runs once per request with its streamed content bytes (0 for metadata-only), for read accounting. */
+export function setWindowsInstallationFilesReadForTests(callback?: (path: string, bytesRead: number) => void): void {
+  readForTests = callback;
+}
 
 function components(path: string): { drive: string; names: string[] } | null {
   if (typeof path !== "string" || path.length > 8192 || !/^[A-Za-z]:[\\/]/.test(path)) return null;
@@ -216,7 +221,10 @@ export async function inspectWindowsInstallationFiles(
     const observed = files.map(({ request, handle, identity }) => {
       const hash = createHash("sha256");
       if (request.installationDigest) hash.update("codex-cli-observed-file-v1\0");
-      if (request.metadataOnly) return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };
+      if (request.metadataOnly) {
+        readForTests?.(request.path, 0);
+        return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };
+      }
       const truncated = Boolean(request.prefixOnly) && !request.hashOnly && identity.size > request.maxBytes;
       const readLimit = truncated ? request.maxBytes : identity.size;
       const bytes = request.hashOnly ? new Uint8Array() : new Uint8Array(readLimit);
@@ -237,6 +245,7 @@ export async function inspectWindowsInstallationFiles(
           throw new InspectionRefusal("identity-changed");
         }
       }
+      readForTests?.(request.path, offset);
       return { path: request.path, identity, bytes, digest: truncated ? "" : hash.digest("hex") };
     });
     if (finalize && !await finalize(observed)) throw new InspectionRefusal("identity-changed");
