@@ -158,7 +158,7 @@ when present, otherwise the captured-PATH pair anchored to the launcher architec
 in-prefix platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred
 or unmanaged. A `managed` Windows result classifies the observed installation layout only: the bound Node/npm
 is the updater's read-only metadata toolchain, never a claim about which interpreter a later `codex.cmd`
-invocation resolves, and planning stays read-only with apply disabled.
+invocation resolves, while inspection and planning stay read-only; applicability and confirmed apply are decided separately.
 The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
@@ -175,7 +175,7 @@ See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 For a reviewed applicable npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
 performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
 reads its result; use a stable `--request-id` for a lost-response retry. See
-[confirmation and job states](/reference/cli/agents/#confirmed-posix-codex-cli-apply-and-job-status).
+[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 

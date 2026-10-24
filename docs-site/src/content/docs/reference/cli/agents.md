@@ -1168,7 +1168,7 @@ can be managed when held local handles bind its package, a held-bound Node/npm t
 when present, otherwise the captured-PATH pair anchored to the launcher architecture — and the first
 in-prefix platform backing. Other Windows layouts remain deferred or unmanaged. A `managed` Windows result classifies
 the observed installation layout only: the bound Node/npm is the updater's read-only metadata toolchain, never a claim
-about which interpreter a later `codex.cmd` invocation resolves, and planning stays read-only with apply disabled.
+about which interpreter a later `codex.cmd` invocation resolves, while inspection and planning stay read-only; applicability and confirmed apply are decided separately.
 Windows never consults persisted state, so a run
 with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
 the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
