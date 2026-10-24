@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { beginCodexCliSelectionParentWrite } from "./cli-update-selection-gate";
 import {
   chmodSync,
   existsSync,
@@ -1096,10 +1097,21 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
 
 export function installCodexShim(deps: RuntimePreflightDeps = {}): { installed: boolean; message: string; refused?: boolean; runnable?: boolean } {
   if (process.platform !== "win32") return installUnixOverlay(findCodexOnPath, lastCodexDiscoveryError);
-  return installCodexShimInternal({ ...deps, allowFreshInstall: true });
+  const gate = beginCodexCliSelectionParentWrite();
+  if (!gate.entered) return { installed: false, refused: true, message: "codex_cli_selection_busy" };
+  try { return installCodexShimInternal({ ...deps, allowFreshInstall: true }); }
+  finally { gate.exit(); }
 }
 
-export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
+export function autoRestoreCodexShim(options: Parameters<typeof autoRestoreWindowsCodexShim>[0]): CodexShimAutoRestoreResult {
+  if (process.platform !== "win32") return autoRestoreUnixOverlay(options);
+  const gate = beginCodexCliSelectionParentWrite();
+  if (!gate.entered) return { status: "deferred", message: "codex_cli_selection_busy" };
+  try { return autoRestoreWindowsCodexShim(options); }
+  finally { gate.exit(); }
+}
+
+function autoRestoreWindowsCodexShim(options: RuntimePreflightDeps & {
   enabled: () => boolean;
   stabilitySleep?: (ms: number) => void;
   /** Narrow deterministic seam used to hold the interprocess lock in tests. */
@@ -1109,7 +1121,6 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
   /** Narrow deterministic race seam for the guarded transaction tests. */
   beforeGuardedRefresh?: (wrapperPath: string, index: number) => void;
 }): CodexShimAutoRestoreResult {
-  if (process.platform !== "win32") return autoRestoreUnixOverlay(options);
   const stateRead = readStateResult();
   const state = stateRead.state;
   if (!state) {
@@ -1223,6 +1234,13 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
 
 export function uninstallCodexShim(): { removed: boolean; message: string } {
   if (process.platform !== "win32") return uninstallUnixCodexShim();
+  const gate = beginCodexCliSelectionParentWrite();
+  if (!gate.entered) return { removed: false, message: "codex_cli_selection_busy" };
+  try { return uninstallWindowsCodexShim(); }
+  finally { gate.exit(); }
+}
+
+function uninstallWindowsCodexShim(): { removed: boolean; message: string } {
   const state = readState();
   if (!state) return { removed: false, message: "Codex autostart shim is not installed." };
   const files = stateFiles(state);

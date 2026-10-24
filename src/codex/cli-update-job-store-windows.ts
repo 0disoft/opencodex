@@ -628,23 +628,29 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
     }
     const entries: WindowsAclEntry[] = chain.map((entry, index) => ({ path: entry.path, directory: true,
       policy: index >= prefixDepth - 2 ? "write-private" : "trusted-ancestry" }));
-    const verifyHeld = async () => {
+    let stage: { path: string; handle: bigint; identity: StoreInspection } | undefined;
+    const verifyIdentitySync = () => {
       for (const entry of chain) if (!sameIdentity(entry.inspection, inspect(ctx, entry.handle, true))) throw unsafe();
-      await verifyAcl(entries);
       if (held && (!sameIdentity(held.dirIdentity, inspect(ctx, held.dir, true))
         || !sameIdentity(held.ownerIdentity, inspect(ctx, held.owner, false))
         || !readAll(ctx, held.owner, Buffer.byteLength(held.record)).equals(Buffer.from(held.record)))) throw unsafe();
+      if (stage && !sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
+    };
+    const verifyHeld = async () => {
+      verifyIdentitySync();
+      await verifyAcl(entries);
+      verifyIdentitySync();
     };
     const verify = async () => { if (closed) throw unsafe(); await verifyHeld(); if (closed) throw unsafe(); };
     await verify();
     const lock = join(prefix, ".ocx-codex-cli-apply.lock");
     if (acquire) held = await acquireLock(ctx, { config: prefix, dir: prefix, file: "", lock,
       jobdir: prefixPin.handle });
-    let stage: { path: string; handle: bigint; identity: StoreInspection } | undefined;
     transferred = true;
     return {
       lock,
       verify,
+      verifyIdentitySync() { if (closed) throw unsafe(); verifyIdentitySync(); },
       async createStaging(): Promise<string> {
         if (closed || !held || stage) throw unsafe();
         await verify();

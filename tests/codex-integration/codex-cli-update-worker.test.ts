@@ -26,6 +26,7 @@ import { codexCliUpdateInspectionDepsFromSnapshot } from "../../src/codex/cli-up
 import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoRoot } from "../helpers/repo-root";
+import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -170,6 +171,20 @@ afterEach(async () => {
   if (firstError !== undefined) throw firstError;
 });
 describe("process-wide selection commit gate and cancellation fence", () => {
+  test("execution retention roots survive completion until every exact owner releases", () => {
+    let detached = 0;
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const first = lifetime.retain({ native: "authority-acquisition-anchor" });
+    const second = lifetime.retain({ native: "unresolved-overlapped-owner" });
+    first.release();
+    expect(detached).toBe(0);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    first.release();
+    expect(detached).toBe(0);
+    second.release(); lifetime.finish(); second.release();
+    expect(detached).toBe(1);
+  });
   test("parent write is nonblocking busy; release restores admission", async () => {
     const first = beginCodexCliSelectionParentWrite();
     expect(first.entered).toBe(true);

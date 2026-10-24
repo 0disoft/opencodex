@@ -281,7 +281,7 @@ the worker derives its own fresh selected-command evidence; the installer inspec
 WeakMap is per-realm, which is exactly why the whole job — not just its hashing — must run there.
 
 A job is one fresh Worker, one unique requestId and the parent ledger generation; no wire generation
-exists. The worker runs one message, replies and closes itself; a second message is ignored, so a stale
+exists. The worker runs one message, replies and drains; a second run is ignored, so a stale
 or duplicate delivery cannot attach new work to a dying realm. Settlement requires BOTH a valid reply
 and the worker's own close — a done payload alone is never terminal evidence because a legitimate
 result may still report installer_state_unknown or version_process_state_unknown with a retained lease
@@ -294,18 +294,26 @@ code provably ran. Ledger completion writes keep their existing bounded retry.
 
 Entry installation is limited to `Bun.isMainThread === false`; importing either entry or its
 test fixture in the main realm must not replace that realm's message handler. Bun 1.4.4 does not
-provide `self.close()`: completion removes the worker's message handler and lets referenced work
+provide `self.close()`: terminal completion removes the worker's message handler and lets referenced work
 drain naturally, without `process.exit()` or parent termination. A real Bun-subprocess regression
 keeps the worker alive after handler removal until that exact child exits. This establishes the
 referenced Bun-child path only, not arbitrary native handles or all OS descendants. Bun's close
 event marks worker termination and can precede full thread exit; it is not independent proof that
 every installer descendant or retained native owner has finished.
 
+Windows native ownership acquires an internal execution-retention token before authority acquisition.
+The token roots the acquisition anchor, then the registered Owner, across registration exceptions.
+Raw FFI handles alone are not considered Worker keepalive: unresolved process/Job/pipe or cleanup
+keeps the run-once handler installed. Only successful terminal cleanup removes the Owner and releases
+its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
+can remain resident until separately authorized recovery. A crash still loses in-memory ownership
+and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
+
 Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
 PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous
 sections, and the worker's own PREPARING-to-COMMITTED CAS immediately before the installer spawn is the
-commit decision. COMMITTED is deliberately not "cancelled" — once it lands the installer is a live
-child whose close must be observed. Because a plain AbortSignal message could not interrupt a
+irrevocable start decision, not proof of successful CreateProcess/ResumeThread. COMMITTED is not
+"cancelled" — later cancellation defers to actual child/readback evidence. A plain signal cannot interrupt a
 synchronous worker section, signal-based cancellation alone is not equivalent and is not used as the
 worker path's only channel.
 
@@ -313,7 +321,7 @@ The worker's final window is also serialized against the parent's own selection 
 process-wide gate cell. The gate covers exactly seven parent operations: `persistCodexRuntime` and
 `clearPersistedCodexRuntime` in `src/codex/runtime.ts` (busy refusal — the
 `codex_cli_selection_busy` error — before mkdir, cache invalidation or the swallowing unlink catch),
-the three shim overlay boundaries in `src/codex/shim-overlay.ts` (install, auto-restore, uninstall —
+the three public shim boundaries (`src/codex/shim-overlay.ts` on POSIX, `src/codex/shim.ts` on Windows; install, auto-restore, uninstall —
 busy in their existing failure/deferred/removed:false shapes before namespace creation, the restore
 lock and journal mutation), the remote-workspace app-server `Bun.spawn` in
 `src/remote-control/workspace-codex-runtime.ts` (busy refuses after running the same bridge/isolation
@@ -321,7 +329,13 @@ cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation remo
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
 its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
-window spans only the worker's final process scan through its installer-spawn call, and a synchronous
+POSIX window spans the final process scan through its installer-spawn call. The Windows window also
+renews full authority ACL/identity, inspector and full scoped preimage after acquisition, then performs
+the final process scan, synchronous held-identity/selection/cancellation checks, CAS and synchronous
+native Create/Assign/Resume with no intervening await. It releases immediately after start returns or
+throws, before any native wait or setup cleanup. Windows ACL/content observations can take substantial
+time; neither a short held window nor a hard I/O deadline is claimed. Acquisition's 30s deadline does
+not bound time held. A synchronous
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
 the same target must not split the exclusion; a writer on a different configDir can see a brief busy.
@@ -344,7 +358,7 @@ The async Windows ledger stays in the parent realm: CLI/HTTP await admission and
 and one generation-fenced callback dispatches the Worker. The store/Worker regressions in
 `tests/windows/windows-codex-cli-job-store.test.ts` cover stale completion refusal and an unknown
 still-live fixture Worker whose persisted child/lease state remains unknown. The production-entry
-case retains Windows apply-disabled behavior; neither case claims a successful Windows installation.
+case refuses the null proof-bound snapshot in the enabled Windows lane; neither store case claims a successful Windows installation.
 
 The ledger retains at most 64 jobs, including terminal jobs, and never prunes request IDs automatically.
 At capacity it refuses new request IDs with `store_full`; existing matching retries still return the same job.

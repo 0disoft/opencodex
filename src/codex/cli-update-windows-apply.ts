@@ -15,7 +15,7 @@ import { startWindowsCliChild, cleanupUnstartedWindowsChild, type WindowsCliChil
 
 type Authority = Awaited<ReturnType<typeof openWindowsCliApplyAuthority>>;
 type Toolchain = NonNullable<Awaited<ReturnType<typeof holdWindowsCodexCliPlanToolchain>>>;
-interface Owner { authority: Authority; staging: string; toolchain: Toolchain | null; child?: WindowsCliChild }
+interface Owner { retention?: { release(): void }; authority: Authority; staging: string; toolchain: Toolchain | null; child?: WindowsCliChild }
 // Strong owners survive an uncertain native wait and the HTTP/CLI caller returning.
 // Never collect these as ordinary cleanup, infer terminal from a PID, or start a retry.
 const retained = new Set<Owner>();
@@ -40,12 +40,14 @@ function expectedDirectories(files: readonly { relativePath: string }[], snapsho
  * The existing admission layer owns confirmed/planId and durable result persistence.
  */
 export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliApplyDeps): Promise<CodexCliApplyResult> {
+  const cancelled = () => deps.signal?.aborted === true || deps.isCancelled?.() === true;
   let owner: Owner | undefined, uncertain = false, cleanupPending = false, installerStarted = false;
+  let ownerRegistrationPending = false;
   let installedVersion: string | null = null, targetVersion: string | null = null, exitCode: number | null = null;
   let verificationPid: number | null = null, output: CodexCliApplyResult | undefined;
   const finish = (outcome: CodexCliApplyResult["outcome"], reason: string): CodexCliApplyResult => output = {
     outcome, reason, planId, installedVersion, targetVersion, installerExitCode: exitCode,
-    leaseRetained: uncertain || cleanupPending, verificationPid, cleanupErrors: cleanupPending ? ["child_cleanup_failed"] : [],
+    leaseRetained: uncertain || cleanupPending || ownerRegistrationPending, verificationPid, cleanupErrors: cleanupPending ? ["child_cleanup_failed"] : [],
   };
   const inspection = () => {
     const input = { ...deps.inspectionDeps, platform: "win32" as const, observeInstallContent: true };
@@ -53,13 +55,9 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
   };
   const inspect = () => (deps.inspect ?? inspectCodexCliInstall)(inspection());
   const plan = () => createCodexCliUpdatePlan({ ...deps, platform: "win32", inspectionDeps: inspection() });
-  const run = async (invocation: WindowsCliChildInvocation, beforeStart?: () => void): Promise<WindowsCliChildResult> => {
+  const settle = async (child: WindowsCliChild): Promise<WindowsCliChildResult> => {
     if (!owner) throw new Error("ownership_required");
-    if (owner.child) throw new Error("child_cleanup_pending");
-    await owner.authority.verify();
-    beforeStart?.();
-    uncertain = true; // Adopt every resource before even a suspended child is created.
-    const child = owner.child = (deps.startWindowsChild ?? startWindowsCliChild)(invocation);
+
     if (!child.process) {
       const cleaned = await cleanupUnstartedWindowsChild(child);
       uncertain = false; cleanupPending = !cleaned;
@@ -72,37 +70,58 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
     if (result.terminal && result.cleanupComplete) owner.child = undefined;
     return result;
   };
+  const startOwned = (invocation: WindowsCliChildInvocation): WindowsCliChild => {
+    if (!owner || owner.child) throw new Error("child_cleanup_pending");
+    uncertain = true; // A throwing start may already have created native resources.
+    return owner.child = (deps.startWindowsChild ?? startWindowsCliChild)(invocation);
+  };
+  const run = async (invocation: WindowsCliChildInvocation): Promise<WindowsCliChildResult> => {
+    if (!owner) throw new Error("ownership_required");
+    await owner.authority.verify();
+    if (!installerStarted && cancelled()) throw new Error("cancelled");
+    return settle(startOwned(invocation));
+  };
   try {
     if (!/^[0-9a-f]{32}$/.test(planId)) return finish("refused", "invalid_plan_id");
     if (process.platform !== "win32" || process.arch !== "x64") return finish("refused", "windows_inspection_deferred");
-    if (deps.signal?.aborted) return finish("refused", "cancelled");
+    if (cancelled()) return finish("refused", "cancelled");
     const first = await inspect(), evidence = windowsCodexCliPlanEvidence(first);
     installedVersion = first.packageVersion;
     if (!first.managed || !evidence || evidence.arch !== "x64") return finish("refused", "mutation_evidence_unverified");
+    if (cancelled()) return finish("refused", "cancelled");
     const initialPlan = await plan(); targetVersion = initialPlan.targetVersion;
+    if (cancelled()) return finish("refused", "cancelled");
     if (!initialPlan.applicable) return finish("refused", initialPlan.refusal ?? "plan_refused");
     if (initialPlan.planId !== planId) return finish("refused", "plan_changed");
     const artifacts = initialPlan.targetArtifacts;
     if (!artifacts || artifacts.platform !== "win32" || artifacts.arch !== "x64") return finish("refused", "target_artifacts_unverified");
+    // Root the acquisition anchor before await/Owner registration. If registration
+    // throws, the Worker token still owns any acquired authority through this anchor.
+    const anchor: { authority?: Authority; owner?: Owner } = {};
+    const retention = deps.retainExecution?.(anchor);
     let authority: Authority;
-    try { authority = await openWindowsCliApplyAuthority(evidence.prefix, true); }
-    catch (error) { return finish("refused", error instanceof Error && error.message === "job_store_busy"
+    try { authority = anchor.authority = await openWindowsCliApplyAuthority(evidence.prefix, true); }
+    catch (error) { retention?.release(); return finish("refused", error instanceof Error && error.message === "job_store_busy"
       ? "installation_busy" : "installation_prefix_unsupported"); }
-    owner = { authority, staging: win32.join(authority.lock, "stage"), toolchain: null };
+    ownerRegistrationPending = true;
+    owner = anchor.owner = { retention, authority, staging: win32.join(authority.lock, "stage"), toolchain: null };
     retained.add(owner);
+    ownerRegistrationPending = false;
     await authority.createStaging();
+    if (cancelled()) return finish("refused", "cancelled");
     owner.toolchain = await holdWindowsCodexCliPlanToolchain(first);
+    if (cancelled()) return finish("refused", "cancelled");
     if (!owner.toolchain) return finish("refused", "npm_unavailable");
     const isolation = createNpmConfigIsolation(owner.staging, deps.inspectionDeps?.env);
     // Include Windows temp/profile names: no npm or version cache may fall back to a live home.
     const env = { ...isolation.env, HOME: owner.staging, USERPROFILE: owner.staging, TEMP: owner.staging,
       TMP: owner.staging, TMPDIR: owner.staging, APPDATA: owner.staging, LOCALAPPDATA: owner.staging, CODEX_HOME: owner.staging };
-    const invoke = (args: readonly string[], policy: WindowsCliChildInvocation["policy"], beforeStart?: () => void) => run({
+    const invoke = (args: readonly string[], policy: WindowsCliChildInvocation["policy"]) => run({
       executable: evidence.node, args: [evidence.npmCli, ...npmArgs(args, isolation)], cwd: isolation.dir, env, policy,
-    }, beforeStart);
+    });
     const archives: string[] = [];
     for (const [index, artifact] of [artifacts.main, artifacts.backing].entries()) {
-      if (deps.signal?.aborted) return finish("refused", "cancelled");
+      if (cancelled()) return finish("refused", "cancelled");
       let path: string;
       if (deps.fetchArtifact) {
         path = win32.join(owner.staging, `${index}.tgz`);
@@ -117,35 +136,55 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
         if (!Array.isArray(names) || names.length !== 1 || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/.test(names[0]?.filename)) throw new Error("pack_unverified");
         path = win32.join(owner.staging, names[0].filename);
       }
+      if (cancelled()) return finish("refused", "cancelled");
       archives.push(path);
     }
     const layout = await verifyWindowsCodexCliLayout(artifacts, archives[0]!, archives[1]!);
+    if (cancelled()) return finish("refused", "cancelled");
     const original = await observeWindowsInstall(evidence.prefix);
     const fresh = await plan();
     if (!fresh.applicable) return finish("refused", fresh.refusal ?? "plan_refused");
     if (fresh.planId !== planId) return finish("refused", "plan_changed");
-    const before = await inspect(), selected = windowsCodexCliPlanEvidence(before);
-    if (!selected || JSON.stringify(selected) !== JSON.stringify(evidence)
-      || before.installContentDigest !== initialPlan.installContentDigest
-      || !sameWindowsInstall(original, await observeWindowsInstall(evidence.prefix))) return finish("refused", "installation_changed");
-    await owner.authority.verify();
-    if (deps.signal?.aborted) return finish("refused", "cancelled");
-    const beforeStart = () => {
-      if (deps.signal?.aborted) throw new Error("cancelled");
-      if (!windowsCodexCliSelectionMatches(before, inspection())) throw new Error("installation_changed");
-      const scan = (deps.scanProcesses ?? scanCodexSessionProcesses)(deps.processIo ?? {});
-      if (scan.kind !== "observed") throw new Error("blocked_process_state_unknown");
-      if (scan.processes.length) throw new Error("blocked_active_session");
-      installerStarted = true;
-    };
+    if (cancelled()) return finish("refused", "cancelled");
     const args = ["install", "-g", "--prefix", evidence.prefix, "--offline", "--ignore-scripts", "--omit=optional",
       "--no-audit", "--no-fund", "--package-lock=false", "--update-notifier=false",
       `${artifacts.main.installName}@file:${archives[0]}`, `${artifacts.backing.installName}@file:${archives[1]}`];
-    // The injectable installer seam is the existing trusted test dependency, never an HTTP input.
-    const installed = deps.install ? await (async () => {
-      await owner!.authority.verify(); beforeStart(); uncertain = true;
-      return deps.install!({ bin: evidence.node, args: [evidence.npmCli, ...npmArgs(args, isolation)], cwd: isolation.dir, env });
-    })() : await invoke(args, "installer", beforeStart);
+    const invocation: WindowsCliChildInvocation = { executable: evidence.node,
+      args: [evidence.npmCli, ...npmArgs(args, isolation)], cwd: isolation.dir, env, policy: "installer" };
+    const window = deps.commitWindow;
+    let held = false;
+    let nativeChild: WindowsCliChild | undefined;
+    let injectedInstall: Promise<{ terminal: boolean; exitCode: number | null }> | undefined;
+    try {
+      if (window) {
+        held = window.tryEnter() || await window.waitEnter();
+        if (!held) return finish("refused", cancelled() ? "cancelled" : "installation_busy");
+      }
+      // Renew all observations after gate acquisition, including asynchronous ACLs.
+      // Acquisition is bounded; the Windows observation window is not short by guarantee.
+      if (cancelled()) return finish("refused", "cancelled");
+      await owner.authority.verify();
+      const before = await inspect(), selected = windowsCodexCliPlanEvidence(before);
+      if (!selected || JSON.stringify(selected) !== JSON.stringify(evidence)
+        || before.installContentDigest !== initialPlan.installContentDigest
+        || !sameWindowsInstall(original, await observeWindowsInstall(evidence.prefix))) return finish("refused", "installation_changed");
+      const scan = (deps.scanProcesses ?? scanCodexSessionProcesses)(deps.processIo ?? {});
+      if (scan.kind !== "observed") return finish("refused", "blocked_process_state_unknown");
+      if (scan.processes.length) return finish("refused", "blocked_active_session");
+      // No await from these held-identity/selection checks through CAS and native start.
+      owner.authority.verifyIdentitySync();
+      if (!windowsCodexCliSelectionMatches(before, inspection())) return finish("refused", "installation_changed");
+      if (cancelled() || (window && !window.commit())) return finish("refused", "cancelled");
+      installerStarted = true; // CAS is the irrevocable start decision, not spawn success.
+      uncertain = true;
+      // Trusted injection must begin its start synchronously, like native Create/Assign/Resume.
+      if (deps.install) injectedInstall = deps.install({ bin: invocation.executable,
+        args: invocation.args, cwd: invocation.cwd, env: invocation.env });
+      else nativeChild = startOwned(invocation);
+    } finally {
+      if (held) window!.exit(); // start returned/threw; never hold across wait or cleanup.
+    }
+    const installed = nativeChild ? await settle(nativeChild) : await injectedInstall!;
     uncertain = !installed.terminal; exitCode = installed.exitCode;
     if (uncertain) return finish("ambiguous", "installer_state_unknown");
     if (cleanupPending) return finish("ambiguous", "child_cleanup_unverified");
@@ -181,11 +220,13 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
       && sameWindowsInstall(original, observed)) return finish("not_applied", "original_install_unchanged");
     return finish("ambiguous", "installation_readback_unverified");
   } catch (error) {
-    if (!installerStarted && !uncertain && error instanceof Error
+    if (!installerStarted && !uncertain && !ownerRegistrationPending && cancelled()) return finish("refused", "cancelled");
+    if (!installerStarted && !uncertain && !ownerRegistrationPending && error instanceof Error
       && ["cancelled", "installation_changed", "blocked_process_state_unknown", "blocked_active_session"].includes(error.message)) {
       return finish("refused", error.message);
     }
-    return finish(installerStarted || uncertain ? "ambiguous" : "refused", installerStarted || uncertain ? "installer_or_readback_error" : "preparation_failed");
+    return finish(installerStarted || uncertain || ownerRegistrationPending ? "ambiguous" : "refused",
+      installerStarted || uncertain || ownerRegistrationPending ? "installer_or_readback_error" : "preparation_failed");
   } finally {
     if (owner && !uncertain && !cleanupPending) {
       const errors: CodexCliApplyCleanupError[] = [];
@@ -197,7 +238,7 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
       catch { errors.push("lease_release_exception"); }
       try { if (!await owner.authority.release()) errors.push("lease_release_unverified"); }
       catch { errors.push("lease_release_exception"); }
-      if (!errors.length) retained.delete(owner);
+      if (!errors.length) { retained.delete(owner); ownerRegistrationPending = false; owner.retention?.release(); }
       if (output) Object.assign(output, { cleanupErrors: errors, leaseRetained: errors.length > 0 });
     }
     if (output) { Object.freeze(output.cleanupErrors); Object.freeze(output); }

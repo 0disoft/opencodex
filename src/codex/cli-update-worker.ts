@@ -86,6 +86,25 @@ declare const self: Worker;
 // apply at its first checkpoint via signal.aborted.
 const applyAbort = new AbortController();
 let ran = false;
+// A raw Win32 handle is not a Bun event-loop reference. Keep the run-once
+// handler AND exact resource roots until their terminal cleanup releases them.
+export function createCodexCliWorkerLifetime(detach: () => void) {
+  let executionFinished = false;
+  let detached = false;
+  const retainedExecutions = new Set<object>();
+  const maybeDetach = () => {
+    if (executionFinished && !detached && retainedExecutions.size === 0) { detached = true; detach(); }
+  };
+  return {
+    retain(owner: object): { release(): void } {
+      const token = { owner };
+      retainedExecutions.add(token);
+      return { release() { if (retainedExecutions.delete(token)) maybeDetach(); } };
+    },
+    finish() { executionFinished = true; maybeDetach(); },
+  };
+}
+const lifetime = createCodexCliWorkerLifetime(() => { self.onmessage = null; });
 
 // Guarded so the module can be imported directly by tests without a Worker host.
 if (typeof Bun !== "undefined" && Bun.isMainThread === false
@@ -122,6 +141,7 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
           signal: applyAbort.signal,
           isCancelled: codexCliUpdateIsCancelled(message.fence),
           commitWindow: createWorkerCommitWindow({ gate: message.gate, fence: message.fence }),
+          retainExecution: owner => lifetime.retain(owner),
         });
         self.postMessage({
           type: "done", requestId: message.requestId, jobId: message.jobId,
@@ -134,10 +154,10 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
         message: error instanceof Error ? error.message : "cli_update_worker_failed",
       } satisfies CodexCliUpdateWorkerReply);
     } finally {
-      // Bun 1.4.4 has no self.close(). Remove this realm's message keepalive;
-      // pending referenced child/I/O work must drain before natural termination.
+      // Bun 1.4.4 has no self.close(). Drop the handler only when native owners
+      // have released every token; referenced child/I/O work must also drain.
       // The parent's close event is not proof that every OS descendant exited.
-      self.onmessage = null;
+      lifetime.finish();
     }
   };
 }

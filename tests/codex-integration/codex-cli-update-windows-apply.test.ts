@@ -14,10 +14,18 @@ import { spawnTestChild } from "../helpers/spawn-test-child";
 import { runCodexCliUpdateJobWork } from "../../src/codex/cli-update-job-execution";
 import { startWindowsCliChild, type WindowsCliChild } from "../../src/codex/windows-cli-child";
 import { windowsInstallNamespaceSupported } from "../../src/codex/cli-update-windows-observation";
+import { createCodexCliUpdateFence, cancelCodexCliUpdateFence, createWorkerCommitWindow,
+  codexCliUpdateIsCancelled } from "../../src/codex/cli-update-selection-gate";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await removeTreeAfterBackgroundWork(root); });
+const liveFixtureRoots = new Set<string>();
+afterEach(async () => {
+  for (const root of roots.splice(0)) {
+    if (liveFixtureRoots.has(root)) { roots.push(root); continue; }
+    await removeTreeAfterBackgroundWork(root);
+  }
+});
 const mainRoot = "node_modules/@openai/codex", backingRoot = "node_modules/@openai/codex-win32-x64";
 const nativePath = "vendor/x86_64-pc-windows-msvc/bin/codex.exe";
 const write = (path: string, bytes: string | Buffer) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
@@ -40,12 +48,13 @@ function artifacts(version: string, executable?: Buffer) {
   return { mainFiles, backingFiles, main, backing, set: { platform: "win32" as const, arch: "x64",
     main: fixtureArtifact(main, version), backing: fixtureArtifact(backing, version, "@openai/codex-win32-x64", "@openai/codex-win32-x64") } };
 }
-async function fixture(executable?: Buffer) {
+async function fixture(executable?: Buffer, onCreated?: (root: string) => void) {
   // This host's observed writable AppData ancestry refused; this is not a ban on
   // every profile. Evaluate actual ancestry ACL/owner/reparse evidence instead.
   // Create only this test-owned directory below the repository's volume anchor;
   // never repair or suppress metadata on the host's existing ancestor directories.
-  const root = mkdtempSync(join(parse(process.cwd()).root, "ocx-win-apply-")); roots.push(root);
+  const root = mkdtempSync(join(parse(process.cwd()).root, "ocx-win-apply-"));
+  onCreated?.(root); roots.push(root);
   await hardenSecretDirAsync(root, { required: true });
   const prefix = join(root, "prefix"); mkdirSync(prefix);
   await hardenSecretDirAsync(prefix, { required: true });
@@ -74,6 +83,7 @@ native("Windows apply holds distinct prefix lease and private staging, then rele
   const guard = await openWindowsCliApplyAuthority(f.prefix, true);
   try {
     await guard.createStaging();
+    expect(() => guard.verifyIdentitySync()).not.toThrow();
     expect(() => renameSync(f.prefix, f.prefix + "-moved")).toThrow();
     expect(() => renameSync(join(f.prefix, "node_modules", "@openai"), join(f.prefix, "node_modules", "moved"))).toThrow();
     await expect(openWindowsCliApplyAuthority(f.prefix, true)).rejects.toThrow();
@@ -84,10 +94,87 @@ native("Windows apply holds distinct prefix lease and private staging, then rele
   try {
     await expect(guard.createStaging()).rejects.toThrow();
     await expect(guard.verify()).rejects.toThrow();
+    expect(() => guard.verifyIdentitySync()).toThrow();
     expect(existsSync(join(replacement.lock, "stage"))).toBe(false);
     await replacement.createStaging(); await replacement.removeStaging();
   } finally { expect(await replacement.release()).toBe(true); }
 }, 60000);
+
+native("Windows native installer starts under commit CAS and frees gate before native wait", async () => {
+  const f = await fixture(undefined, root => liveFixtureRoots.add(root)), id = await approved(f);
+  const fence = createCodexCliUpdateFence(), gate = new SharedArrayBuffer(4);
+  let starts = 0, retained = 0;
+  const result = await applyCodexCliUpdate(id, { ...f.deps,
+    commitWindow: createWorkerCommitWindow({ gate, fence }),
+    retainExecution: () => { retained++; return { release() { retained--; } }; },
+    startWindowsChild: invocation => {
+      if (invocation.policy === "installer") {
+        starts++;
+        expect(Atomics.load(new Int32Array(gate), 0)).toBe(2);
+        expect(Atomics.load(new Int32Array(fence), 0)).toBe(2);
+      }
+      const child = startWindowsCliChild(invocation);
+      const wait = child.wait.bind(child);
+      child.wait = () => {
+        expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
+        return wait();
+      };
+      return child;
+    },
+  });
+  if (!result.leaseRetained) liveFixtureRoots.delete(f.root);
+  expect(result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false });
+  expect(starts).toBe(1); expect(retained).toBe(0);
+}, 60_000);
+
+native("a fresh Worker runs real offline Windows FFI install and closes only after native settlement", async () => {
+  let root: string | undefined, closed = false, worker: Worker | undefined;
+  try {
+    const f = await fixture(undefined, created => { root = created; liveFixtureRoots.add(created); });
+    const id = await approved(f);
+    worker = new Worker(new URL("../helpers/windows-apply-worker.ts", import.meta.url), { type: "module" });
+    const messages: { type: string; result?: import("../../src/codex/cli-update-apply").CodexCliApplyResult }[] = [];
+    const joined = new Promise<void>((resolve, reject) => {
+      worker!.addEventListener("message", event => { messages.push(event.data); });
+      worker!.addEventListener("error", () => reject(new Error("offline Worker failed")), { once: true });
+      worker!.addEventListener("close", () => { closed = true; liveFixtureRoots.delete(f.root); resolve(); }, { once: true });
+    });
+    const gate = new SharedArrayBuffer(4), fence = createCodexCliUpdateFence();
+    worker.postMessage({ planId: id, inspectionDeps: f.deps.inspectionDeps, target: f.target, gate, fence });
+    await joined;
+    expect(messages.filter(m => m.type === "native-start")).toHaveLength(1);
+    expect(messages.filter(m => m.type === "fixture-error")).toHaveLength(0);
+    const results = messages.filter(m => m.type === "result");
+    expect(results).toHaveLength(1);
+    expect(results[0]!.result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false, cleanupErrors: [] });
+    expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+  } finally {
+    // A still-live native Worker keeps its exact fixture; never terminate to fake settlement.
+    if (root && (!worker || closed)) liveFixtureRoots.delete(root);
+  }
+}, 60_000);
+
+native("Windows cancellation won inside final synchronous scan cannot create an installer", async () => {
+  const f = await fixture(undefined, root => liveFixtureRoots.add(root)), id = await approved(f);
+  const fence = createCodexCliUpdateFence(), gate = new SharedArrayBuffer(4);
+  let scans = 0, starts = 0;
+  const result = await applyCodexCliUpdate(id, { ...f.deps,
+    isCancelled: codexCliUpdateIsCancelled(fence),
+    commitWindow: createWorkerCommitWindow({ gate, fence }),
+    scanProcesses: () => {
+      scans++;
+      if (Atomics.load(new Int32Array(gate), 0) === 2) expect(cancelCodexCliUpdateFence(fence)).toBe(true);
+      return { kind: "observed", processes: [] };
+    },
+    startWindowsChild: invocation => { starts++; return startWindowsCliChild(invocation); },
+  });
+  if (!result.leaseRetained) liveFixtureRoots.delete(f.root);
+  expect(scans).toBeGreaterThan(0);
+  expect(result).toMatchObject({ outcome: "refused", reason: "cancelled", leaseRetained: false });
+  expect(starts).toBe(0);
+  expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
+}, 60_000);
 
 native("Windows apply runs real offline npm under owned Job, then verifies full target and version", async () => {
   const f = await fixture(), id = await approved(f);

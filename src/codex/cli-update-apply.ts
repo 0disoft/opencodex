@@ -41,6 +41,8 @@ export function cleanupCodexCliApply(lease: { release(): boolean } | null, stagi
 }
 interface VersionResult { readonly terminal: boolean; readonly ok: boolean; readonly pid: number | null }
 export interface CodexCliApplyDeps extends CodexCliUpdatePlanDeps {
+  /** Internal Worker lifetime root, never accepted from a request DTO. */
+  readonly retainExecution?: (owner: object) => { release(): void };
   /** Trusted native fault-injection seam; never supplied by a request DTO. */
   readonly startWindowsChild?: typeof import("./windows-cli-child").startWindowsCliChild;
   readonly signal?: AbortSignal;

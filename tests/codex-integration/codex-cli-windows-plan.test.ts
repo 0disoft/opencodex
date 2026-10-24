@@ -374,11 +374,12 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
     expect(starts).toBe(1);
     expect(closed).toBe(true);
     expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
-      targetIntegrity: integrity, applicable: false });
+      targetIntegrity: integrity });
     expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
     // Real process observation may find active/unreadable sessions. Either refusal
     // is after private-evidence admission and successful fixture metadata resolution.
-    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    if (plan.applicable) expect(plan.refusal).toBeNull();
+    else expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   } finally {
     // afterEach retains this fixture even if the test times out before this

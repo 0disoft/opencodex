@@ -11,15 +11,15 @@
  *   PREPARING -> CANCELLED, and the worker's only commit word is
  *   PREPARING -> COMMITTED. Exactly one compareExchange wins. A cancel that
  *   lands first is observed by the worker's isCancelled checkpoints and by
- *   the commit CAS losing; a commit that lands first means the npm spawn
- *   already happened and a late cancel is deferred to readback.
+ *   the commit CAS losing; a commit is the irrevocable start decision, not
+ *   evidence of successful spawn. Later cancellation is deferred to readback.
  *
  * - GATE (one process-wide cell): FREE -> PARENT_WRITE is taken by the five
  *   parent selection writers (runtime pin persist/clear, shim install/
  *   auto-restore/uninstall) and the two parent session-spawn paths (remote
  *   workspace child, desktop relaunch). FREE -> WORKER_COMMIT is taken by the
  *   update worker for only its short final window. Writers report busy rather
- *   than wait: the window is seconds at most and a synchronous parent writer
+ *   than wait: Windows final ACL/content observations may be slow; a parent writer
  *   must never park the event loop behind it. The gate is intentionally one
  *   cell for the whole process rather than per-configDir: alias/junction/case
  *   spellings of the same target must not split the exclusion, so a writer on
@@ -113,7 +113,7 @@ export function beginCodexCliSelectionParentWrite(): CodexCliSelectionParentWrit
 /**
  * The worker's short final window. tryEnter covers the uncontended same-turn
  * case; waitEnter is the bounded retry for a held parent write. commit() is
- * the fence CAS issued in the same event-loop turn as the installer spawn;
+ * the fence CAS issued in the same event-loop turn as the installer start call;
  * exit() releases the gate once the spawn call has returned.
  */
 export interface CodexCliUpdateCommitWindow {

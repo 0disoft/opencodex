@@ -228,8 +228,8 @@ describe("Windows CLI update job store backend", () => {
         expect(JSON.parse(lines[0]!)).toMatchObject({ jobId: accepted.job.jobId, status: "running" });
       } finally { log.mockRestore(); }
     } finally { release(); await pending.catch(() => {}); }
-    expect(await pending).toMatchObject({ status: "refused", outcome: "refused", reason: "windows_apply_disabled", ownerState: "finished" });
-    // The real production entry refuses before inspection/lease/installer on Windows.
+    expect(await pending).toMatchObject({ status: "refused", outcome: "refused", reason: "mutation_evidence_unverified", ownerState: "finished" });
+    // A null proof-bound snapshot cannot authorize installation in this enabled Windows lane.
     expect(engineCalls).toBe(1); expect(workerStarts).toBe(1);
     expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "refused", ownerState: "finished" });
     const ledger = JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")) as { jobs: { revision: number }[] };
