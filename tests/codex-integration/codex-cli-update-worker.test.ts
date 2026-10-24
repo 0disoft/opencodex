@@ -27,7 +27,7 @@ import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoRoot } from "../helpers/repo-root";
 import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
-import { WindowsJobStorePinSet } from "../../src/codex/cli-update-job-store-windows";
+import { WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -173,10 +173,10 @@ afterEach(async () => {
 });
 describe("process-wide selection commit gate and cancellation fence", () => {
   test("a failed pin close keeps its lifetime token without an automatic close retry", () => {
-    const pins = new WindowsJobStorePinSet(), handle = pins.keep(123n);
+    const pins = new WindowsApplyAuthorityPins(), handle = pins.keep(123n);
     let attempts = 0, fault = true, detached = 0;
     const kernel = { symbols: { CloseHandle: () => { attempts++; return fault ? 0 : 1; } } }
-      as unknown as Parameters<WindowsJobStorePinSet["release"]>[1];
+      as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
     const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
     const token = lifetime.retain(pins);
     expect(pins.release(handle, kernel)).toBe(false);

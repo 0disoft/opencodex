@@ -309,10 +309,13 @@ its token. No polling, automatic retry/reap or termination follows from retentio
 can remain resident until separately authorized recovery. A crash still loses in-memory ownership
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
 Authority release succeeds only when lock disposal is verified and its pin set is empty.
-A failed CloseHandle stays in that set; automatic closeAll skips the failed close instead of retrying
-or forgetting it, so apply retains its Owner/token with `lease_release_unverified`.
+A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips
+failed closes instead of retrying or forgetting them, preserving Owner/token with `lease_release_unverified`.
+The ordinary ledger/status PinSet keeps its pre-existing best-effort disposal contract; this change
+does not claim to repair or prove all native cleanup in those shared job-store callers.
 Fixture teardown needs both a correlated non-retained, cleanup-confirmed result and Worker join;
-Worker close alone, an error, missing reply or retained owner never permits root removal.
+the entire message stream must be well-formed and correlated with exactly one result. Worker close
+alone, any foreign/error/malformed traffic, missing reply or retained owner never permits root removal.
 
 Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
 PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous

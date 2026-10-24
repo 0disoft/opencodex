@@ -21,16 +21,39 @@ const native = process.platform === "win32" && process.arch === "x64" ? test : t
 const roots: string[] = [];
 const liveFixtureRoots = new Set<string>();
 type WorkerFixtureReply = { type: string; requestId?: string; cleanupConfirmed?: boolean; result?: import("../../src/codex/cli-update-apply").CodexCliApplyResult };
-function fixtureCleanupProven(messages: readonly WorkerFixtureReply[], requestId: string, closed: boolean, errored: boolean): boolean {
+function fixtureCleanupProven(messages: readonly unknown[], requestId: string, closed: boolean, errored: boolean): boolean {
   if (!closed || errored) return false;
-  const replies = messages.filter(message => message.requestId === requestId);
+  const replies: WorkerFixtureReply[] = [];
+  for (const value of messages) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const message = value as WorkerFixtureReply;
+    // Assertions can fail independently: teardown authority rejects ALL foreign,
+    // malformed or error traffic, including traffic mixed with a valid result.
+    if (message.requestId !== requestId || !["native-start", "result"].includes(message.type)) return false;
+    if (message.type === "native-start" && (value as { committed?: unknown }).committed !== true) return false;
+    if (message.type === "result" && (!message.result || typeof message.result !== "object"
+      || Array.isArray(message.result) || message.cleanupConfirmed !== true)) return false;
+    if (message.type === "result") {
+      const result = message.result!;
+      const version = (value: unknown) => value === null || typeof value === "string";
+      if (!["applied", "not_applied", "refused", "ambiguous"].includes(result.outcome)
+        || typeof result.reason !== "string" || !/^[a-f0-9]{32}$/.test(result.planId)
+        || !version(result.installedVersion) || !version(result.targetVersion)
+        || !(result.installerExitCode === null || Number.isInteger(result.installerExitCode))
+        || !(result.verificationPid === null || (Number.isInteger(result.verificationPid) && result.verificationPid > 0))) return false;
+    }
+    replies.push(message);
+  }
   const results = replies.filter(message => message.type === "result");
-  return !replies.some(message => message.type === "fixture-error") && results.length === 1
+  return results.length === 1
     && results[0]!.cleanupConfirmed === true && results[0]!.result?.leaseRetained === false
     && Array.isArray(results[0]!.result?.cleanupErrors) && results[0]!.result!.cleanupErrors.length === 0;
 }
 test("Worker close alone never authorizes removing a native fixture", () => {
-  const result = { leaseRetained: false, cleanupErrors: [] } as unknown as import("../../src/codex/cli-update-apply").CodexCliApplyResult;
+  const result: import("../../src/codex/cli-update-apply").CodexCliApplyResult = {
+    outcome: "applied", reason: "verified_target", planId: "a".repeat(32), installedVersion: "1.0.0", targetVersion: "1.1.0",
+    installerExitCode: 0, verificationPid: null, leaseRetained: false, cleanupErrors: [],
+  };
   const safe: WorkerFixtureReply = { type: "result", requestId: "owned", result, cleanupConfirmed: true };
   expect(fixtureCleanupProven([], "owned", true, false)).toBe(false);
   expect(fixtureCleanupProven([safe], "different", true, false)).toBe(false);
@@ -38,6 +61,10 @@ test("Worker close alone never authorizes removing a native fixture", () => {
   expect(fixtureCleanupProven([{ ...safe, result: { ...result, leaseRetained: true } }], "owned", true, false)).toBe(false);
   expect(fixtureCleanupProven([{ ...safe, cleanupConfirmed: false }], "owned", true, false)).toBe(false);
   expect(fixtureCleanupProven([safe, safe], "owned", true, false)).toBe(false);
+  expect(fixtureCleanupProven([safe, { ...safe, requestId: "foreign" }], "owned", true, false)).toBe(false);
+  expect(fixtureCleanupProven([safe, { type: "fixture-error", requestId: "foreign" }], "owned", true, false)).toBe(false);
+  expect(fixtureCleanupProven([safe, null], "owned", true, false)).toBe(false);
+  expect(fixtureCleanupProven([safe, { type: "unknown", requestId: "owned" }], "owned", true, false)).toBe(false);
   expect(fixtureCleanupProven([safe], "owned", false, false)).toBe(false);
   expect(fixtureCleanupProven([safe], "owned", true, false)).toBe(true);
 });

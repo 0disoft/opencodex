@@ -140,31 +140,44 @@ function loadNative(): Promise<Native> {
 const unsafe = (): Error => new Error("unsafe_store");
 const enoent = (): NodeJS.ErrnoException => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 
-export class WindowsJobStorePinSet {
+// General ledger callers retain their existing best-effort close contract.
+class PinSet {
   private readonly handles: bigint[] = [];
-  private readonly failedCloses = new Set<bigint>();
-  get remaining(): number { return this.handles.length; }
   keep(handle: bigint): bigint { this.handles.push(handle); return handle; }
-  release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): boolean {
+  release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): void {
     const index = this.handles.lastIndexOf(handle);
+    if (index >= 0) this.handles.splice(index, 1);
+    kernel.symbols.CloseHandle(handle);
+  }
+  closeAll(kernel: Library<typeof KERNEL_SYMBOLS>): void {
+    for (const handle of this.handles.splice(0).reverse()) kernel.symbols.CloseHandle(handle);
+  }
+}
+
+/** Strict disposal is scoped to apply authority, not ordinary ledger/status I/O. */
+export class WindowsApplyAuthorityPins extends PinSet {
+  private readonly authorityHandles: bigint[] = [];
+  private readonly failedCloses = new Set<bigint>();
+  get remaining(): number { return this.authorityHandles.length; }
+  override keep(handle: bigint): bigint { this.authorityHandles.push(handle); return handle; }
+  override release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): boolean {
+    const index = this.authorityHandles.lastIndexOf(handle);
     if (index < 0) return true; // Already released; never close a reused native handle.
     try {
       if (!kernel.symbols.CloseHandle(handle)) { this.failedCloses.add(handle); return false; }
     } catch { this.failedCloses.add(handle); return false; }
-    this.handles.splice(index, 1);
+    this.authorityHandles.splice(index, 1);
     this.failedCloses.delete(handle);
     return true;
   }
-  closeAll(kernel: Library<typeof KERNEL_SYMBOLS>): void {
+  override closeAll(kernel: Library<typeof KERNEL_SYMBOLS>): void {
     // One attempt per disposal. A failed explicit release must not be retried
     // invisibly by a later finally/closeAll in the same ownership lifecycle.
-    for (const handle of [...this.handles].reverse()) {
+    for (const handle of [...this.authorityHandles].reverse()) {
       if (!this.failedCloses.has(handle)) this.release(handle, kernel);
     }
   }
 }
-const PinSet = WindowsJobStorePinSet;
-type PinSet = WindowsJobStorePinSet;
 
 interface Prepared {
   readonly config: string;
@@ -621,7 +634,8 @@ export interface WindowsJobStoreIo {
 export async function openWindowsCliApplyAuthority(prefix: string, acquire: boolean) {
   assertNotRealHomeUnderTest(prefix);
   const { ffi, kernel, nt } = await loadNative();
-  const ctx: Ctx = { ffi, kernel, nt, pins: new PinSet() };
+  const pins = new WindowsApplyAuthorityPins();
+  const ctx: Ctx = { ffi, kernel, nt, pins };
   let held: HeldLock | undefined;
   let transferred = false;
   let closed = false;
@@ -682,7 +696,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
         if (!sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
         await verifyAcl([{ path: stage.path, directory: true, policy: "private" }]);
         if (closed) throw unsafe();
-        if (!ctx.pins.release(stage.handle, kernel)) throw unsafe();
+        if (!pins.release(stage.handle, kernel)) throw unsafe();
         // Ancestors remain pinned and all writers are within the verified trust boundary.
         rmSync(stage.path, { recursive: true });
         stage = undefined;
@@ -692,7 +706,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
         closed = true;
         try { await verifyHeld(); if (held) releaseLock(ctx, held); }
         finally { ctx.pins.closeAll(kernel); }
-        return ctx.pins.remaining === 0 && (!acquire || !existsSync(lock));
+        return pins.remaining === 0 && (!acquire || !existsSync(lock));
       },
     };
   } finally { if (!transferred) ctx.pins.closeAll(kernel); }
