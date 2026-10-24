@@ -24,8 +24,8 @@ afterEach(() => {
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
-    // A test timeout does not cancel its async body. Keep even that body's
-    // fixture owned until a real Worker close, never remove beneath native I/O.
+    // A test timeout does not cancel its async body. Retain fixtures until a real
+    // Worker close, or external reconciliation of an unsettled CLI process tree.
     if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
     removeTreeWithRetry(root);
   }
@@ -457,7 +457,9 @@ function checkPublishedNodeCliPlan(separateNodeToolchain: boolean) {
       CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
       OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
   });
-  if (run.error || run.status !== 0) {
+  if (run.error || run.status !== 0 || run.signal) {
+    // A failed synchronous result does not prove Node/Bun descendants have exited.
+    liveWorkerRoots.add(f.root);
     console.error(JSON.stringify({ layout: separateNodeToolchain ? "separate-PATH" : "prefix-local",
       elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
       errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
