@@ -116,7 +116,7 @@ describe("management route registry reconciliation", () => {
     // Wrap the REAL planner so the route still runs the production resolver and async
     // spawn path; only the install report, platform, and scan are fixed fixtures.
     const planner = spyOn(cliUpdatePlanModule, "createCodexCliUpdatePlan").mockImplementation(deps =>
-      realPlan({ ...deps, platform: "linux", inspectionDeps: undefined, inspect: async () => managed as never,
+      realPlan({ ...deps, platform: "linux", inspectionDeps: { arch: "x64" }, inspect: async () => managed as never,
         spawnProcess: gatedSpawn,
         scanProcessesAsync: async () => ({ kind: "observed", processes: [] }) }));
     const oldHome = process.env.OPENCODEX_HOME;
