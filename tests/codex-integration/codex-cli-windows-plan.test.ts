@@ -1,25 +1,27 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests } from "../../src/codex/windows-installation-files";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
+import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
-  for (const root of roots.splice(0)) removeTreeWithRetry(root);
+  for (const root of roots.splice(0)) await removeTreeAfterBackgroundWork(root);
 });
 // npm's independent cmd-shim fixture; no candidate is ever executed.
 const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL',
@@ -27,8 +29,8 @@ const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
   '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
 ].join('\r\n');
-function fixture(separateNodeToolchain = false) {
-  const root = mkdtempSync(join(tmpdir(), "ocx-windows-plan-")); roots.push(root);
+function fixture(separateNodeToolchain = false, parent = tmpdir()) {
+  const root = mkdtempSync(join(parent, "ocx-windows-plan-")); roots.push(root);
   const prefix = join(root, "npm");
   const toolchainPrefix = separateNodeToolchain ? join(root, "nodejs") : prefix;
   const npmRoot = join(toolchainPrefix, "node_modules", "npm");
@@ -78,6 +80,10 @@ native("a production plan is deterministic while Windows apply stays explicitly 
 
 native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const f = fixture();
+  // A TEMP ancestry can be safe on hosted Windows. Create an actual unsupported
+  // config-root reparse point instead of inferring unsafe ACLs from the host path.
+  const ledgerTarget = join(f.root, "ledger-target"); mkdirSync(ledgerTarget);
+  symlinkSync(ledgerTarget, f.deps.configDir, "junction");
   const deps = { inspectionDeps: f.deps,
     resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
     scanProcesses: () => ({ kind: "observed" as const, processes: [] }) };
@@ -99,6 +105,7 @@ native("an unsafe Windows ledger refuses admission and a disabled plan never ins
     const response = await handleCodexCliUpdateRoutes(ctx);
     expect(response?.status).toBe(503);
     expect(await response?.json()).toEqual({ error: "unsafe_store" });
+    expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 
     let leaseAttempts = 0, installAttempts = 0;
     const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
@@ -268,30 +275,63 @@ native("actual CLI handler reaches production inspector and plan from the proof-
   expect(reached).toBe(true);
 });
 
-native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", () => {
+native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", async () => {
   const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
-  for (const f of [fixture(), fixture(true)]) {
+  for (const separate of [false, true]) {
+    // Keep a real supported positive path even when this host's TEMP ancestry is
+    // writable by other users. Only newly owned fixture directories are hardened.
+    const f = fixture(separate, parse(process.cwd()).root);
+    await hardenSecretDirAsync(f.root, { required: true });
+    await hardenSecretDirAsync(f.prefix, { required: true });
     const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
     const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
     const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
       dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
     const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
       tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+    const calls = join(f.root, "npm-calls.jsonl"), forbidden = join(f.root, "forbidden-execution");
+    writeFileSync(join(f.packageRoot, "bin/codex.js"),
+      `require('node:fs').writeFileSync(${JSON.stringify(forbidden)},'candidate');process.exit(97);`);
     // Controlled registry protocol fixture; no real npm installation or network request.
     writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-      `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
-    const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
-      cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
+      `const fs=require('node:fs'), args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');` +
+      `if(args[0]!=='view'){fs.writeFileSync(${JSON.stringify(forbidden)},'npm mutation');process.exit(98);}` +
+      `const spec=args[1];console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+    const controlled = await createCodexCliUpdatePlan({ inspectionDeps: f.deps,
+      scanProcesses: () => ({ kind: "observed", processes: [] }) });
+    expect(controlled).toMatchObject({ applicable: true, refusal: null, session: { state: "none", matches: 0 } });
+    const before = [...f.files.keys()].map(path => readFileSync(path));
+    writeFileSync(calls, "");
+    const run = await spawnTestChild([node, repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
+      cwd: repoRoot(), deadlineMs: 45_000,
       env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
         CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
         OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
     });
-    expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+    expect(run.reaped && run.pipesClosed).toBe(true); expect(run.timedOut).toBe(false); expect(run.exitCode, run.stderr).toBe(0);
     const plan = JSON.parse(run.stdout);
     expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
     expect(plan.targetIntegrity).toBe(integrity);
-    expect(plan.applicable).toBe(false);
-    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    // The public CLI scans real sessions. Assert the exact evidence-dependent
+    // contract, never a permissive list of unrelated refusal reasons.
+    if (plan.session.state === "active") {
+      expect(plan.session.matches).toBeGreaterThan(0);
+      expect(plan.applicable).toBe(false); expect(plan.refusal).toBe("blocked_active_session");
+    } else if (plan.session.state === "unknown") {
+      expect(plan.session.matches).toBeNull();
+      expect(plan.applicable).toBe(false); expect(plan.refusal).toBe("blocked_process_state_unknown");
+    } else {
+      expect(plan.session).toEqual({ state: "none", matches: 0 });
+      expect(plan.applicable).toBe(true); expect(plan.refusal).toBeNull();
+      expect(plan.planId).toBe(controlled.planId);
+    }
+    const queries = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(queries.map(args => args.slice(0, 2))).toEqual([
+      ["view", "@openai/codex@latest"], ["view", "@openai/codex@1.2.4"], ["view", "@openai/codex-win32-x64@1.2.4"],
+    ]);
+    expect(existsSync(forbidden)).toBe(false);
+    expect([...f.files.keys()].map(path => readFileSync(path))).toEqual(before);
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   }
 }, 60_000);
