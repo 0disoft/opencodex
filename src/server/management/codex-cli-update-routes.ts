@@ -1,7 +1,5 @@
-import { createCodexCliUpdatePlan } from "../../codex/cli-update-plan";
-import { applyCodexCliUpdate } from "../../codex/cli-update-apply";
 import { admitCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../codex/cli-update-job";
-import { codexCliUpdateInspectionDeps } from "../../codex/cli-update-inspection-context";
+import { runCodexCliUpdateApplyInWorker, runCodexCliUpdatePlanInWorker } from "../../codex/cli-update-job-worker";
 import { jsonResponse } from "../auth-cors";
 import { trackBackgroundWork } from "../../lib/background-work";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -13,7 +11,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
   if (ctx.url.pathname === "/api/codex/cli-update/plan") {
     if (ctx.req.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, ctx.req, ctx.config);
     try {
-      const plan = await createCodexCliUpdatePlan({ inspectionDeps: codexCliUpdateInspectionDeps() });
+      const plan = await runCodexCliUpdatePlanInWorker();
       return jsonResponse(plan, 200, ctx.req, ctx.config);
     } catch { return jsonResponse({ error: "plan_unavailable" }, 503, ctx.req, ctx.config); }
   }
@@ -42,7 +40,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
     const admitted = admitCodexCliUpdateJob({ requestId: value.requestId, planId: value.planId, confirmed: true });
     if (admitted.kind === "accepted") {
       const work = runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
-        () => applyCodexCliUpdate(value.planId as string, { inspectionDeps: codexCliUpdateInspectionDeps() }));
+        () => runCodexCliUpdateApplyInWorker(value.planId as string, { jobId: admitted.job.jobId }));
       trackBackgroundWork(`codex-cli-update:${admitted.job.jobId}`, work).catch(() => undefined);
     }
     return jsonResponse({ job: admitted.job }, 202, ctx.req, ctx.config);

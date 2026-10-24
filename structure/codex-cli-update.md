@@ -93,6 +93,9 @@ app/Store/MSIX bundles and version-manager ownership remain unverified and unman
 The explicit `attest` report stays observation-only. Only the production plan predicate
 creates private plan evidence; copying a public report cannot enable Windows planning.
 This observes linkage and content, not publisher authenticity or a whole-tree guarantee.
+The fresh-source Worker case in `tests/codex-integration/codex-cli-windows-plan.test.ts`
+rebuilds private evidence through the native inspector inside that realm before resolving
+owned fixture metadata. It does not establish compiled-worker or Windows ARM64 support.
 Metadata queries use the observed Node/npm paths under freshly matching held handles,
 the existing isolated npm configuration/cache, and the pinned registry. No installer runs.
 A completed Windows read-only plan has a deterministic ID and `applicable: false`,
@@ -153,7 +156,8 @@ platform and inspection architecture contribute to plan identity. Platform alias
 manifest name is also `@openai/codex` are modeled explicitly. The existing isolated npm environment,
 cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pack and install calls.
 The version verification child inherits the owned Node compile-cache path, which is removed with
-terminal apply staging; an uncertain live child retains that staging and its lease.
+terminal apply staging; an uncertain live child retains that staging and its lease. A verifier setup
+failure before any child exists is terminal evidence instead, so the lease is released and later applies are not blocked.
 The owned staging directory is canonicalized immediately after creation, so symlinked temporary roots
 and macOS's /var alias are supported without accepting a linked archive file.
 `src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
@@ -165,9 +169,12 @@ precedes explicit stream destruction, and verification waits for the close event
 pipeline settlement alone is not close completion and the caller never closes that raw fd again.
 
 After artifact preparation, selection/content, the approved metadata and active/unknown process blockers
-are re-observed. The awaited process scan is the last yield before install; in the same event-loop turn
-as the spawn a synchronous guard re-checks the signal, prefix identity, the byte-level preimage and the
-launcher's live canonical selection. npm receives only two verified local tarball specs and an explicit canonical prefix,
+are re-observed. Inside the worker realm the awaited process scan is the last yield before install; in
+the same worker event-loop turn as the spawn a synchronous guard re-checks the cancellation state,
+prefix identity, the byte-level preimage and the launcher's live canonical selection, and the per-job
+commit fence's PREPARING-to-COMMITTED compare-exchange is the final guard before the installer spawn —
+a parent cancel that already landed wins, while a cancel landing after COMMITTED defers to the live
+child's close and readback. npm receives only two verified local tarball specs and an explicit canonical prefix,
 with offline mode, optional dependencies omitted, lifecycle scripts disabled and no audit/fund/lockfile
 side effects. Main manifests are not rewritten to make installation succeed. Cancelled preparation
 refuses; cancellation during an admitted npm child waits for its close rather than killing it. The lease
@@ -188,6 +195,70 @@ Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A
 lease release marks retention unverified without preventing staging cleanup; cleanup does not replace
 the readback outcome. Uncertain live installer/version children still retain both lease and staging.
 Windows apply remains refused. Shims and non-npm managers remain unsupported.
+
+## Worker realm and the selection commit window
+
+The plan and apply bodies execute inside a dedicated Worker realm so their synchronous file hashing and
+directory walks never occupy the parent's HTTP/event loop. `src/codex/cli-update-worker.ts` is the
+per-job worker entrypoint, registered as `cli-update-worker` in the standalone build's
+`WORKER_ENTRIES` (`scripts/build-standalone.ts`); `src/codex/cli-update-job-worker.ts` is the
+parent-side dispatch the CLI and the management route call. The run message carries the allowlisted
+frozen launcher snapshot — never the parent's trustedContext and never supplemented from ambient
+environment — plus two shared-memory cells from `src/codex/cli-update-selection-gate.ts` and at most
+the two home overrides as transport. `src/codex/cli-update-inspection-context.ts` exposes the shared
+factory that rebuilds production inspection deps from that snapshot inside whichever realm calls it, so
+the worker derives its own fresh selected-command evidence; the installer inspector's mutation-evidence
+WeakMap is per-realm, which is exactly why the whole job — not just its hashing — must run there.
+
+A job is one fresh Worker, one unique requestId and the parent ledger generation; no wire generation
+exists. The worker runs one message, replies and closes itself; a second message is ignored, so a stale
+or duplicate delivery cannot attach new work to a dying realm. Settlement requires BOTH a valid reply
+and the worker's own close — a done payload alone is never terminal evidence because a legitimate
+result may still report installer_state_unknown or version_process_state_unknown with a retained lease
+and a live verification child. The host never calls terminate(): an unresponsive worker may still own a
+running npm child, so every post-delivery loss — worker death, message error, an implausible or missing
+reply, or done without close inside the bounded grace — settles `ambiguous`/`job_result_unknown` with
+the lease reported retained and the still-live worker tracked rather than silently leaked. A spawn
+throw before the run message exists is the only `refused`/`preparation_failed` path, because no job
+code provably ran. Ledger completion writes keep their existing bounded retry.
+
+Entry installation is limited to `Bun.isMainThread === false`; importing either entry or its
+test fixture in the main realm must not replace that realm's message handler. Bun 1.4.4 does not
+provide `self.close()`: completion removes the worker's message handler and lets referenced work
+drain naturally, without `process.exit()` or parent termination. A real Bun-subprocess regression
+keeps the worker alive after handler removal until that exact child exits. This establishes the
+referenced Bun-child path only, not arbitrary native handles or all OS descendants. Bun's close
+event marks worker termination and can precede full thread exit; it is not independent proof that
+every installer descendant or retained native owner has finished.
+
+Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
+PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous
+sections, and the worker's own PREPARING-to-COMMITTED CAS immediately before the installer spawn is the
+commit decision. COMMITTED is deliberately not "cancelled" — once it lands the installer is a live
+child whose close must be observed. Because a plain AbortSignal message could not interrupt a
+synchronous worker section, signal-based cancellation alone is not equivalent and is not used as the
+worker path's only channel.
+
+The worker's final window is also serialized against the parent's own selection mutations through one
+process-wide gate cell. The gate covers exactly seven parent operations: `persistCodexRuntime` and
+`clearPersistedCodexRuntime` in `src/codex/runtime.ts` (busy refusal — the
+`codex_cli_selection_busy` error — before mkdir, cache invalidation or the swallowing unlink catch),
+the three shim overlay boundaries in `src/codex/shim-overlay.ts` (install, auto-restore, uninstall —
+busy in their existing failure/deferred/removed:false shapes before namespace creation, the restore
+lock and journal mutation), the remote-workspace app-server `Bun.spawn` in
+`src/remote-control/workspace-codex-runtime.ts` (busy refuses after running the same bridge/isolation
+cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation removal), and
+`src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
+before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
+its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
+window spans only the worker's final process scan through its installer-spawn call, and a synchronous
+parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
+one cell for the whole process rather than per-configDir because alias, junction and case spellings of
+the same target must not split the exclusion; a writer on a different configDir can see a brief busy.
+Ordinary config writes, account operations, model requests, existing session interrupt/close and
+arbitrary subprocesses are not gated. The gate claims nothing about processes the parent does not own:
+an external installer, a handoff helper's delayed descendants, or an OS-level snapshot race stays the
+documented residual it always was.
 
 `bin/ocx.mjs` includes the proof-bound Codex candidate snapshot for the published `start` command as well as the updater commands; this makes the production management plan work without accepting request-supplied candidate evidence. `src/codex/cli-update-inspection-context.ts` is the shared bridge from that Node snapshot to the installer inspector. Direct Bun/source launches have no trusted candidate and fail closed; neither path reconstructs write targets from display data. `src/codex/cli-update-job.ts` owns the bounded durable admission ledger shared by CLI and management. Request IDs are scoped to the protected config root and payload digest; exact retries return the same opaque job, conflicts refuse, and a full ledger refuses new admission. Every store operation requires a canonical same-owner config parent with safe write permissions and canonical ancestry to filesystem root; each ancestor must be owned by root or the current user, and shared-writable ancestors are refused unless root-owned and sticky. Only confirmed apply admission may create one absent config-root level, which is revalidated as owner-private. Plan and status reads never create it, and an existing root must pass the same canonical/no-link checks. This path-based ancestry check prevents untrusted other-user writable ancestors from redirecting store operations; it does not defend against concurrent tampering by the same user or root. Atomic updates use a private same-owner POSIX directory, no-follow reads and a short exclusive lock. Unresolved records are not expired. An in-process generation and revision own completion writes; after restart a queued/running record projects as `ambiguous` with `owner_state_unknown`, without claiming the old owner stopped. A `retained` lease state requires an execution reason that proves acquisition and intentional preservation; synthetic job errors, unverified release and release exceptions project as `unknown`. The path-free DTO separates owner state, installer child state, lease retention and overall lifetime uncertainty with fixed outcome/reason/cleanup codes.
 
