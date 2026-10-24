@@ -151,15 +151,9 @@ function forwardConfig(): OcxConfig {
   } as OcxConfig;
 }
 
-// Every case in this file exercises the /v1/live relay or the readiness surface;
-// none asserts on service-home ownership. Route through the established test seam
-// so the host's real service-manager probes stay out of an in-process fixture.
-// deps spread last so per-case injections (readinessGate, the sideband factory)
-// still win over the default.
-function startTestServer(
-  port?: number,
-  deps: StartServerDeps = {},
-): ReturnType<typeof startServer> {
+// Isolate relay/readiness fixtures from host service-manager probes.
+// Explicit per-case dependencies override this default.
+function startTestServer(port?: number, deps: StartServerDeps = {}): ReturnType<typeof startServer> {
   return startServer(port, {
     inspectNativeCodexOwnership: ownedServiceHomeInspection("server-live fixture"),
     ...deps,
