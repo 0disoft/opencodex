@@ -12,11 +12,11 @@ import type {
   CodexCliInstallationTargetDerivation,
 } from "../codex/cli-installation-targets";
 import {
-  createCodexCliUpdatePlan,
   type CodexCliUpdateChannel,
   type CodexCliUpdatePlan,
   type CodexCliUpdatePlanDeps,
 } from "../codex/cli-update-plan";
+import { runCodexCliUpdateApplyInWorker, runCodexCliUpdatePlanInWorker } from "../codex/cli-update-job-worker";
 import {
   type ResolveCodexRuntimeDeps,
   type ResolveCodexRuntimeResult,
@@ -319,7 +319,8 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "plan") {
-      const plan = await (deps.createPlan ?? createCodexCliUpdatePlan)({
+      const plan = await (deps.createPlan ?? ((planDeps: CodexCliUpdatePlanDeps) =>
+        runCodexCliUpdatePlanInWorker({ channel: planDeps.channel })))({
         channel: parsed.channel,
         inspectionDeps: codexCliUpdateInspectionDeps(deps),
         inspect: deps.inspectInstall,
@@ -328,8 +329,9 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "apply") {
-      const apply = deps.applyUpdate ?? (await import("../codex/cli-update-apply")).applyCodexCliUpdate;
       const admitted = await admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId, confirmed: true });
+      const apply = deps.applyUpdate
+        ?? ((planId: string) => runCodexCliUpdateApplyInWorker(planId, { jobId: admitted.job.jobId }));
       let job: Awaited<ReturnType<typeof runCodexCliUpdateJob>>;
       try {
         job = admitted.kind === "accepted"

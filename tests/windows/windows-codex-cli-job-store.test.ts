@@ -14,7 +14,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { join } from "node:path";
-import { admitCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
+import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
+import { codexCliUpdateUnjoinedWorkerCount, runCodexCliUpdateApplyInWorker } from "../../src/codex/cli-update-job-worker";
+import { FIXTURE_CONTROL_WORDS, FIXTURE_RELEASE } from "../helpers/cli-update-fixture-worker";
 import { setWindowsOwnerAclAsyncRunnerForTests, windowsEntriesAclMatches,
   type WindowsAclEntry } from "../../src/lib/windows-owner-acl";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
@@ -123,6 +125,17 @@ describe("Windows CLI update job store backend", () => {
     verificationPid: null, cleanupErrors: [] };
   const fixtures: string[] = [];
   const envStack: (string | undefined)[] = [];
+  const fixtureOwners = new Map<string, number>();
+  function holdFixture(root: string): () => void {
+    fixtureOwners.set(root, (fixtureOwners.get(root) ?? 0) + 1);
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      const count = fixtureOwners.get(root)! - 1;
+      if (count) fixtureOwners.set(root, count); else fixtureOwners.delete(root);
+    };
+  }
 
   afterEach(() => {
     setWindowsOwnerAclAsyncRunnerForTests(null);
@@ -130,7 +143,12 @@ describe("Windows CLI update job store backend", () => {
       const previous = envStack.pop()!;
       if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
     }
-    while (fixtures.length) rmSync(fixtures.pop()!, { recursive: true, force: true });
+    // A timeout does not cancel an async store operation or close its Worker.
+    // Keep exact roots queued until both owners have actually completed.
+    for (const root of fixtures.splice(0)) {
+      if (fixtureOwners.has(root)) { fixtures.push(root); continue; }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   const winOnly = process.platform === "win32" && process.arch === "x64";
@@ -157,6 +175,103 @@ describe("Windows CLI update job store backend", () => {
       convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
       syncClaudeAgentDefsBestEffort: async () => {} };
   }
+
+  test.skipIf(!winOnly)("private-store admission and status fence one production Worker completion", async () => {
+    const { outer, configDir } = await fixture("ocx-winjob-worker-");
+    useHome(configDir);
+    const accepted = await admitCodexCliUpdateJob({ requestId: "win-worker-once-01", planId: result.planId, confirmed: true, configDir });
+    expect(accepted.kind).toBe("accepted");
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let engineCalls = 0, workerStarts = 0;
+    const releaseStore = holdFixture(outer);
+    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, async () => {
+      engineCalls++; enter(); await gate;
+      return runCodexCliUpdateApplyInWorker(result.planId, {
+        jobId: accepted.job.jobId, snapshot: null,
+        env: { OPENCODEX_HOME: configDir, CODEX_HOME: join(outer, "codex") },
+        spawnWorkerFn: url => {
+          workerStarts++;
+          const worker = new Worker(url, { type: "module" }), releaseWorker = holdFixture(outer);
+          worker.addEventListener("close", releaseWorker, { once: true });
+          return worker;
+        },
+      });
+    }, configDir).finally(releaseStore);
+    void pending.catch(() => {});
+    try {
+      await Promise.race([entered, pending.then(() => { throw new Error("store callback did not start"); })]);
+      expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
+      expect(await admitCodexCliUpdateJob({ requestId: "win-worker-once-01", planId: result.planId, confirmed: true, configDir }))
+        .toMatchObject({ kind: "duplicate", job: { jobId: accepted.job.jobId, status: "running" } });
+      // A stale generation cannot publish a fabricated successful completion.
+      expect(await finishCodexCliUpdateJob(accepted.job.jobId, crypto.randomUUID(), 1, result, configDir))
+        .toMatchObject({ status: "running", outcome: null });
+      const status = await handleCodexCliUpdateRoutes(managementCtx(
+        new Request(`http://localhost/api/codex/cli-update/jobs/${accepted.job.jobId}`)));
+      expect(status?.status).toBe(200);
+      expect(await status?.json()).toMatchObject({ jobId: accepted.job.jobId, status: "running", ownerState: "active" });
+      const lines: string[] = [];
+      const log = spyOn(console, "log").mockImplementation((...values: unknown[]) => lines.push(values.map(String).join(" ")));
+      try {
+        expect(await handleCodexCliUpdateCommand(["status", accepted.job.jobId, "--json"])).toBe(0);
+        expect(JSON.parse(lines[0]!)).toMatchObject({ jobId: accepted.job.jobId, status: "running" });
+      } finally { log.mockRestore(); }
+    } finally { release(); await pending.catch(() => {}); }
+    expect(await pending).toMatchObject({ status: "refused", outcome: "refused", reason: "windows_apply_disabled", ownerState: "finished" });
+    // The real production entry refuses before inspection/lease/installer on Windows.
+    expect(engineCalls).toBe(1); expect(workerStarts).toBe(1);
+    expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "refused", ownerState: "finished" });
+    const ledger = JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")) as { jobs: { revision: number }[] };
+    expect(ledger.jobs[0]!.revision).toBe(2);
+  }, 60_000);
+
+  test.skipIf(!winOnly)("private-store completion preserves an unknown live Worker without replaying its engine", async () => {
+    const { outer, configDir } = await fixture("ocx-winjob-worker-unknown-");
+    useHome(configDir);
+    const accepted = await admitCodexCliUpdateJob({ requestId: "win-worker-unknown-01", planId: result.planId, confirmed: true, configDir });
+    const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * FIXTURE_CONTROL_WORDS));
+    const worker = new Worker(new URL("../helpers/cli-update-fixture-worker.ts", import.meta.url), { type: "module" });
+    const terminate = spyOn(worker, "terminate");
+    const releaseWorker = holdFixture(outer);
+    let closed = false;
+    const joined = new Promise<void>(resolve => worker.addEventListener("close", () => {
+      closed = true; releaseWorker(); resolve();
+    }, { once: true }));
+    worker.postMessage({ type: "fixture-config", control: control.buffer, reply: "ambiguous", block: "after-reply" });
+    const initial = codexCliUpdateUnjoinedWorkerCount();
+    let engineCalls = 0, workerStarts = 0;
+    const releaseStore = holdFixture(outer);
+    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => {
+      engineCalls++;
+      return runCodexCliUpdateApplyInWorker(result.planId, { jobId: accepted.job.jobId, snapshot: null,
+        closeGraceMs: 10, spawnWorkerFn: () => { workerStarts++; return worker; } });
+    }, configDir).finally(releaseStore);
+    void pending.catch(() => {});
+    try {
+      expect(await pending).toMatchObject({ status: "ambiguous", reason: "job_result_unknown", ownerState: "finished",
+        childState: "unknown", leaseState: "unknown", lifetimeUncertain: true });
+      expect(closed).toBe(false);
+      expect(terminate).not.toHaveBeenCalled();
+      expect(codexCliUpdateUnjoinedWorkerCount()).toBe(initial + 1);
+      expect(await admitCodexCliUpdateJob({ requestId: "win-worker-unknown-01", planId: result.planId, confirmed: true, configDir }))
+        .toMatchObject({ kind: "duplicate", job: { jobId: accepted.job.jobId, status: "ambiguous" } });
+      const status = await handleCodexCliUpdateRoutes(managementCtx(
+        new Request(`http://localhost/api/codex/cli-update/jobs/${accepted.job.jobId}`)));
+      expect(status?.status).toBe(200);
+      expect(await status?.json()).toMatchObject({ status: "ambiguous", childState: "unknown", leaseState: "unknown" });
+      expect(engineCalls).toBe(1); expect(workerStarts).toBe(1);
+    } finally {
+      Atomics.store(control, FIXTURE_RELEASE, 1); Atomics.notify(control, FIXTURE_RELEASE);
+      // If store admission failed before dispatch, this fixture may still be idle.
+      try { worker.postMessage({ type: "fixture-close" }); } catch { /* close still must be observed */ }
+      await joined; await pending.catch(() => {});
+      terminate.mockRestore();
+    }
+    expect(codexCliUpdateUnjoinedWorkerCount()).toBe(initial);
+    expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "ambiguous", reason: "job_result_unknown" });
+  }, 60_000);
 
   test.skipIf(!winOnly)("admission dedupes, conflicts, applies and reads back through the real private store", async () => {
     const { configDir } = await fixture("ocx-winjob-admit-");
