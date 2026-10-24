@@ -5,7 +5,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { createServer, connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
+import { applyCodexCliUpdate, verifyInstalledCodexVersion, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
@@ -270,6 +270,27 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
   expect(views.every(value => value.reason === "metadata_returned")).toBe(true);
   expect(existsSync(installTrace)).toBe(false);
 });
+describe("default version verifier pre-child setup", () => {
+  test("a mkdir failure is terminal without creating a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const home = join(root, "version-home");
+    writeFileSync(home, "not a directory\n");
+    expect(await verifyInstalledCodexVersion("", "1.1.0", root, {})).toEqual({
+      terminal: true, ok: false, pid: null,
+    });
+    expect(readFileSync(home, "utf8")).toBe("not a directory\n");
+  });
+  test("a synchronous spawn throw is terminal without creating a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const command = "ocx-verifier\0must-not-spawn";
+    expect(() => spawn(command, ["--version"], { cwd: root, env: {} })).toThrow(/null bytes/);
+    expect(await verifyInstalledCodexVersion(command, "1.1.0", root, {})).toEqual({
+      terminal: true, ok: false, pid: null,
+    });
+    expect(lstatSync(join(root, "version-home")).isDirectory()).toBe(true);
+  });
+});
+
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("a held lease and an unsupported prefix are distinct refusal inputs", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-policy-"))); roots.push(root);
