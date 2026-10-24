@@ -24,6 +24,8 @@ import {
 } from "../../src/codex/cli-update-selection-gate";
 import { codexCliUpdateInspectionDepsFromSnapshot } from "../../src/codex/cli-update-inspection-context";
 import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { spawnTestChild } from "../helpers/spawn-test-child";
+import { repoRoot } from "../helpers/repo-root";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -247,18 +249,22 @@ describe("process-wide selection commit gate and cancellation fence", () => {
 });
 describe("actual Worker dispatch and parent responsiveness", () => {
   test("fresh main-thread entry and fixture imports preserve the message sentinel", async () => {
-    expect(Bun.isMainThread).toBe(true);
-    const scope = globalThis as unknown as { onmessage: unknown };
-    const previous = scope.onmessage, sentinel = () => {};
-    scope.onmessage = sentinel;
-    try {
-      for (const path of ["../../src/codex/cli-update-worker.ts", "../helpers/cli-update-fixture-worker.ts"]) {
-        const url = new URL(path, import.meta.url);
-        url.searchParams.set("fresh-main-import", crypto.randomUUID());
-        await import(url.href); // Query defeats earlier static-import module caching.
-        expect(scope.onmessage).toBe(sentinel);
-      }
-    } finally { scope.onmessage = previous; }
+    const urls = ["../../src/codex/cli-update-worker.ts", "../helpers/cli-update-fixture-worker.ts"]
+      .map(path => new URL(path, import.meta.url).href);
+    // A new main process has imported neither module before installing the sentinel;
+    // no query-string cache assumption or extra production export is needed.
+    const program = 'if(Bun.isMainThread!==true)throw new Error("not main");'
+      + 'const sentinel=()=>{};globalThis.onmessage=sentinel;let imports=0;'
+      + `try{for(const url of ${JSON.stringify(urls)}){await import(url);imports++;`
+      + 'if(globalThis.onmessage!==sentinel)throw new Error("main handler replaced");}'
+      + 'console.log(JSON.stringify({main:Bun.isMainThread,imports,sentinelPreserved:globalThis.onmessage===sentinel}));'
+      + '}finally{globalThis.onmessage=null;}';
+    const result = await spawnTestChild([process.execPath, "--no-env-file", "--no-install", "-e", program],
+      { cwd: repoRoot(), env: process.env, deadlineMs: 2_500 });
+    expect(result.timedOut, `${result.stdout}\n${result.stderr}`).toBe(false);
+    expect(result.reaped && result.pipesClosed).toBe(true);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ main: true, imports: 2, sentinelPreserved: true });
   });
   test("detached message handler keeps a real Bun child alive until observed exit", async () => {
     const releasePath = join(home(), "release-child");
