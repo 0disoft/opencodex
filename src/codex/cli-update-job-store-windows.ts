@@ -140,18 +140,31 @@ function loadNative(): Promise<Native> {
 const unsafe = (): Error => new Error("unsafe_store");
 const enoent = (): NodeJS.ErrnoException => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 
-class PinSet {
+export class WindowsJobStorePinSet {
   private readonly handles: bigint[] = [];
+  private readonly failedCloses = new Set<bigint>();
+  get remaining(): number { return this.handles.length; }
   keep(handle: bigint): bigint { this.handles.push(handle); return handle; }
-  release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): void {
+  release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): boolean {
     const index = this.handles.lastIndexOf(handle);
-    if (index >= 0) this.handles.splice(index, 1);
-    kernel.symbols.CloseHandle(handle);
+    if (index < 0) return true; // Already released; never close a reused native handle.
+    try {
+      if (!kernel.symbols.CloseHandle(handle)) { this.failedCloses.add(handle); return false; }
+    } catch { this.failedCloses.add(handle); return false; }
+    this.handles.splice(index, 1);
+    this.failedCloses.delete(handle);
+    return true;
   }
   closeAll(kernel: Library<typeof KERNEL_SYMBOLS>): void {
-    for (const handle of this.handles.splice(0).reverse()) kernel.symbols.CloseHandle(handle);
+    // One attempt per disposal. A failed explicit release must not be retried
+    // invisibly by a later finally/closeAll in the same ownership lifecycle.
+    for (const handle of [...this.handles].reverse()) {
+      if (!this.failedCloses.has(handle)) this.release(handle, kernel);
+    }
   }
 }
+const PinSet = WindowsJobStorePinSet;
+type PinSet = WindowsJobStorePinSet;
 
 interface Prepared {
   readonly config: string;
@@ -669,7 +682,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
         if (!sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
         await verifyAcl([{ path: stage.path, directory: true, policy: "private" }]);
         if (closed) throw unsafe();
-        ctx.pins.release(stage.handle, kernel);
+        if (!ctx.pins.release(stage.handle, kernel)) throw unsafe();
         // Ancestors remain pinned and all writers are within the verified trust boundary.
         rmSync(stage.path, { recursive: true });
         stage = undefined;
@@ -679,7 +692,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
         closed = true;
         try { await verifyHeld(); if (held) releaseLock(ctx, held); }
         finally { ctx.pins.closeAll(kernel); }
-        return !acquire || !existsSync(lock);
+        return ctx.pins.remaining === 0 && (!acquire || !existsSync(lock));
       },
     };
   } finally { if (!transferred) ctx.pins.closeAll(kernel); }

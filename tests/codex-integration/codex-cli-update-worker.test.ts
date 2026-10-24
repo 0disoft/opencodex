@@ -27,6 +27,7 @@ import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoRoot } from "../helpers/repo-root";
 import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
+import { WindowsJobStorePinSet } from "../../src/codex/cli-update-job-store-windows";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -171,6 +172,28 @@ afterEach(async () => {
   if (firstError !== undefined) throw firstError;
 });
 describe("process-wide selection commit gate and cancellation fence", () => {
+  test("a failed pin close keeps its lifetime token without an automatic close retry", () => {
+    const pins = new WindowsJobStorePinSet(), handle = pins.keep(123n);
+    let attempts = 0, fault = true, detached = 0;
+    const kernel = { symbols: { CloseHandle: () => { attempts++; return fault ? 0 : 1; } } }
+      as unknown as Parameters<WindowsJobStorePinSet["release"]>[1];
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const token = lifetime.retain(pins);
+    expect(pins.release(handle, kernel)).toBe(false);
+    pins.closeAll(kernel);
+    expect(attempts).toBe(1);
+    expect(pins.remaining).toBe(1);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    // Explicit fixture-only recovery of the same recorded handle, not production retry.
+    fault = false;
+    expect(pins.release(handle, kernel)).toBe(true);
+    expect(pins.remaining).toBe(0);
+    token.release();
+    expect(detached).toBe(1);
+    expect(pins.release(handle, kernel)).toBe(true);
+    expect(attempts).toBe(2); // Already released never closes a potentially reused handle.
+  });
   test("execution retention roots survive completion until every exact owner releases", () => {
     let detached = 0;
     const lifetime = createCodexCliWorkerLifetime(() => { detached++; });

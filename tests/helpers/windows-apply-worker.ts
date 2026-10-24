@@ -11,7 +11,8 @@ if (Bun.isMainThread === false) {
   self.onmessage = async event => {
     if (ran) return;
     ran = true;
-    const { planId, inspectionDeps, target, gate, fence } = event.data;
+    const { requestId, planId, inspectionDeps, target, gate, fence } = event.data;
+    const nativeSettlements: { terminal: boolean; cleanupComplete: boolean }[] = [];
     const abort = new AbortController();
     const view = new Int32Array(gate), word = new Int32Array(fence);
     try {
@@ -32,17 +33,20 @@ if (Bun.isMainThread === false) {
           const installing = invocation.policy === "installer";
           if (installing && (Atomics.load(view, 0) !== 2 || Atomics.load(word, 0) !== 2)) throw new Error("native start outside commit");
           const child = startWindowsCliChild(invocation), wait = child.wait.bind(child);
-          child.wait = () => {
+          child.wait = async () => {
             if (Atomics.load(view, 0) !== 0) throw new Error("gate held during native wait");
-            return wait();
+            const result = await wait();
+            nativeSettlements.push({ terminal: result.terminal, cleanupComplete: result.cleanupComplete });
+            return result;
           };
-          if (installing) self.postMessage({ type: "native-start", committed: true });
+          if (installing) self.postMessage({ type: "native-start", requestId, committed: true });
           return child;
         },
       });
-      self.postMessage({ type: "result", result });
+      self.postMessage({ type: "result", requestId, result, cleanupConfirmed: nativeSettlements.length > 0
+        && nativeSettlements.every(item => item.terminal && item.cleanupComplete) });
     } catch {
-      self.postMessage({ type: "fixture-error" });
+      self.postMessage({ type: "fixture-error", requestId });
     } finally { lifetime.finish(); }
   };
 }

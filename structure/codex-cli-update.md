@@ -308,6 +308,11 @@ keeps the run-once handler installed. Only successful terminal cleanup removes t
 its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
 can remain resident until separately authorized recovery. A crash still loses in-memory ownership
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
+Authority release succeeds only when lock disposal is verified and its pin set is empty.
+A failed CloseHandle stays in that set; automatic closeAll skips the failed close instead of retrying
+or forgetting it, so apply retains its Owner/token with `lease_release_unverified`.
+Fixture teardown needs both a correlated non-retained, cleanup-confirmed result and Worker join;
+Worker close alone, an error, missing reply or retained owner never permits root removal.
 
 Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
 PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous
