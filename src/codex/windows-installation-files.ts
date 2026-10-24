@@ -23,6 +23,8 @@ export interface WindowsInstallationFileRequest {
   readonly metadataOnly?: boolean;
   /** Read at most maxBytes from the start instead of refusing an oversized file. */
   readonly prefixOnly?: boolean;
+  /** Same held stream, domain-separated archive/readback comparison. Default remains raw SHA-256. */
+  readonly installationDigest?: boolean;
 }
 export interface WindowsInstallationFileIdentity {
   readonly volumeSerial: string;
@@ -97,6 +99,7 @@ export async function inspectWindowsInstallationFiles(
       || (request.hashOnly !== undefined && typeof request.hashOnly !== "boolean")
       || (request.metadataOnly !== undefined && typeof request.metadataOnly !== "boolean")
       || (request.prefixOnly !== undefined && typeof request.prefixOnly !== "boolean")
+      || (request.installationDigest !== undefined && typeof request.installationDigest !== "boolean")
       || request.maxBytes > (request.hashOnly ? MAX_NATIVE_BACKING_BYTES : MIB)) return null;
     ceiling += request.maxBytes;
     return parsedPath;
@@ -212,6 +215,7 @@ export async function inspectWindowsInstallationFiles(
     openedForTests?.();
     const observed = files.map(({ request, handle, identity }) => {
       const hash = createHash("sha256");
+      if (request.installationDigest) hash.update("codex-cli-observed-file-v1\0");
       if (request.metadataOnly) return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };
       const truncated = Boolean(request.prefixOnly) && !request.hashOnly && identity.size > request.maxBytes;
       const readLimit = truncated ? request.maxBytes : identity.size;

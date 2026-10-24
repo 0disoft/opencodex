@@ -1198,25 +1198,32 @@ An applicable plan reports `applicable: true` and a deterministic `planId` bindi
 installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
 process observation. Supported Windows metadata queries use the observed Node/npm under matching
-held handles. A completed Windows read-only plan reports a deterministic ID, `applicable: false`
-and `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier. Unsupported
+held handles. Windows x64 can be applicable only for a bounded npm prefix with verified
+write authority; other observed prefixes retain `windows_apply_disabled`. Active/unknown sessions still refuse earlier. Unsupported
 Windows layouts return `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
-command installs nothing, changes no application state and never signals a session. Windows apply
-remains disabled, and a plan ID alone is not installation authorization: apply requires separate explicit confirmation.
+command installs nothing, changes no application state and never signals a session.
+A plan ID alone is not installation authorization: apply requires separate explicit confirmation.
 
-#### Confirmed POSIX Codex CLI apply and job status
+#### Confirmed Codex CLI apply and job status
 
 ```bash
 ocx system codex-cli-update apply --plan-id <32-hex> --yes --request-id <stable-key> --json
 ocx system codex-cli-update status <job-id> --json
 ```
 
-Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macOS. It revalidates the
+Apply supports the selected, managed, non-shim npm-global CLI on Linux/macOS and the restricted
+Windows x64 npm layout. It revalidates the
 approved plan under an installation lease, verifies the exact main/platform archives, installs them
 offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
 Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
-Windows apply, shim repair, native apps and other installation managers remain unsupported.
+Windows supports shared prefixes with verified ACLs and no reparse paths. Observation includes
+unrelated packages and shims, capped at 4,096 entries, 512 MiB total and 384 MiB per file. Their
+bytes and identities must be preserved. Larger or unsafe prefixes, ARM64, shim repair, native apps
+and other installation managers remain unsupported. Unknown child lifetime or incomplete handle cleanup retains staging and
+the installation lease; do not retry by deleting its lock. Readback includes auxiliary files,
+new/absent backing roots and npm's hidden lockfile. `not_applied` means scoped installation state
+was observed unchanged, not that npm performed no I/O anywhere.
 
 Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
 exit 1, including with `--json`. Status reads the

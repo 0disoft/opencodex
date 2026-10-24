@@ -10,6 +10,8 @@ import { inspectWindowsInstallationFiles, type WindowsInstallationFilesResult } 
 
 /** Private plan evidence. Explicit `attest` observations never enter this map. */
 interface WindowsPlanEvidence { readonly node: string; readonly npmCli: string; readonly arch: "x64" | "arm64";
+  readonly prefix: string; readonly launcher: string; readonly backingRoot: string;
+  readonly envPath: string | undefined; readonly envPathExt: string | undefined;
   readonly nodeEvidence: string; readonly npmEvidence: string }
 const evidence = new WeakMap<CodexCliInstallReport, WindowsPlanEvidence>();
 export const windowsCodexCliPlanEvidence = (report: CodexCliInstallReport): WindowsPlanEvidence | null => evidence.get(report) ?? null;
@@ -17,19 +19,52 @@ const hash = (value: string): string => createHash("sha256").update(value).diges
 type File = Extract<WindowsInstallationFilesResult, { kind: "observed" }>["files"][number];
 const id = (file: File): string => JSON.stringify([file.path, file.identity, file.digest]);
 const sameWindowsPath = (left: string, right: string): boolean => win32.resolve(left).toLowerCase() === win32.resolve(right).toLowerCase();
+function selectedWindowsOverride(candidate: string, env: NodeJS.ProcessEnv, configDir?: string): boolean {
+  return env.CODEX_CLI_PATH?.trim() === candidate && resolveCodexRuntime({ platform: "win32", env, configDir,
+    probeVersion: false, discoverAlternatives: false, existsSync: path => path === candidate,
+    readFileSync: () => { throw new Error("state not required for explicit override"); },
+    readdirSync: () => [], statSync: () => { throw new Error("discovery disabled"); },
+  }).runtime.command === candidate;
+}
+/** Synchronous selection fence after the last awaited authority check, before native start. */
+export function windowsCodexCliSelectionMatches(report: CodexCliInstallReport, deps: CodexCliInstallProvenanceDeps): boolean {
+  const captured = evidence.get(report), env = deps.env;
+  return !!captured && !!env && deps.selectionAttested === true && env.PATH === captured.envPath
+    && env.PATHEXT === captured.envPathExt && selectedWindowsOverride(captured.launcher, env, deps.configDir);
+}
 /** Metadata queries execute only while the observed Node/npm and ancestors deny replacement. */
-export async function withWindowsCodexCliPlanToolchain<T>(report: CodexCliInstallReport, run: () => T): Promise<T | null> {
+export async function withWindowsCodexCliPlanToolchain<T>(report: CodexCliInstallReport, run: () => T | Promise<T>): Promise<T | null> {
   const toolchain = evidence.get(report);
   if (!toolchain) return null;
   let result: T | null = null;
   const observed = await inspectWindowsInstallationFiles([
     { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
     { path: toolchain.npmCli, maxBytes: 256 * 1024 },
-  ], files => {
+  ], async files => {
     if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
-    result = run(); return true;
+    result = await run(); return true;
   });
   return observed.kind === "observed" ? result : null;
+}
+
+/** Transfer a held toolchain observation to a transaction, including unknown child lifetimes. */
+export async function holdWindowsCodexCliPlanToolchain(report: CodexCliInstallReport) {
+  const toolchain = evidence.get(report);
+  if (!toolchain) return null;
+  const admitted = Promise.withResolvers<boolean>();
+  const release = Promise.withResolvers<void>();
+  const observing = inspectWindowsInstallationFiles([
+    { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
+    { path: toolchain.npmCli, maxBytes: 256 * 1024 },
+  ], async files => {
+    if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
+    admitted.resolve(true);
+    await release.promise;
+    return true;
+  });
+  void observing.then(() => admitted.resolve(false), () => admitted.resolve(false));
+  if (!await admitted.promise) return null;
+  return { async release() { release.resolve(); return (await observing).kind === "observed"; } };
 }
 const json = (file: File): Record<string, unknown> | null => {
   try { const item = JSON.parse(Buffer.from(file.bytes).toString("utf8"));
@@ -93,11 +128,7 @@ export async function inspectWindowsCodexCliPlanInstall(
   if (prefix === win32.parse(prefix).root || paths.some(excluded)) return fallback;
   // Only already handle-observed files can pass the real resolver's existence
   // predicate. The explicit override wins before saved-state/shim/PATH candidates.
-  const selected = () => resolveCodexRuntime({ platform: "win32", env, configDir: deps.configDir,
-    probeVersion: false, discoverAlternatives: false, existsSync: path => path === candidate,
-    readFileSync: () => { throw new Error("state not required for explicit override"); },
-    readdirSync: () => [], statSync: () => { throw new Error("discovery disabled"); },
-  }).runtime.command === candidate && env.CODEX_CLI_PATH?.trim() === candidate;
+  const selected = () => selectedWindowsOverride(candidate, env, deps.configDir);
   try {
     const first = await inspectWindowsInstallationFiles([
       { path: manifest, maxBytes: 256 * 1024 }, { path: npmManifest, maxBytes: 256 * 1024 },
@@ -154,7 +185,9 @@ export async function inspectWindowsCodexCliPlanInstall(
       installContentDigest: content, shim: Object.freeze({ status: "not-tracked", backingKind: null }),
       evidence: Object.freeze(["package_manifest", "package_manifest_digest", "install_content_digest", "global_npm_layout"] as const),
     });
-    evidence.set(report, Object.freeze({ node, npmCli, arch, nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!) }));
+    evidence.set(report, Object.freeze({ node, npmCli, arch, prefix, launcher: candidate,
+      envPath: selectedPath, envPathExt: selectedPathExt,
+      backingRoot: win32.dirname(backingManifest), nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!) }));
     return report;
   } catch { return fallback; }
 }

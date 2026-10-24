@@ -76,7 +76,7 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
-native("a Windows plan id with applicable=false cannot enter a management apply job", async () => {
+native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const f = fixture();
   const deps = { inspectionDeps: f.deps,
     resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
@@ -98,13 +98,14 @@ native("a Windows plan id with applicable=false cannot enter a management apply 
       syncClaudeAgentDefsBestEffort: async () => {} };
     const response = await handleCodexCliUpdateRoutes(ctx);
     expect(response?.status).toBe(503);
-    expect(await response?.json()).toEqual({ error: "unsupported_store" });
+    expect(await response?.json()).toEqual({ error: "unsafe_store" });
 
     let leaseAttempts = 0, installAttempts = 0;
     const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
       acquireLease: () => { leaseAttempts += 1; return null; },
+      resolveTarget: deps.resolveTarget, scanProcesses: deps.scanProcesses,
       install: async () => { installAttempts += 1; return { terminal: true, exitCode: 0 }; } });
-    expect(apply).toMatchObject({ outcome: "refused", reason: "windows_inspection_deferred" });
+    expect(apply).toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
     expect(leaseAttempts).toBe(0);
     expect(installAttempts).toBe(0);
   } finally {

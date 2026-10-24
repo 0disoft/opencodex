@@ -87,16 +87,16 @@ creates private plan evidence; copying a public report cannot enable Windows pla
 This observes linkage and content, not publisher authenticity or a whole-tree guarantee.
 Metadata queries use the observed Node/npm paths under freshly matching held handles,
 the existing isolated npm configuration/cache, and the pinned registry. No installer runs.
-A completed Windows read-only plan has a deterministic ID and `applicable: false`,
-`refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
-The independent Windows apply entrypoint remains refused before inspection or lease creation.
+A completed Windows plan has a deterministic ID. Only the bounded x64 prefix predicate below
+may set `applicable: true`; other observed layouts retain `windows_apply_disabled`.
+Active/unknown sessions still refuse earlier. Apply never overrides a refused plan.
 
 ## Independent Windows child lifetime primitive
 
 `src/codex/windows-cli-child.ts` supplies an opt-in Windows x64 child owner, with native ABI/handle
 ownership in `src/codex/windows-cli-child-native.ts` and overlapped output in
-`src/codex/windows-cli-child-pipe.ts`. No plan, installer, pack or version consumer imports it yet;
-Windows apply remains disabled. ARM64 is unsupported.
+`src/codex/windows-cli-child-pipe.ts`. Windows apply consumes it for pack, installer and version
+children. ARM64 is unsupported.
 
 It starts only an explicit drive-absolute `.exe` plus argv: `CreateProcessW(CREATE_SUSPENDED)`,
 assignment to an unnamed non-inheritable Job, then `ResumeThread`. There is no PID reopen,
@@ -118,12 +118,14 @@ A termination acknowledgment, timeout, I/O error, failed wait/query or PID absen
 The original primary handle must signal and a successful Job accounting query must report zero
 active processes; exit code 259 is valid once that handle signals. Output still drains after Job
 emptiness. Normal `CreateProcess` descendants are covered; WMI-created processes are not claimed.
+`cleanupComplete` separately establishes disposal: terminal plus EOF can still leave failed-close
+handles owned. Such owners and lease/staging remain retained with `child_cleanup_failed`; the job
+projects the child as terminal and the lease as retained, without claiming successful cleanup.
 Unknown results retain the owner and all lease/staging obligations. Setup failures with no process
 use `cleanupUnstartedWindowsChild` to settle any connect operation and release only owned handles.
 
-The current `packArtifact` reads `packed.exitCode` without adopting `packed.terminal`, and apply's
-`started` flag is set only at the installer. Consumer integration therefore requires adopting lifetime
-and lease/staging retention before **every** spawn, including pack, before enabling Windows apply.
+The Windows transaction adopts lifetime and lease/staging retention before every child start,
+including pack. Its strong owner registry keeps unknown children and their toolchain pins alive.
 The npm `--fetch-timeout=120000` remains a separate fetch policy, not a process lifetime deadline.
 `tests/codex-integration/codex-cli-windows-child.test.ts` exercises actual owned native fixtures,
 including overlapping whitelist isolation, stdout-free descendants, incompatible nested Jobs,
@@ -133,7 +135,8 @@ pre-user-code failures, byte caps, cancellation settlement, wait/query failures 
 
 The independent `src/codex/cli-update-windows-layout.ts` verifies Windows x64 archives and
 returns only prefix-relative expected files, sizes and content digests; `applicable` and
-`mutationAuthority` remain false. No plan, selection, installer, lease or apply consumer uses it.
+`mutationAuthority` remain false. The Windows transaction consumes this content contract only
+after obtaining separate selection and installation authority.
 The main root is `node_modules/@openai/codex`; the explicit sibling backing is
 `node_modules/@openai/codex-win32-x64`, with `vendor/x86_64-pc-windows-msvc/bin/codex.exe`.
 Exact direct-version and npm-alias references retain the archive verifier's metadata/linkage rules.
@@ -149,10 +152,50 @@ raw archive source-file hashes and actual exported-function generation with inte
 calls. All three generated strings matched the retained bytes. No npm installation or lifecycle
 script ran; the offline fixture test checks byte consistency, not registry provenance afresh.
 Other shim grammars remain unsupported. All archive auxiliary files enter the expected set and digest, and
-readback comparison requires the complete set. A future consumer must separately prove live held
+readback comparison requires the complete set. The consumer separately proves live held
 file identities, package lookup, selected Node/shim and write authority; a matching DTO grants none.
 Coverage: `tests/codex-integration/codex-cli-update-windows-layout.test.ts` uses only synthetic
 archives and captured shim bytes, with no npm installation or native executable invocation.
+
+## Explicit Windows x64 apply
+
+`src/codex/cli-update-windows-apply.ts` implements the Windows transaction behind the existing
+confirmed CLI/HTTP admission and planId contract. `src/codex/cli-update-windows-observation.ts`
+admits bounded shared global prefixes. The two Codex package trees and three shims are targets;
+all other prefix entries, including `node_modules/.package-lock.json`, are preservation obligations.
+Observation is capped at 4,096 entries, 512 MiB total and 384 MiB per file, including unrelated
+packages. Oversized namespaces, unsupported ACL ancestry and ARM64 refuse without repair.
+Actual ACL evidence decides profile-path support; an unsafe AppData ancestor on one host does
+not establish that every profile is unsafe. No existing ancestor is rehardened.
+The job-store native primitives provide a separate `.ocx-codex-cli-apply.lock` lease. Prefix,
+parent and package-scope directory pins deny rename/delete; ACLs are verified before creation
+and before/after execution. Only newly created lock/staging objects are hardened. The current
+account and kernel-equivalent administrators remain inside the trust boundary; other-SID and
+filtered-token behavior is not claimed as empirically tested. Reparse paths fail closed.
+
+The observed Node/npm pair stays pinned across awaited work. Private staging owns npm configs,
+caches, Windows temp/profile variables and version state. Exact tarballs are verified before
+the final fresh plan, selected command, preimage, authority and session checks. Pack and install
+have no overall process deadline or cancellation kill. Unknown child state retains child handles,
+toolchain pins, lease and staging; it is never converted to terminal by PID absence.
+
+Readback enumerates both package trees (including auxiliary files), three shims, empty directories,
+the hidden lock, absence of the new backing, and unrelated prefix entries. Unrelated bytes, file
+identities and directory identities must stay equal; added entries make the result ambiguous.
+Only the separately held transaction lock/staging is excluded. It rejects unexpected target entries,
+links, unsupported Windows names, unreadable/oversized observations and untrusted ACLs. The native
+reader's optional installation-domain SHA-256 uses the same held stream, retaining raw SHA-256 as
+the default. `not_applied` requires identical scoped preimage and selection, not merely an old
+version; it is not a claim that npm performed no I/O. A complete target is classified by readback,
+not npm's exit code. Version uses the pinned Node with the verified JS entrypoint in private cwd,
+then repeats selection/content observation; it does not attest arbitrary future CMD lookup.
+Cleanup errors remain separate from the result. The existing job execution layer retries result
+persistence without repeating installation. No automatic rollback or stale-lock recovery exists.
+`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers real offline npm in private
+shared fixtures, unrelated package/shim preservation, terminal close failure, partial mutations,
+absence, selection, unknown retention, async pins and persistence retry. One JS launcher executes
+a compiled CLR x64 backing fixture that verifies Job membership and returns the version. This is
+executable-fixture evidence, not a run of the vendor Codex product.
 
 ## Explicit POSIX apply
 
@@ -202,7 +245,7 @@ is `not_applied` even after exit zero. Partial, unreadable or uncertain results 
 Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A failed or thrown
 lease release marks retention unverified without preventing staging cleanup; cleanup does not replace
 the readback outcome. Uncertain live installer/version children still retain both lease and staging.
-Windows apply remains refused. Shims and non-npm managers remain unsupported.
+The POSIX path refuses Windows; Windows uses the separate transaction above. Non-npm managers remain unsupported.
 
 `bin/ocx.mjs` includes the proof-bound Codex candidate snapshot for the published `start` command as well as the updater commands; this makes the production management plan work without accepting request-supplied candidate evidence. `src/codex/cli-update-inspection-context.ts` is the shared bridge from that Node snapshot to the installer inspector. Direct Bun/source launches have no trusted candidate and fail closed; neither path reconstructs write targets from display data. `src/codex/cli-update-job.ts` owns the bounded durable admission ledger shared by CLI and management. Request IDs are scoped to the protected config root and payload digest; exact retries return the same opaque job, conflicts refuse, and a full ledger refuses new admission. Every store operation requires a canonical same-owner config parent with safe write permissions and canonical ancestry to filesystem root; each ancestor must be owned by root or the current user, and shared-writable ancestors are refused unless root-owned and sticky. Only confirmed apply admission may create one absent config-root level, which is revalidated as owner-private. Plan and status reads never create it, and an existing root must pass the same canonical/no-link checks. This path-based ancestry check prevents untrusted other-user writable ancestors from redirecting store operations; it does not defend against concurrent tampering by the same user or root. Atomic updates use a private same-owner POSIX directory, no-follow reads and a short exclusive lock. Unresolved records are not expired. An in-process generation and revision own completion writes; after restart a queued/running record projects as `ambiguous` with `owner_state_unknown`, without claiming the old owner stopped. A `retained` lease state requires an execution reason that proves acquisition and intentional preservation; synthetic job errors, unverified release and release exceptions project as `unknown`. The path-free DTO separates owner state, installer child state, lease retention and overall lifetime uncertainty with fixed outcome/reason/cleanup codes.
 

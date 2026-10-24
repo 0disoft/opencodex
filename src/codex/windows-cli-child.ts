@@ -20,6 +20,8 @@ export interface WindowsCliChildInvocation {
 }
 export interface WindowsCliChildResult {
   readonly terminal: boolean;
+  /** Terminal process/Job accounting does not establish successful handle disposal. */
+  readonly cleanupComplete: boolean;
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly overflow: boolean;
@@ -100,7 +102,8 @@ export class WindowsCliChild {
     if (!this.native.k.TerminateJobObject!(this.job, 1)) this.terminationFailed = true;
   }
   private result(terminal: boolean, exitCode: number | null): WindowsCliChildResult {
-    return { terminal, exitCode, stdout: Buffer.concat(this.chunks, this.captured).toString("utf8"),
+    return { terminal, cleanupComplete: terminal && this.native.handles.size === 0 && this.native.borrowedMemory.size === 0,
+      exitCode, stdout: Buffer.concat(this.chunks, this.captured).toString("utf8"),
       overflow: this.overflow, failed: this.failed || !!this.setupFailure, reason: this.setupFailure ?? this.reason };
   }
   /** A successful accounting query plus a signaled original process handle, never PID absence or STILL_ACTIVE. */
