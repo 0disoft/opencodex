@@ -15,7 +15,8 @@ import type { StopOutcome } from "./stop-report";
 
 /** Re-read ownership when an ordinary runtime actually exits, including after API drain. */
 export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown): StartExitTeardown {
-  return readClientConnectionState().kind === "connected"
+  const connection = readClientConnectionState();
+  return connection.kind === "connected" && connection.value.transport !== "link"
     ? { ...teardown, restoreNativeCodex: false, stripGrokConfig: false }
     : teardown;
 }
@@ -102,17 +103,17 @@ export async function preflightConnectedClientStop(approved?: ConnectedStopTarge
  * The line `ocx stop` prints in place of the shared teardown on a connected client, or null
  * when this home is not one (#7563).
  *
- * A hub client or Remote Link Child gets its Codex routing and catalog from `ocx connect` /
- * `ocx sync`, and its client runtime never writes them on start. The standalone teardown
+ * A hub client gets its Codex routing and catalog from `ocx connect` / `ocx sync`, and its
+ * client runtime never writes them on start. The standalone teardown
  * restored native Codex, rewrote the catalog and stripped the Grok block, and nothing on the
  * client put any of it back: `ocx start` brought the runtime up with Codex still native and
  * Grok unconfigured. Leaving them in place makes stop/start a round trip; `ocx disconnect`
- * remains the teardown that owns them, with its own ownership checks.
+ * remains the teardown that owns them, with its own ownership checks. A Remote Link Child
+ * is deliberately excluded: its unauthenticated loopback route is unsafe after the listener exits.
  */
 export function connectedClientStopSkipLine(state: ClientConnectionState): string | null {
-  if (state.kind !== "connected") return null;
-  const role = state.value.transport === "link" ? "Remote Link Child" : "hub client";
-  return `↩️  Codex routing, its catalog and the Grok config stay as they are: this ${role}'s connection owns them, and 'ocx start' serves them again. To hand Codex back to its own account, run 'ocx disconnect'.`;
+  if (state.kind !== "connected" || state.value.transport === "link") return null;
+  return `↩️  Codex routing, its catalog and the Grok config stay as they are: this hub client's connection owns them, and 'ocx start' serves them again. To hand Codex back to its own account, run 'ocx disconnect'.`;
 }
 
 /**
