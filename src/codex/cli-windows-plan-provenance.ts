@@ -56,6 +56,9 @@ export async function inspectWindowsCodexCliPlanInstall(
   deps: CodexCliInstallProvenanceDeps, fallback: CodexCliInstallReport, excluded: (path: string) => boolean,
 ): Promise<CodexCliInstallReport> {
   const env = deps.env ?? {};
+  // The bounded content read is opt-in: a bare ownership check holds the same
+  // reparse-refusing handles and identity set but streams no file content.
+  const observe = deps.observeInstallContent === true;
   const candidate = env.CODEX_CLI_PATH?.trim();
   if (!deps.selectionAttested || !candidate || !/^[a-z]:[\\/]/i.test(candidate)
     || win32.basename(candidate) !== "codex.cmd"
@@ -119,10 +122,19 @@ export async function inspectWindowsCodexCliPlanInstall(
     const backingManifest = await backingSelection();
     if (!backingManifest) return fallback;
     const native = win32.join(win32.dirname(backingManifest), "vendor", triple, "bin", "codex.exe");
-    const requests = [manifest, npmManifest, candidate, bin, npmCli, backingManifest].map(path => ({ path, maxBytes: 256 * 1024 }));
+    // Ownership requires the manifests, shim and backing manifest bytes plus the
+    // bounded Node header read above; entrypoint, npm CLI, Node and native
+    // contents only feed the opt-in digest, so they stay metadata-held without it.
+    const owned = (path: string) => ({ path, maxBytes: 256 * 1024 });
+    const bound = (path: string) => observe ? { path, maxBytes: 256 * 1024 } : { path, maxBytes: 0, metadataOnly: true };
+    const requests = [owned(manifest), owned(npmManifest), owned(candidate), bound(bin), bound(npmCli), owned(backingManifest)];
     const final = await inspectWindowsInstallationFiles([...requests,
-      { path: node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
-      { path: native, maxBytes: MAX_NATIVE_BACKING_BYTES, hashOnly: true },
+      observe
+        ? { path: node, maxBytes: 128 * 1024 * 1024, hashOnly: true }
+        : { path: node, maxBytes: 0, metadataOnly: true },
+      observe
+        ? { path: native, maxBytes: MAX_NATIVE_BACKING_BYTES, hashOnly: true }
+        : { path: native, maxBytes: 0, metadataOnly: true },
     ], async () => selected() && env.PATH === selectedPath && env.PATHEXT === selectedPathExt
       && await deriveCodexCliInstallationInput({ codexCliPath: candidate,
         path: selectedPath ?? null, pathExt: selectedPathExt ?? null }, { platform: "win32" })
@@ -137,13 +149,14 @@ export async function inspectWindowsCodexCliPlanInstall(
     const backing = json(files.get(backingManifest)!);
     if (!backing || "exports" in backing || ![pkg, "@openai/codex"].includes(String(backing.name))
       || ![main.version, `${main.version}-win32-${arch}`].includes(String(backing.version))) return fallback;
-    const content = hash(JSON.stringify(["windows-npm-read-only-plan-v2", arch, prefix, candidate, node, npmCli,
-      ...final.files.map(file => [file.path, file.identity, file.digest])]));
+    const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v2", arch, prefix, candidate, node, npmCli,
+      ...final.files.map(file => [file.path, file.identity, file.digest])])) : null;
     const report: CodexCliInstallReport = Object.freeze({ ...fallback, managed: true, selectionAttested: true,
       provenance: "npm-global", reason: "managed_npm_global", packageVersion: main.version,
       versionEvidence: Object.freeze({ kind: "package-manifest" }), installDigest: hash(prefix),
       installContentDigest: content, shim: Object.freeze({ status: "not-tracked", backingKind: null }),
-      evidence: Object.freeze(["package_manifest", "package_manifest_digest", "install_content_digest", "global_npm_layout"] as const),
+      evidence: Object.freeze(["package_manifest", "package_manifest_digest",
+        ...(content ? ["install_content_digest" as const] : []), "global_npm_layout"] as const),
     });
     evidence.set(report, Object.freeze({ node, npmCli, arch, nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!) }));
     return report;

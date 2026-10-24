@@ -41,7 +41,7 @@ observes linkage at that boundary and does not prevent later symlink mutation. A
 no bound content is refused install_content_unverified before any registry query. The digest is
 observation only — it carries no execution guarantee — so the apply phase re-observes
 rather than rely on it. The observation is opt-in: the plan path requests it because the planId
-binds it, while a bare POSIX check leaves the digest null rather than paying the bounded read.
+binds it, while a bare check leaves the digest null rather than paying the bounded read.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows supports the restricted handle-bound plan predicate below; other Windows layouts remain deferred.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
@@ -77,6 +77,10 @@ to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
 `MAX_NATIVE_BACKING_BYTES` as POSIX, defined in `src/codex/cli-installation-limits.ts`.
 The native reader bounds aggregate requests to that backing plus 128 MiB Node
 and twelve 1 MiB text requests; hash-only bytes are never buffered whole.
+Only the opt-in content observation streams the entrypoint, npm CLI, Node and native bytes. The
+plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare check holds the
+same files — Node and native included — open and identity-checked metadata-only, with zero content
+bytes read and a null `installContentDigest`.
 
 PATH-only or separate-prefix Node selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
