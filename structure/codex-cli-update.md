@@ -49,8 +49,14 @@ provider/engine search variables; proxy settings and `NODE_EXTRA_CA_CERTS` remai
 Ambient NODE_COMPILE_CACHE is replaced with an owned path inside the isolation directory because
 npm's own enableCompileCache() otherwise recreates a default cache outside that directory.
 Distinct npm config files, npm/Node caches and logs stay under the owned temporary root with best-effort
-cleanup; a cleanup error does not replace the computed plan/refusal. The POSIX update
-scan includes all readable users by default, retaining an explicitly injected UID scope.
+cleanup; a cleanup error does not replace the computed plan/refusal. Registry metadata
+and the request-path process-table scan wait off the server event loop: the bounded npm
+children and the darwin/Windows enumerations resolve asynchronously while keeping the
+per-query deadline, bounded output, termination and status-null refusal lanes of the
+synchronous contract, so a stalled registry cannot park unrelated proxy requests or
+streaming; the apply re-scan uses the same async scan. Linux /proc observation remains
+synchronous underneath as bounded filesystem reads rather than a child-process wait.
+The POSIX update scan includes all readable users by default, retaining an explicitly injected UID scope.
 Linux per-process `status`/`cmdline` read failures invalidate a complete observation except for `ENOENT`
 (a process that disappeared); incomplete observation refuses with `blocked_process_state_unknown`;
 the restart/kill path skips unreadable entries while retaining independently verified same-user app-server targets. This plan neither installs a runtime nor signals
@@ -84,7 +90,9 @@ precedes explicit stream destruction, and verification waits for the close event
 pipeline settlement alone is not close completion and the caller never closes that raw fd again.
 
 After artifact preparation, selection/content, the approved metadata and active/unknown process blockers
-are re-observed. npm receives only two verified local tarball specs and an explicit canonical prefix,
+are re-observed. The awaited process scan is the last yield before install; in the same event-loop turn
+as the spawn a synchronous guard re-checks the signal, prefix identity, the byte-level preimage and the
+launcher's live canonical selection. npm receives only two verified local tarball specs and an explicit canonical prefix,
 with offline mode, optional dependencies omitted, lifecycle scripts disabled and no audit/fund/lockfile
 side effects. Main manifests are not rewritten to make installation succeed. Cancelled preparation
 refuses; cancellation during an admitted npm child waits for its close rather than killing it. The lease

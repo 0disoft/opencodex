@@ -191,7 +191,9 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     const originalRoots = [evidence.packageRoot, ...(evidence.backingRoot ? [evidence.backingRoot] : []), targetMainRoot, backingRoot];
     const original = observeCodexCliPreimage(originalRoots);
     // Metadata, content, selection and process observation are renewed after
-    // potentially slow downloads; a final synchronous process check precedes spawn.
+    // potentially slow downloads; the awaited process scan is the last yield
+    // before install, and a synchronous identity/preimage/selection guard runs
+    // in the same event-loop turn as the spawn.
     const finalPlan = await freshPlan();
     if (!finalPlan.applicable) return result("refused", finalPlan.refusal ?? "plan_refused");
     if (finalPlan.planId !== planId) return result("refused", "plan_changed");
@@ -217,6 +219,20 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
         : await scanCodexSessionProcessesAsync(deps.processIo ?? {});
     if (lastScan.kind !== "observed") return result("refused", "blocked_process_state_unknown");
     if (lastScan.processes.length) return result("refused", "blocked_active_session");
+    // Every earlier await could have yielded the event loop to a mutation of
+    // the install tree, the prefix or the selected command, so the last turn
+    // before spawn re-verifies them synchronously: prefix identity, the
+    // byte-level preimage taken before the downloads, the launcher's live
+    // canonical selection and the signal. Nothing can interleave between this
+    // block and the install invocation on the same event-loop turn.
+    if (deps.signal?.aborted) return result("refused", "cancelled");
+    const lastPrefix = lstatSync(prefix);
+    if (realpathSync.native(prefix) !== prefix || lastPrefix.dev !== prefixIdentity.dev
+      || lastPrefix.ino !== prefixIdentity.ino
+      || !sameCodexCliPreimage(original, observeCodexCliPreimage(originalRoots))
+      || !codexCliMutationSelectionMatches(evidence, freshInspection(deps))) {
+      return result("refused", "installation_changed");
+    }
     started = true;
     keepLease = true;
     const installed = await (deps.install ?? runNpm)({ bin: invocation.bin, args: invocation.args,

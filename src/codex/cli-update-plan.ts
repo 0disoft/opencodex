@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -389,50 +389,50 @@ export function spawnCodexCliUpdateMetadata(
   args: readonly string[],
   options: CodexCliUpdateSpawnOptions,
 ): Promise<CodexCliUpdateSpawnResult> {
-  const maxBuffer = options.maxBuffer ?? 1024 * 1024;
   return new Promise(resolve => {
+    let timedOut = false;
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    let reap: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
-    let stdout = "";
-    let overflow = false;
-    const finish = (status: number | null) => {
-      if (settled) return;
-      settled = true;
-      if (deadline) clearTimeout(deadline);
-      if (reap) clearTimeout(reap);
-      resolve(Object.freeze({ status, stdout }));
-    };
-    let child;
+    let child: ReturnType<typeof execFile>;
     try {
-      child = spawn(bin, [...args], {
+      // execFile's callback is the only terminal observation: it runs after the
+      // child terminated and its piped stdio was fully consumed, so this result —
+      // and the caller's isolation cleanup in its finally — never outrun a live
+      // child, and no arbitrary reap window can fake completion. encoding "utf8"
+      // decodes the buffered output once, so a multibyte character split across
+      // OS pipe chunks stays intact, while maxBuffer bounds both captured
+      // streams in bytes exactly like spawnSync did. This proves only the
+      // child's own termination; any descendants it left behind are outside the
+      // observation, as they were under spawnSync.
+      child = execFile(bin, [...args], {
+        encoding: "utf8",
+        timeout: options.timeout,
+        maxBuffer: options.maxBuffer ?? 1024 * 1024,
+        killSignal: "SIGKILL",
+        windowsHide: true,
         cwd: options.cwd,
         env: options.env,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
         windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
+      }, (error: ExecFileException | null, stdout: string) => {
+        if (deadline) clearTimeout(deadline);
+        // spawnSync reported status null whenever the child was signal-killed
+        // (timeout or maxBuffer) or never spawned; a numeric error.code is the
+        // plain exit code. timedOut is latched so a late code-0 close after the
+        // deadline still refuses, matching the synchronous timeout lane.
+        const status = timedOut ? null
+          : error === null ? 0
+          : typeof error.code === "number" ? error.code : null;
+        resolve(Object.freeze({ status, stdout }));
       });
     } catch {
-      finish(null);
+      resolve(Object.freeze({ status: null, stdout: "" }));
       return;
     }
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length + chunk.length > maxBuffer) overflow = true;
-      else stdout += chunk.toString("utf8");
-      // spawnSync killed the child once maxBuffer was exceeded; preserve the bound.
-      if (overflow) { try { child.kill("SIGKILL"); } catch { /* close still settles */ } }
-    });
-    // Drained only so a noisy stderr cannot stall the child on a full pipe; the
-    // synchronous result's stderr was never read by the resolvers either.
-    child.stderr?.on("data", () => undefined);
-    child.once("error", () => finish(null));
-    // The close event is the child's terminal proof, matching spawnSync's
-    // status === null for both a timeout kill and a spawn failure.
-    child.once("close", code => finish(overflow ? null : code));
+    // A deadline of our own keeps the same per-query bound even on a runtime
+    // that does not honor execFile's timeout option. It only latches the
+    // refusal and signals the child; resolution still waits for the callback.
     deadline = setTimeout(() => {
+      timedOut = true;
       try { child.kill("SIGKILL"); } catch { /* the close event still settles */ }
-      // A child that never closes still settles, like the synchronous timeout did.
-      reap = setTimeout(() => finish(null), 1_000);
     }, options.timeout);
   });
 }

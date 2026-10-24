@@ -448,6 +448,58 @@ describe("registry target resolution", () => {
   });
 });
 
+describe("registry metadata runner terminal lanes", () => {
+  const OPTS = { encoding: "utf8" as const, timeout: 15_000, maxBuffer: 1024 * 1024, windowsHide: true as const };
+  test("a non-zero exit keeps its code", async () => {
+    const result = await spawnCodexCliUpdateMetadata(process.execPath, ["-e", "process.exit(3)"], OPTS);
+    expect(result.status).toBe(3);
+  });
+  test("a child past the per-query deadline settles null on its terminal event", async () => {
+    const startedAt = Date.now();
+    const result = await spawnCodexCliUpdateMetadata(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"],
+      { ...OPTS, timeout: 250 });
+    expect(result.status).toBeNull();
+    // The deadline kill is followed by the child's real close, not a reap guess
+    // long enough to matter; a 30 s sleeper proves settlement came from the kill.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+  test("stdout past maxBuffer refuses instead of truncating", async () => {
+    const result = await spawnCodexCliUpdateMetadata(process.execPath,
+      ["-e", 'process.stdout.write("x".repeat(2 * 1024 * 1024))'],
+      { ...OPTS, maxBuffer: 64 * 1024 });
+    expect(result.status).toBeNull();
+  });
+  test("multibyte output split across OS pipe chunks decodes intact", async () => {
+    const result = await spawnCodexCliUpdateMetadata(process.execPath,
+      ["-e", 'process.stdout.write("\uac00".repeat(200_000))'], { ...OPTS, maxBuffer: 4 * 1024 * 1024 });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("가".repeat(200_000));
+    expect(result.stdout).not.toContain("�");
+  });
+  test("a binary that cannot be spawned settles null like spawnSync", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-meta-spawn-"));
+    try {
+      const result = await spawnCodexCliUpdateMetadata(join(dir, "no-such-npm"), ["view"], OPTS);
+      expect(result.status).toBeNull();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("the result waits for the child's real terminal event before settling", async () => {
+    const dir = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-meta-terminal-")));
+    const marker = join(dir, "terminal");
+    try {
+      const startedAt = Date.now();
+      const result = await spawnCodexCliUpdateMetadata(process.execPath,
+        ["-e", "setTimeout(() => require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", 'x'), 300)"], OPTS);
+      expect(result.status).toBe(0);
+      // The child's final write is on disk when the runner settles: the resolve
+      // followed the terminal event, so the caller's isolation cleanup in its
+      // finally can never run underneath a still-live child.
+      expect(existsSync(marker)).toBe(true);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe("registry configuration isolation", () => {
   interface CapturedCall {
     bin: string;
