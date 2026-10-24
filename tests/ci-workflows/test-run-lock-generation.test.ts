@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -140,11 +141,65 @@ test("busy owner release is bounded and preserves the current generation", async
     const owner = await acquireTestRunLock({ runId: "held", lockPath: f.path, env: {}, processStartBatch: reader });
     f.spawn("gate");
     await f.wait("gate", "blocked");
+    // Test-only stage timing for the real release() path: each release opens a
+    // fresh gate connection, so Database.open, the busy_timeout PRAGMA,
+    // BEGIN IMMEDIATE and close are separately measurable through temporary
+    // mocks of the public bun:sqlite surface. Budgets and SQLite behavior are
+    // unchanged; the diagnostic prints only when the bound is exceeded.
+    const stageMs: Record<string, number> = {};
+    const track = <T>(stage: string, call: () => T): T => {
+      const t0 = Date.now();
+      try { return call(); }
+      finally { stageMs[stage] = (stageMs[stage] ?? 0) + Date.now() - t0; }
+    };
+    const stageOf = (sql: unknown): string => {
+      const s = typeof sql === "string" ? sql.trimStart() : "";
+      if (s.startsWith("BEGIN")) return "begin";
+      if (s.startsWith("PRAGMA")) return "pragma";
+      if (s.startsWith("ROLLBACK") || s.startsWith("COMMIT")) return "endTxn";
+      return "execOther";
+    };
+    const originalOpen = Database.open;
+    const openSpy = spyOn(Database, "open").mockImplementation((...args: Parameters<typeof Database.open>) => track("open", () => {
+      const db = originalOpen.apply(Database, args);
+      try {
+        const exec = db.exec, close = db.close;
+        db.exec = function (this: unknown, sql: string, ...rest: unknown[]) {
+          return track(stageOf(sql), () => exec.call(this, sql, ...(rest as never[])));
+        };
+        db.close = function (this: unknown, ...rest: unknown[]) {
+          return track("close", () => close.apply(this, rest as never[]));
+        };
+      } catch {
+        stageMs.instrumented = -1;
+      }
+      return db;
+    }));
     const started = Date.now();
-    expect(() => owner.release()).toThrow("generation gate during release");
-    expect(Date.now() - started).toBeGreaterThanOrEqual(TEST_RUN_LOCK_RELEASE_WAIT_MS - 100);
-    expect(Date.now() - started).toBeLessThan(TEST_RUN_LOCK_RELEASE_WAIT_MS + 3_000);
-    expect(f.owner().token).toBe(owner.owner!.token);
+    // Capture elapsed at the exact release() boundary so post-call fixture I/O
+    // (owner.json read below) stays outside the measured budget.
+    let elapsed = -1;
+    const releaseOnce = () => { try { owner.release(); } finally { elapsed = Date.now() - started; } };
+    try {
+      expect(releaseOnce).toThrow("generation gate during release");
+      // Instrumentation must have observed each real stage; a silently
+      // uninstrumented PASS would leave the diagnostic unverified. Stages may
+      // legitimately measure 0ms, so only own-property + finite is required.
+      for (const stage of ["open", "pragma", "begin", "close"]) {
+        expect(Object.hasOwn(stageMs, stage) && Number.isFinite(stageMs[stage])).toBe(true);
+      }
+      // Correctness before timing: a bound violation must not hide whether the
+      // current generation owner survived the failed release.
+      expect(f.owner().token).toBe(owner.owner!.token);
+      expect(elapsed).toBeGreaterThanOrEqual(TEST_RUN_LOCK_RELEASE_WAIT_MS - 100);
+      if (elapsed >= TEST_RUN_LOCK_RELEASE_WAIT_MS + 3_000) {
+        console.info(JSON.stringify({ releaseStageMs: stageMs, elapsedMs: elapsed,
+          bun: Bun.version, platform: process.platform, arch: process.arch }));
+      }
+      expect(elapsed).toBeLessThan(TEST_RUN_LOCK_RELEASE_WAIT_MS + 3_000);
+    } finally {
+      openSpy.mockRestore();
+    }
     f.put("gate", "resume");
     await f.wait("gate", "terminal");
     owner.release();
