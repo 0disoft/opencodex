@@ -98,7 +98,7 @@ describe("install scripts", () => {
     // validation; promotion still requires a green full cross-platform lane=all candidate run.
     expect(pkg.dependencies?.bun).toBe("1.4.4");
     expect(pkg.testRunnerBun).toBe("1.4.4");
-    expect(pkg.dependencies?.zod).toBe("4.4.3");
+    expect(pkg.dependencies?.zod).toBe("4.6.6");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
     expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
