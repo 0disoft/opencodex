@@ -431,6 +431,7 @@ describe("registry target resolution", () => {
       // for the whole per-query deadline.
       const pending = createCodexCliUpdatePlan(planDeps({
         resolveTarget: undefined,
+        inspectionDeps: { arch: "x64" },
         spawnProcess: gatedNpmSpawn(gateFile, 4_000),
       }));
       const firedAt = Date.now();
