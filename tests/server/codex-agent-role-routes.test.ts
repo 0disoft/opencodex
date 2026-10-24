@@ -9,7 +9,7 @@ import { ManagementRequest as Request } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const ROLE = 'name = "explorer"\ndeveloper_instructions = """\nmodel = "x"\n"""\nmodel = "gpt-5.5"\n';
-const saved = { CODEX_HOME: process.env.CODEX_HOME, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+const saved = { CODEX_HOME: process.env.CODEX_HOME, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, OPENCODEX_HOME: process.env.OPENCODEX_HOME };
 let root = "";
 
 function restore(name: keyof typeof saved): void {
@@ -27,12 +27,14 @@ beforeEach(() => {
   process.env.CODEX_HOME = join(root, "codex");
   process.env.HOME = join(root, "home");
   process.env.USERPROFILE = join(root, "home");
+  process.env.OPENCODEX_HOME = join(root, "ocx");
 });
 
 afterEach(() => {
   restore("CODEX_HOME");
   restore("HOME");
   restore("USERPROFILE");
+  restore("OPENCODEX_HOME");
   removeTreeWithRetry(root);
 });
 
@@ -57,12 +59,28 @@ function put(role: string, model: unknown) {
 }
 
 describe("/api/codex-agent-roles", () => {
+  test("records each written change with its earlier values, newest first, and skips an unchanged save", async () => {
+    const write = (body: Record<string, unknown>) => call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify(body) });
+    expect((await write({ model: "xai/grok-4.5", effort: "high", batch: "apply-all-1" })).status).toBe(200);
+    expect((await write({ model: "xai/grok-4.5", effort: "high", batch: "apply-all-2" })).body).toMatchObject({ toml: { status: "unchanged" } });
+    await write({ effort: null });
+    const history = (await call("/api/codex-agent-roles")).body.history as Record<string, unknown>[];
+    expect(history.map(({ batch, role, before, after }) => ({ batch, role, before, after }))).toEqual([
+      { batch: expect.stringMatching(/^[0-9a-f-]{36}$/), role: "explorer", before: { model: "xai/grok-4.5", effort: "high" }, after: { model: "xai/grok-4.5", effort: null } },
+      { batch: "apply-all-1", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "high" } },
+    ]);
+    const refused = await write({ model: "gpt-5.5", batch: "../x" });
+    expect(refused).toMatchObject({ status: 400, body: { code: "invalid_batch" } });
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model = "xai/grok-4.5"');
+  });
+
   test("round-trips a role model through the TOML and omo.jsonc", async () => {
     writeFileSync(join(root, "home", ".omo", "omo.jsonc"), '{ "[codex]": {} }\n');
     expect((await call("/api/codex-agent-roles")).body).toEqual({
       lazycodex: DETECTED,
       omoJsonc: { state: "present" },
       roles: [{ role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null }],
+      history: [],
     });
     const saved = await put("explorer", "xai/grok-4.5");
     expect(saved.status).toBe(200);
@@ -274,6 +292,7 @@ describe("/api/codex-agent-roles", () => {
         lazycodex: DETECTED,
         omoJsonc: { state: "unreadable" },
         roles: [{ role: "explorer", model: "gpt-5.5", effort: null, omoJsoncModel: null }],
+        history: [],
       });
       const saved = await put("explorer", "m3");
       expect(saved.body.toml).toEqual({ status: "written" });

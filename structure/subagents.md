@@ -301,6 +301,7 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
 - The role name must equal a listed `*.toml` stem, which is also the path-traversal check. The
   target must be a regular file owned by the running user; the replacement is atomic and does
   not follow a symbolic link.
+- Every PUT that writes the role TOML appends one row to `codex-agent-roles.jsonl` under `integrationsDir()` (`src/codex/role-model-history.ts`): time, `batch`, role, and model and effort before and after. An unchanged save appends nothing, and a failed append is logged without failing the write. The optional body field `batch` (1 to 64 letters, digits or dashes, else 400 `invalid_batch`) groups one action's writes; auto-assign's Apply all sends one per click, and a write without it gets its own. `GET /api/codex-agent-roles` returns the newest 50 rows as `history` when LazyCodex is detected. The dashboard restores a batch by writing each role's earliest `before` through this same PUT under a new batch.
 - On `PUT /api/codex-agent-roles/{role}`, `effort` is optional: omitted keeps the role's
   `model_reasoning_effort`, a level inserts or replaces it, and JSON `null` removes its root line
   and trailing comment. Only a one-line string value can be removed; a multiline or non-string

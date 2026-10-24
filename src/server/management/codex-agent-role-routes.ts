@@ -22,11 +22,12 @@ function lazycodexNotDetected(ctx: ManagementContext): Response {
 
 export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
-  const [{ getCodexHome }, roles, omo, { detectLazyCodex }] = await Promise.all([
+  const [{ getCodexHome }, roles, omo, { detectLazyCodex }, history] = await Promise.all([
     import("../../codex/paths"),
     import("../../codex/agent-role-models"),
     import("../../clients/omo-role-models"),
     import("../../clients/lazycodex"),
+    import("../../codex/role-model-history"),
   ]);
 
   if (url.pathname === "/api/codex-agent-roles" && req.method === "GET") {
@@ -43,6 +44,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
         effort: roles.readCodexAgentRoleEffort(entry.role, codexHome),
         omoJsoncModel: omoModels[entry.role] ?? null,
       })),
+      history: history.listRoleModelChanges(),
     }, 200, req, config);
   }
 
@@ -88,7 +90,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     return jsonResponse({ error: "role must be URL-encoded", code: "invalid_role" }, 400, req, config);
   }
-  let body: { model?: unknown; effort?: unknown };
+  let body: { model?: unknown; effort?: unknown; batch?: unknown };
   try {
     body = await readManagementJsonBody(req);
   } catch (error) {
@@ -102,12 +104,20 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   if (body?.model === undefined && body?.effort === undefined) {
     return jsonResponse({ error: "send a model, an effort, or both", code: "empty_update" }, 400, req, config);
   }
+  if (body.batch !== undefined && !history.isRoleHistoryBatch(body.batch)) {
+    return jsonResponse({ error: "batch must be 1 to 64 letters, digits or dashes", code: "invalid_batch" }, 400, req, config);
+  }
   let model: string | undefined;
   let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
+  let before: import("../../codex/role-model-history").RoleSetting = { model: null, effort: null };
   try {
     model = body?.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
     effort = body?.effort === undefined ? undefined : body.effort === null ? null : roles.validateAgentRoleEffort(body.effort);
+    before = {
+      model: roles.listCodexAgentRoleModels(codexHome).find(entry => entry.role === role)?.model ?? null,
+      effort: roles.readCodexAgentRoleEffort(role, codexHome),
+    };
     toml = roles.writeCodexAgentRoleModel(role, model, codexHome, effort);
   } catch (error) {
     if (error instanceof roles.AgentRoleModelError) {
@@ -116,6 +126,20 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     }
     // Filesystem and ownership errors carry absolute paths and UIDs; keep them out of the response.
     return jsonResponse({ error: "could not write the role file", code: "write_failed" }, 500, req, config);
+  }
+  if (toml.status === "written") {
+    try {
+      history.recordRoleModelChange({
+        at: new Date().toISOString(),
+        batch: body.batch ?? crypto.randomUUID(),
+        role,
+        before,
+        after: { model: model ?? before.model, effort: effort === undefined ? before.effort : effort },
+      });
+    } catch (error) {
+      // The write already stands; a lost history row only costs the Restore button for it.
+      console.error(`[codex-agent-roles] could not record the change: ${String(error)}`);
+    }
   }
 
   // The role TOML is what Codex obeys, so its write stands even when the omo mirror cannot follow.
