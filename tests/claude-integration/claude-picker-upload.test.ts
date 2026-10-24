@@ -379,9 +379,10 @@ bounded("h2 cancellation releases aggregate admission once without weakening the
 
 bounded("early-fin origin waits for the first body byte after separate headers", async wait => {
   const f = await fixture("early-fin");
+  let upload: ClientRequest | undefined;
   try {
     // Address the actual TLS origin directly so flushHeaders guarantees a header-only event.
-    const upload = f.h1("/early", "POST", { "Content-Length": String(32 * 1024 * 1024) }, f.originPort);
+    upload = f.h1("/early", "POST", { "Content-Length": String(32 * 1024 * 1024) }, f.originPort);
     const result = h1Result(upload);
     const closed = observeSocketClose(upload);
     upload.flushHeaders();
@@ -391,7 +392,7 @@ bounded("early-fin origin waits for the first body byte after separate headers",
     expect(await wait(result)).toEqual({ status: 413, text: "early" });
     await wait(closed);
     expect(f.earlyReplies).toEqual([{ requestComplete: false, flushed: true, receivedBodyBytes: 1 }]);
-  } finally { await wait(f.close()); }
+  } finally { upload?.destroy(); await wait(f.close()); }
 });
 
 for (const protocol of ["h1", "h2"] as const) {
