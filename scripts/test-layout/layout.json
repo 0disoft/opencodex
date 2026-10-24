@@ -1200,7 +1200,7 @@
     "management-inference-port.test.ts": "server",
     "management-google-tool-schema-policy.test.ts": "server",
     "management-integration-journal-delete.test.ts": "server",
-    "management-integration-routes.test.ts": "server",
+    "management-integration-routes.test.ts": "server", "management-qoder-selector-state.test.ts": "server",
     "management-metrics-export.test.ts": "server",
     "management-model-roster-gather-race.test.ts": "server",
     "management-model-roster.test.ts": "server",
