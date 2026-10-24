@@ -59,12 +59,18 @@ function parseChange(line: string): RoleModelChange | null {
     : null;
 }
 
-/** Newest first. A torn or foreign line is skipped, the way the integration journal reads its own. */
+/**
+ * Newest first, in whole batches: the newest `limit` changes plus the rest of any batch they cut into,
+ * so Restore never puts back part of an Apply all. A torn or foreign line is skipped, the way the
+ * integration journal reads its own.
+ */
 export function listRoleModelChanges(limit: number = ROLE_HISTORY_LIMIT, dir: string = integrationsDir()): RoleModelChange[] {
   const path = historyPath(dir);
   if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").flatMap(line => {
+  const newestFirst = readFileSync(path, "utf8").split("\n").flatMap(line => {
     const change = line.trim() ? parseChange(line) : null;
     return change ? [change] : [];
-  }).reverse().slice(0, limit);
+  }).reverse();
+  const kept = new Set(newestFirst.slice(0, limit).map(change => change.batch));
+  return newestFirst.filter((change, index) => index < limit || kept.has(change.batch));
 }

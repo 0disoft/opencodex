@@ -59,6 +59,17 @@ function put(role: string, model: unknown) {
 }
 
 describe("/api/codex-agent-roles", () => {
+  test("returns whole batches, so a batch cut by the newest 50 is listed with every role it wrote", async () => {
+    const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_LIMIT } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "history");
+    const write = (batch: string, role: string) => recordRoleModelChange({ at: "2026-10-24T00:00:00.000Z", batch, role, before: { model: null, effort: null }, after: { model: "m", effort: null } }, dir);
+    for (let index = 0; index < 3; index++) write("older", `older-${index}`);
+    for (let index = 0; index < ROLE_HISTORY_LIMIT + 1; index++) write("apply-all", `role-${index}`);
+    const history = listRoleModelChanges(ROLE_HISTORY_LIMIT, dir);
+    expect(history.filter(change => change.batch === "apply-all")).toHaveLength(ROLE_HISTORY_LIMIT + 1);
+    expect(history.some(change => change.batch === "older")).toBe(false);
+  });
+
   test("records each written change with its earlier values, newest first, and skips an unchanged save", async () => {
     const write = (body: Record<string, unknown>) => call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify(body) });
     expect((await write({ model: "xai/grok-4.5", effort: "high", batch: "apply-all-1" })).status).toBe(200);
