@@ -438,30 +438,43 @@ native("fresh Worker realms refuse missing or mismatched arch and reject post-in
   }
 }, 60_000);
 
-native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", () => {
+function checkPublishedNodeCliPlan(separateNodeToolchain: boolean) {
+  const started = performance.now();
   const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
-  for (const f of [fixture(), fixture(true)]) {
-    const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
-    const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
-    const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
-      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
-    const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
-      tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
-    // Controlled registry protocol fixture; no real npm installation or network request.
-    writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-      `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
-    const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
-      cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
-      env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
-        CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
-        OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
-    });
-    expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
-    const plan = JSON.parse(run.stdout);
-    expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
-    expect(plan.targetIntegrity).toBe(integrity);
-    expect(plan.applicable).toBe(false);
-    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
-    expect(JSON.stringify(plan)).not.toContain(f.root);
+  const f = fixture(separateNodeToolchain);
+  const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
+  const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+  // Controlled registry protocol fixture; no real npm installation or network request.
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
+    cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
+    env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
+      CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
+      OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
+  });
+  if (run.error || run.status !== 0) {
+    console.error(JSON.stringify({ layout: separateNodeToolchain ? "separate-PATH" : "prefix-local",
+      elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
+      errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
   }
+  expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+  const plan = JSON.parse(run.stdout);
+  expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
+  expect(plan.targetIntegrity).toBe(integrity);
+  expect(plan.applicable).toBe(false);
+  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expect(JSON.stringify(plan)).not.toContain(f.root);
+}
+
+native("published Node CLI plans with the production inspector and prefix-local toolchain", () => {
+  checkPublishedNodeCliPlan(false);
+}, 60_000);
+
+native("published Node CLI plans with the production inspector and separate PATH toolchain", () => {
+  checkPublishedNodeCliPlan(true);
 }, 60_000);
