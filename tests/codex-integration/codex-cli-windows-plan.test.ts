@@ -6,6 +6,7 @@ import { dirname, join, parse } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
+import { runCodexCliUpdatePlanInWorker } from "../../src/codex/cli-update-job-worker";
 import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -19,11 +20,17 @@ import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PRO
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
+const liveWorkerRoots = new Set<string>();
 afterEach(async () => {
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
-  for (const root of roots.splice(0)) await removeTreeAfterBackgroundWork(root);
+  for (const root of roots.splice(0)) {
+    // A test timeout does not cancel its async body. Keep even that body's
+    // fixture owned until a real Worker close, never remove beneath native I/O.
+    if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
+    await removeTreeAfterBackgroundWork(root);
+  }
 });
 // npm's independent cmd-shim fixture; no candidate is ever executed.
 const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL',
@@ -338,6 +345,47 @@ native("actual CLI handler reaches production inspector and plan from the proof-
   } })).toBe(0);
   expect(reached).toBe(true);
 });
+
+native("a fresh production Worker rebuilds private Windows plan evidence before reading fixture metadata", async () => {
+  const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+  copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
+  const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+  // Only this owned npm protocol fixture runs; Codex and real npm never execute.
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  let starts = 0, worker: Worker | undefined, closed = false;
+  try {
+    const plan = await runCodexCliUpdatePlanInWorker({
+      snapshot: { codexCliPath: f.deps.env.CODEX_CLI_PATH, path: f.prefix, pathExt: ".EXE;.CMD",
+        home: f.root, nodePath: null, managerRoots: {}, transportEnv: {}, configDir: f.deps.configDir, arch: "x64" },
+      spawnWorkerFn: (url, key) => {
+        expect(key).toBe("cli-update-worker"); starts++;
+        // Pin this integration to current source, not a leftover generated bundle.
+        worker = new Worker(url, { type: "module" });
+        liveWorkerRoots.add(f.root);
+        worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+        return worker;
+      },
+    });
+    expect(starts).toBe(1);
+    expect(closed).toBe(true);
+    expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
+      targetIntegrity: integrity, applicable: false });
+    expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+    // Real process observation may find active/unreadable sessions. Either refusal
+    // is after private-evidence admission and successful fixture metadata resolution.
+    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    expect(JSON.stringify(plan)).not.toContain(f.root);
+  } finally {
+    // afterEach retains this fixture even if the test times out before this
+    // finally is reached. No terminate() or fabricated terminal evidence.
+    if (worker && !closed) liveWorkerRoots.add(f.root);
+  }
+}, 60_000);
 
 native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", async () => {
   const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
