@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -204,6 +204,105 @@ test("busy owner release is bounded and preserves the current generation", async
     await f.wait("gate", "terminal");
     owner.release();
     expect(fs.existsSync(f.path)).toBe(false);
+  });
+}, 30_000);
+
+// Spies installed by the controlled gate model; restored via afterEach even if
+// an assertion interrupts a test.
+const gateSpies: { mockRestore(): void }[] = [];
+afterEach(() => { for (const spy of gateSpies.splice(0)) spy.mockRestore(); });
+
+/** Intercepts busy_timeout PRAGMAs and BEGIN IMMEDIATE on gate connections
+ * opened during the test; the callback models the native BEGIN outcome. */
+function controlGateBegin(begin: (pragmas: number[]) => void): { pragmas: number[] } {
+  const pragmas: number[] = [];
+  const originalOpen = Database.open;
+  const spy = spyOn(Database, "open").mockImplementation((...args: Parameters<typeof Database.open>) => {
+    const db = originalOpen.apply(Database, args);
+    const exec = db.exec;
+    db.exec = function (this: unknown, sql: string, ...rest: unknown[]) {
+      const s = sql.trimStart();
+      const busy = /^PRAGMA busy_timeout\s*=\s*(\d+)/.exec(s);
+      if (busy) { pragmas.push(Number(busy[1])); return; }
+      if (s === "BEGIN IMMEDIATE") { begin(pragmas); return; }
+      return exec.call(this, sql, ...(rest as never[]));
+    };
+    return db;
+  });
+  gateSpies.push(spy);
+  return { pragmas };
+}
+
+test("release gate wait stops on the remaining elapsed budget, never a fresh full timeout", async () => {
+  await fixture(async f => {
+    let fakeNow = 1_000;
+    gateSpies.push(spyOn(performance, "now").mockImplementation(() => fakeNow));
+    // Controlled model of a held gate: every BEGIN stays busy for 1.4x the
+    // requested busy_timeout — one native wait may overshoot its slice.
+    const { pragmas } = controlGateBegin((p) => {
+      fakeNow += Math.round((p.at(-1) ?? 0) * 1.4);
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    const startedAt = fakeNow;
+    let ran = 0;
+    const result = withTestRunLockGate(f.path, () => { ran++; }, 10_000);
+    expect(result).toBeUndefined();
+    expect(ran).toBe(0);
+    // Counterfactual: an un-sliced wait requests one busy_timeout of 10_000 and
+    // lands near 14_000ms elapsed under this model — all three assertions
+    // below fail on that implementation. Slices re-issue busy_timeout only
+    // against remaining budget, so elapsed stops near the deadline.
+    expect(pragmas.length).toBeGreaterThan(1);
+    expect(Math.max(...pragmas)).toBeLessThanOrEqual(1_000);
+    expect(fakeNow - startedAt).toBeLessThan(10_500);
+  });
+}, 30_000);
+
+test("gate propagates a non-busy BEGIN failure without retrying", async () => {
+  await fixture(async f => {
+    const { pragmas } = controlGateBegin(() => {
+      throw Object.assign(new Error("gate io failure"), { code: "EIO" });
+    });
+    expect(() => withTestRunLockGate(f.path, () => { throw new Error("action must not run"); }, 5_000))
+      .toThrow("gate io failure");
+    expect(pragmas.length).toBe(1);
+  });
+}, 30_000);
+
+test("gate normalizes a non-finite busyMs to one immediate attempt", async () => {
+  await fixture(async f => {
+    const { pragmas } = controlGateBegin(() => {
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    for (const busyMs of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      // A non-finite budget must degrade to the documented busyMs=0 single
+      // immediate attempt; an unguarded loop would hang this test instead.
+      const result = withTestRunLockGate(f.path, () => { throw new Error("action must not run"); }, busyMs);
+      expect(result).toBeUndefined();
+    }
+    expect(pragmas).toEqual([0, 0, 0]);
+  });
+}, 30_000);
+
+test("gate busyMs=0 declines a held gate without running the action", async () => {
+  await fixture(async f => {
+    f.spawn("gate");
+    await f.wait("gate", "blocked");
+    let ran = 0;
+    const result = withTestRunLockGate(f.path, () => { ran++; }, 0);
+    expect(result).toBeUndefined();
+    expect(ran).toBe(0);
+    f.put("gate", "resume");
+    await f.wait("gate", "terminal");
+  });
+}, 30_000);
+
+test("gate executes a granted action exactly once", async () => {
+  await fixture(async f => {
+    let ran = 0;
+    const result = withTestRunLockGate(f.path, () => { ran++; return "held"; }, 5_000);
+    expect(result).toEqual({ value: "held" });
+    expect(ran).toBe(1);
   });
 }, 30_000);
 

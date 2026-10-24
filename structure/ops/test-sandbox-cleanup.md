@@ -26,8 +26,9 @@ protects it; redirected and hardlinked gate paths are refused. SQLite owns its
 file descriptors, with no separate filesystem open/close of the gate inode.
 
 Acquire retries SQLite busy within its existing bounded wait. Synchronous owner
-release waits at most ten seconds for the gate, then fails without deleting the
-canonical lock. Process death releases the gate's OS lock. The next runner applies
+release retries the gate in bounded slices under a ten-second elapsed deadline,
+then fails without deleting the canonical lock. Process death releases the
+gate's OS lock. The next runner applies
 the existing conservative process-start/PID/member evidence to directory state.
 Owner publication probes before exposing a new directory; failed publication
 never recursively deletes through the current canonical path. Retirement checks

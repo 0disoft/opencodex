@@ -6,6 +6,13 @@ import { hardenSecretDir, hardenSecretPath } from "../src/lib/windows-secret-acl
 
 export const TEST_RUN_LOCK_RELEASE_WAIT_MS = 10_000;
 
+// sqlite3_busy_timeout bounds cumulative *scheduled* sleep, not elapsed time:
+// each native wait may overshoot. An overshooting BEGIN IMMEDIATE wait was
+// observed exceeding this budget in hosted CI. Retrying in slices under a
+// monotonic deadline bounds the elapsed wait regardless of per-sleep
+// overshoot; the bound is a deadline, not a realtime guarantee.
+const BUSY_WAIT_SLICE_MS = 250;
+
 function code(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException)?.code;
 }
@@ -83,13 +90,25 @@ export function openTestRunLockGate(lockPath: string) {
       if (!current || current.dev !== identity.dev || current.ino !== identity.ino) refuse();
       let entered = false;
       try {
-        db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(busyMs))}`);
-        try {
-          db.exec("BEGIN IMMEDIATE");
-          entered = true;
-        } catch (error) {
-          if (code(error) === "SQLITE_BUSY") return undefined;
-          throw error;
+        // The deadline bounds only the wait for gate entry. Once BEGIN
+        // IMMEDIATE is granted the action runs to completion, exactly once,
+        // outside the budget — same semantics as a single long wait.
+        // A non-finite budget is not a meaningful wait and would never satisfy
+        // the deadline comparison: normalize to the documented busyMs=0
+        // single immediate attempt rather than looping.
+        const budget = Number.isFinite(busyMs) ? Math.max(0, Math.floor(busyMs)) : 0;
+        const deadline = performance.now() + budget;
+        for (;;) {
+          const remaining = Math.max(0, Math.floor(deadline - performance.now()));
+          db.exec(`PRAGMA busy_timeout = ${Math.min(remaining, BUSY_WAIT_SLICE_MS)}`);
+          try {
+            db.exec("BEGIN IMMEDIATE");
+            entered = true;
+            break;
+          } catch (error) {
+            if (code(error) !== "SQLITE_BUSY") throw error;
+            if (budget <= 0 || performance.now() >= deadline) return undefined;
+          }
         }
         // A bounded busy wait can outlive external pathname interference.
         const locked = inspectFile(db.filename);
