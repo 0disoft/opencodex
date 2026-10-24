@@ -774,6 +774,23 @@ describe("catalog path comparison", () => {
     expect(compareCatalogHealPaths(dotdot, real)).toBe("different");
   });
 
+  test.skipIf(process.platform === "win32")("a POSIX link target crossing a file-pointing link refuses the traversal", () => {
+    // "bridge" resolves to a regular file: POSIX refuses "bridge/.." with ENOTDIR.
+    const root = temporaryRoot(), a = join(root, "a");
+    mkdirSync(a, { recursive: true });
+    const present = join(a, "catalog.json"), fileTarget = join(root, "file-target.json");
+    writeFileSync(present, "MARKER-A-PRESENT");
+    writeFileSync(fileTarget, "MARKER-FILE");
+    symlinkSync(fileTarget, join(a, "bridge"), "file");
+    const link = join(a, "link.json");
+    symlinkSync("bridge/../catalog.json", link, "file");
+    expect(() => readFileSync(link)).toThrow();
+    expect(() => realpathSync.native(link)).toThrow();
+    expect(compareCatalogHealPaths(link, present)).toBe("unknown");
+    expect(compareCatalogHealPaths(present, link)).toBe("unknown");
+    expect(inspectHealPath(link, read => read())).toEqual({ kind: "unavailable", hardlink: true });
+  });
+
   test("40-hop exhaustion stays uncertain independently of the comparator read budget", () => {
     const root = temporaryRoot(), cycle = join(root, "cycle.json");
     symlinkSync("cycle.json", cycle, "file");

@@ -15,7 +15,7 @@ export const CATALOG_HEAL_MAX_LINKS = 40;
 // Small catalog-path comparisons need only a handful of reads; unusual paths defer.
 export const CATALOG_HEAL_MAX_PATH_READS = 64;
 type PathRead = <T>(read: () => T) => T;
-type LinkObservation = { path: string; stat: BigIntStats; value: string; parent: string; parentStat: BigIntStats };
+type LinkObservation = { path: string; stat: BigIntStats; value: string; parent: string; parentStat: BigIntStats; resolved?: string; resolvedStat?: BigIntStats };
 type PathObservation = {
   kind: "native" | "hardlink"; path: string; stat: BigIntStats; links: LinkObservation[];
   canonical: string; parent?: string; parentStat?: BigIntStats;
@@ -43,8 +43,12 @@ function resolveLinkTarget(base: string, value: string, read: PathRead, links: L
     if (stat.isSymbolicLink()) {
       // Keep the intermediate link inside the same revalidation snapshot as leaf hops.
       const parent = current, parentStat = read(() => statSync(parent, { bigint: true })), target = read(() => readlinkSync(next));
-      links.push({ path: next, stat, value: target, parent, parentStat });
-      current = read(() => realpathSync.native(next));
+      const resolvedStat = read(() => statSync(next, { bigint: true }));
+      // POSIX refuses ".." across a non-directory; statSync follows the link.
+      if (!resolvedStat.isDirectory()) throw new Error("Link target crosses a non-directory");
+      const resolved = read(() => realpathSync.native(next));
+      links.push({ path: next, stat, value: target, parent, parentStat, resolved, resolvedStat });
+      current = resolved;
     }
     else if (stat.isDirectory()) current = next;
     else throw new Error("Link target crosses a non-directory");
@@ -85,6 +89,9 @@ function revalidateHealPath(seen: Exclude<PathObservation, { kind: "unavailable"
   for (const link of seen.links) {
     if (!unchanged(link.stat, read(() => lstatSync(link.path, { bigint: true }))) || read(() => readlinkSync(link.path)) !== link.value
       || !unchanged(link.parentStat, read(() => statSync(link.parent, { bigint: true })))) return false;
+    const resolved = link.resolved, resolvedStat = link.resolvedStat;
+    if (resolved !== undefined && resolvedStat !== undefined
+      && !unchanged(resolvedStat, read(() => statSync(resolved, { bigint: true })))) return false;
   }
   return seen.kind !== "hardlink" || (unchanged(seen.parentStat!, read(() => statSync(seen.parent!, { bigint: true })))
     && unchanged(seen.parentStat!, read(() => statSync(dirname(seen.path), { bigint: true }))));
