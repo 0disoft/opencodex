@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
 import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
-import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSet, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
+import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSetAsync, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
 export { CODEX_CLI_REGISTRY } from "./cli-update-artifacts";
 import {
   inspectCodexCliInstall,
@@ -16,7 +16,7 @@ import {
   type CodexCliInstallReport,
 } from "./cli-install-provenance";
 import {
-  scanCodexSessionProcesses,
+  scanCodexSessionProcessesAsync,
   type CodexAppServerProcessIo,
   type CodexAppServerProcessScan,
 } from "./app-server-processes";
@@ -110,9 +110,11 @@ export interface CodexCliUpdatePlanDeps {
   readonly platform?: NodeJS.Platform;
   readonly channel?: CodexCliUpdateChannel;
   readonly scanProcesses?: (io?: CodexAppServerProcessIo) => CodexAppServerProcessScan;
+  /** Preferred request-path seam: the real session scan runs its child processes async. */
+  readonly scanProcessesAsync?: (io?: CodexAppServerProcessIo) => Promise<CodexAppServerProcessScan>;
   readonly processIo?: CodexAppServerProcessIo;
-  readonly resolveTarget?: (channel: CodexCliUpdateChannel) => CodexCliUpdateTarget;
-  readonly spawnProcess?: typeof spawnSync;
+  readonly resolveTarget?: (channel: CodexCliUpdateChannel) => CodexCliUpdateTarget | Promise<CodexCliUpdateTarget>;
+  readonly spawnProcess?: CodexCliUpdateSpawn;
 }
 
 
@@ -345,6 +347,96 @@ export function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigI
   };
 }
 
+/** The option fields one registry-metadata query passes to its spawn. */
+export interface CodexCliUpdateSpawnOptions {
+  readonly encoding: "utf8";
+  readonly timeout: number;
+  readonly maxBuffer?: number;
+  readonly windowsHide: true;
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly windowsVerbatimArguments?: boolean;
+}
+
+/** The fields a resolver reads off one spawn result; sync injections may carry more. */
+export interface CodexCliUpdateSpawnResult {
+  readonly status: number | null;
+  readonly stdout: string;
+}
+
+/**
+ * One registry-metadata invocation. The production runner is asynchronous so a slow
+ * npm cannot park the proxy event loop; a synchronous SpawnSync-shaped injection
+ * remains assignable, so tests asserting argv/env without real I/O are unchanged.
+ */
+export type CodexCliUpdateSpawn = (
+  bin: string,
+  args: readonly string[],
+  options: CodexCliUpdateSpawnOptions,
+) => CodexCliUpdateSpawnResult | Promise<CodexCliUpdateSpawnResult>;
+
+/**
+ * A single bounded registry child whose wait happens off the event loop.
+ *
+ * The previous spawnSync blocked the whole proxy for up to the per-query deadline:
+ * a slow registry stalled unrelated requests and streaming for seconds at a time,
+ * and the background apply repeated the same stall. The observable contract is
+ * unchanged — status null on timeout or spawn failure, stdout bounded by
+ * maxBuffer — but only the awaited caller observes the child.
+ */
+export function spawnCodexCliUpdateMetadata(
+  bin: string,
+  args: readonly string[],
+  options: CodexCliUpdateSpawnOptions,
+): Promise<CodexCliUpdateSpawnResult> {
+  const maxBuffer = options.maxBuffer ?? 1024 * 1024;
+  return new Promise(resolve => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let reap: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let stdout = "";
+    let overflow = false;
+    const finish = (status: number | null) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      if (reap) clearTimeout(reap);
+      resolve(Object.freeze({ status, stdout }));
+    };
+    let child;
+    try {
+      child = spawn(bin, [...args], {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
+      });
+    } catch {
+      finish(null);
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stdout.length + chunk.length > maxBuffer) overflow = true;
+      else stdout += chunk.toString("utf8");
+      // spawnSync killed the child once maxBuffer was exceeded; preserve the bound.
+      if (overflow) { try { child.kill("SIGKILL"); } catch { /* close still settles */ } }
+    });
+    // Drained only so a noisy stderr cannot stall the child on a full pipe; the
+    // synchronous result's stderr was never read by the resolvers either.
+    child.stderr?.on("data", () => undefined);
+    child.once("error", () => finish(null));
+    // The close event is the child's terminal proof, matching spawnSync's
+    // status === null for both a timeout kill and a spawn failure.
+    child.once("close", code => finish(overflow ? null : code));
+    deadline = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch { /* the close event still settles */ }
+      // A child that never closes still settles, like the synchronous timeout did.
+      reap = setTimeout(() => finish(null), 1_000);
+    }, options.timeout);
+  });
+}
+
 /**
  * Resolve the channel to one exact version plus its sha512 integrity token.
  *
@@ -353,12 +445,12 @@ export function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigI
  * acceptable for a foreign package we are about to install on the operator's behalf, so
  * every failure lane here is a refusal.
  */
-export function resolveCodexCliUpdateTarget(
+export async function resolveCodexCliUpdateTarget(
   channel: CodexCliUpdateChannel,
-  spawn: typeof spawnSync = spawnSync,
+  spawn: CodexCliUpdateSpawn = spawnCodexCliUpdateMetadata,
   /** Proof-bound pre-dotenv PATH/PATHEXT and proxy/CA env; absent settings stay absent. */
   boundEnv?: NodeJS.ProcessEnv,
-): CodexCliUpdateTarget {
+): Promise<CodexCliUpdateTarget> {
   // The pinned registry and the isolation directory together are the boundary: the
   // version, the integrity token and the tarball URL all come from npmjs or the
   // target is unresolved — a redirected answer can never be the evidence.
@@ -371,7 +463,7 @@ export function resolveCodexCliUpdateTarget(
     return Object.freeze({ kind: "unresolved" as const, reason: "npm configuration isolation setup failed" });
   }
   try {
-    const runView = (field: string, spec: string): SpawnSyncReturns<string> | null => {
+    const runView = async (field: string, spec: string): Promise<CodexCliUpdateSpawnResult | null> => {
       const target = isolatedNpmTarget(["view", spec, field], isolation);
       if (!target) return null;
       return spawn(target.bin, target.args, {
@@ -382,7 +474,7 @@ export function resolveCodexCliUpdateTarget(
       });
     };
 
-    const versionRun = runView("version", `${CODEX_CLI_PACKAGE}@${channel}`);
+    const versionRun = await runView("version", `${CODEX_CLI_PACKAGE}@${channel}`);
     if (!versionRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
     // status === null covers a timeout as well as a spawn failure.
     if (versionRun.status !== 0) {
@@ -393,7 +485,7 @@ export function resolveCodexCliUpdateTarget(
       return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no exact version" });
     }
 
-    const integrityRun = runView("dist.integrity", `${CODEX_CLI_PACKAGE}@${version}`);
+    const integrityRun = await runView("dist.integrity", `${CODEX_CLI_PACKAGE}@${version}`);
     if (!integrityRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
     if (integrityRun.status !== 0) {
       return Object.freeze({ kind: "unresolved" as const, reason: `registry integrity query failed (status ${integrityRun.status ?? "timeout"})` });
@@ -408,7 +500,7 @@ export function resolveCodexCliUpdateTarget(
     // The digest binds the tarball's CONTENT; this binds its ORIGIN. A registry
     // answer whose tarball lives outside the pinned registry is not the artifact
     // the plan approved, even if its sha512 matched.
-    const tarballRun = runView("dist.tarball", `${CODEX_CLI_PACKAGE}@${version}`);
+    const tarballRun = await runView("dist.tarball", `${CODEX_CLI_PACKAGE}@${version}`);
     if (!tarballRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
     if (tarballRun.status !== 0) {
       return Object.freeze({ kind: "unresolved" as const, reason: `registry tarball query failed (status ${tarballRun.status ?? "timeout"})` });
@@ -432,25 +524,25 @@ export function resolveCodexCliUpdateTarget(
 }
 
 /** Resolve both exact archives, including the publisher's platform-package alias. */
-export function resolveCodexCliUpdateArtifactTarget(channel: CodexCliUpdateChannel,
-  spawn: typeof spawnSync = spawnSync, boundEnv?: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform, arch: string = process.arch): CodexCliUpdateTarget {
+export async function resolveCodexCliUpdateArtifactTarget(channel: CodexCliUpdateChannel,
+  spawn: CodexCliUpdateSpawn = spawnCodexCliUpdateMetadata, boundEnv?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform, arch: string = process.arch): Promise<CodexCliUpdateTarget> {
   let isolation: NpmConfigIsolation | undefined;
   try {
     isolation = createNpmConfigIsolation(undefined, boundEnv);
-    const query = (spec: string) => {
+    const query = async (spec: string) => {
       const invocation = isolatedNpmTarget(["view", spec, "--json"], isolation!);
       if (!invocation) throw new Error("npm unavailable");
-      const result = spawn(invocation.bin, invocation.args, { encoding: "utf8", timeout: REGISTRY_TIMEOUT_MS,
+      const result = await spawn(invocation.bin, invocation.args, { encoding: "utf8", timeout: REGISTRY_TIMEOUT_MS,
         maxBuffer: 1024 * 1024, windowsHide: true, ...invocation.options });
       if (result.status !== 0) throw new Error("registry query failed");
       return JSON.parse(result.stdout);
     };
-    const latest = query(`${CODEX_CLI_PACKAGE}@${channel}`);
+    const latest = await query(`${CODEX_CLI_PACKAGE}@${channel}`);
     if (!parseStrictSemver(latest.version)) throw new Error("target version unavailable");
-    const pinned = query(`${CODEX_CLI_PACKAGE}@${latest.version}`);
+    const pinned = await query(`${CODEX_CLI_PACKAGE}@${latest.version}`);
     if (pinned.version !== latest.version) throw new Error("target version drift");
-    const artifacts = codexCliArtifactSet(pinned, query, platform, arch);
+    const artifacts = await codexCliArtifactSetAsync(pinned, query, platform, arch);
     return Object.freeze({ kind: "resolved", version: artifacts.main.version,
       integrity: artifacts.main.integrity, artifacts });
   } catch {
@@ -538,9 +630,9 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   // When the caller had no trusted snapshot, inspectionDeps.env is the fail-closed
   // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
   const resolveTarget = deps.resolveTarget
-    ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnSync, deps.inspectionDeps?.env,
+    ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnCodexCliUpdateMetadata, deps.inspectionDeps?.env,
       platform, deps.inspectionDeps?.arch ?? process.arch));
-  const target = resolveTarget(channel);
+  const target = await resolveTarget(channel);
   if (target.kind !== "resolved") {
     return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
   }
@@ -559,7 +651,13 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("target_not_newer", report, channel, target, NOT_EVALUATED);
   }
 
-  const scan = (deps.scanProcesses ?? scanCodexSessionProcesses)(deps.processIo ?? {});
+  // The request-path scan keeps registry and process-table waits off the event loop;
+  // a synchronous injection remains honored for tests that never spawn a real child.
+  const scan = deps.scanProcessesAsync
+    ? await deps.scanProcessesAsync(deps.processIo ?? {})
+    : deps.scanProcesses
+      ? deps.scanProcesses(deps.processIo ?? {})
+      : await scanCodexSessionProcessesAsync(deps.processIo ?? {});
   if (scan.kind !== "observed") {
     // An unreadable process table is not "no sessions". `listCodexAppServerProcesses`
     // maps that failure to an empty list because its kill contract must never signal a

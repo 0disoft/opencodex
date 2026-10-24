@@ -11,7 +11,7 @@ import { codexCliPlatformBacking } from "./cli-install-provenance";
 import { verifyCodexCliArchive,
   verifiedCodexCliContent, type CodexCliArtifact } from "./cli-update-artifacts";
 import { acquireCodexCliApplyLease } from "./cli-update-lease";
-import { scanCodexSessionProcesses } from "./app-server-processes";
+import { scanCodexSessionProcessesAsync } from "./app-server-processes";
 import { observeCodexCliFileSet, observeCodexCliPreimage, sameCodexCliPreimage, codexCliExpectedFiles, sameCodexCliFiles } from "./cli-update-files";
 
 export interface CodexCliApplyResult {
@@ -210,7 +210,11 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
       `${artifacts.main.installName}@file:${paths[0]}`, `${artifacts.backing.installName}@file:${paths[1]}`];
     const invocation = isolatedNpmTarget(args, isolation);
     if (!invocation) return result("refused", "npm_unavailable");
-    const lastScan = (deps.scanProcesses ?? scanCodexSessionProcesses)(deps.processIo ?? {});
+    const lastScan = deps.scanProcessesAsync
+      ? await deps.scanProcessesAsync(deps.processIo ?? {})
+      : deps.scanProcesses
+        ? deps.scanProcesses(deps.processIo ?? {})
+        : await scanCodexSessionProcessesAsync(deps.processIo ?? {});
     if (lastScan.kind !== "observed") return result("refused", "blocked_process_state_unknown");
     if (lastScan.processes.length) return result("refused", "blocked_active_session");
     started = true;
