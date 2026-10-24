@@ -379,9 +379,12 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
   }
 }, 60_000);
 
-function separateWorkerFixture() {
-  const f = fixture(true), hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
-  copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
+function separateWorkerFixture(copyExecutable = true) {
+  const f = fixture(true);
+  if (copyExecutable) {
+    const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+    copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
+  }
   expect(existsSync(join(f.prefix, "node.exe"))).toBe(false);
   const marker = join(f.root, "metadata-ran"), integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
   const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
@@ -424,7 +427,7 @@ native("a fresh production Worker binds a separate Node/npm metadata vehicle wit
 
 native("fresh Worker realms refuse missing or mismatched arch and reject post-inspection npm drift before metadata", async () => {
   for (const mode of ["missing", "mismatch", "drift"] as const) {
-    const f = separateWorkerFixture();
+    const f = separateWorkerFixture(mode === "drift");
     const plan = await separateWorkerPlan(f, mode === "missing" ? null : mode === "mismatch" ? "arm64" : "x64", mode === "drift");
     expect(plan).toMatchObject({ managed: mode === "drift", applicable: false, targetVersion: null,
       refusal: mode === "drift" ? "target_unresolved" : "windows_inspection_deferred" });
