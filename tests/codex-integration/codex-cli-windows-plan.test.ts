@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
+import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
@@ -190,6 +191,41 @@ native("npm toolchain drift after inspection refuses metadata without executing 
     return report;
   }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });
   expect(queries).toBe(0); expect(plan.refusal).toBe("target_unresolved");
+});
+
+native("the observed toolchain denies replacement until an asynchronous resolver settles", async () => {
+  const f = fixture(); const report = await inspectCodexCliInstall(f.deps);
+  expect(report.managed).toBe(true);
+  const node = join(f.toolchainPrefix, "node.exe");
+  const npmCli = join(f.npmRoot, "bin", "npm-cli.js");
+  const moved = f.prefix + "-moved";
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let settled = false;
+  const held = withWindowsCodexCliPlanToolchain(report, async () => {
+    enter(); await gate; return "resolved";
+  }).then(value => { settled = true; return value; });
+  let result: string | null;
+  try {
+    await Promise.race([entered, held.then(() => { throw new Error("toolchain resolver was not entered"); })]);
+    // A sync finalize returning an unawaited Promise can close its handles in a
+    // microtask; cross an event-loop turn before checking the still-pending gate.
+    await new Promise<void>(resolve => { setImmediate(resolve); });
+    expect(settled).toBe(false);
+    for (const path of [node, npmCli]) expect(() => writeFileSync(path, "replacement")).toThrow();
+    expect(() => renameSync(f.prefix, moved)).toThrow();
+  } finally {
+    release(); result = await held;
+  }
+  expect(result).toBe("resolved");
+  expect(settled).toBe(true);
+  for (const path of [node, npmCli]) {
+    writeFileSync(path, "replacement");
+    expect(readFileSync(path, "utf8")).toBe("replacement");
+  }
+  renameSync(f.prefix, moved);
+  expect(readFileSync(join(moved, "node_modules", "npm", "bin", "npm-cli.js"), "utf8")).toBe("replacement");
 });
 
 native("a separate PATH Node is refused without proof of the target cmd-shim's search result", async () => {
