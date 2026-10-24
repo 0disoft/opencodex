@@ -724,4 +724,20 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(result.cleanupErrors).toEqual(["lease_release_exception"]);
     expect(result.leaseRetained).toBe(true); expect(readdirSync(f.temporaryRoot)).toEqual([]);
   }, 120_000);
+  test("a default verifier setup failure before any child releases the lease", async () => {
+    const f = fixture(); const id = await approved(f);
+    const result = await applyCodexCliUpdate(id, depsFor(f, { install: async invocation => {
+      f.privateNpm([...invocation.args]);
+      const staging = readdirSync(f.temporaryRoot).find(name => name.startsWith("ocx-codex-cli-apply-"));
+      expect(staging).toBeDefined();
+      writeFileSync(join(f.temporaryRoot, staging!, "version-home"), "not a directory\n"); // mkdirSync fails EEXIST
+      return { terminal: true, exitCode: 0 };
+    } }));
+    expect(result.outcome, JSON.stringify(result)).toBe("ambiguous");
+    expect(result.reason).toBe("version_readback_unverified");
+    expect(result.leaseRetained).toBe(false); expect(result.verificationPid).toBeNull();
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    const again = await applyCodexCliUpdate(id, depsFor(f));
+    expect(again.reason, JSON.stringify(again)).not.toBe("installation_busy");
+  }, 120_000);
 });

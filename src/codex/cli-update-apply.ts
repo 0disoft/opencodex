@@ -54,13 +54,27 @@ export interface CodexCliApplyDeps extends CodexCliUpdatePlanDeps {
  */
 export function verifyInstalledCodexVersion(command: string, version: string, cwd: string, env: NodeJS.ProcessEnv): Promise<VersionResult> {
   const home = join(cwd, "version-home");
-  mkdirSync(home, { mode: 0o700 });
+  // A setup failure before any child exists is terminal evidence, not an
+  // unknown lifetime: return it so the caller's lease stays releasable.
+  try {
+    mkdirSync(home, { mode: 0o700 });
+  } catch {
+    return Promise.resolve({ terminal: true, ok: false, pid: null });
+  }
   return new Promise(resolve => {
     let terminal = false, failed = false, stopping = false, output = "";
     let deadline: ReturnType<typeof setTimeout> | undefined, reap: ReturnType<typeof setTimeout> | undefined;
-    const child = spawn(command, ["--version"], { cwd, env: { ...env, CODEX_HOME: home, HOME: home, TMPDIR: home,
-      XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home },
-      stdio: ["ignore", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
+    // A synchronous spawn throw created no child, so it is the same terminal
+    // setup evidence; asynchronous spawn errors still arrive as error+close.
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, ["--version"], { cwd, env: { ...env, CODEX_HOME: home, HOME: home, TMPDIR: home,
+        XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_DATA_HOME: home },
+        stdio: ["ignore", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
+    } catch {
+      resolve({ terminal: true, ok: false, pid: null });
+      return;
+    }
     const groupGone = () => {
       if (process.platform === "win32" || !child.pid) return true;
       try { process.kill(-child.pid, 0); return false; }

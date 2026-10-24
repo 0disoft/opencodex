@@ -78,7 +78,8 @@ platform and inspection architecture contribute to plan identity. Platform alias
 manifest name is also `@openai/codex` are modeled explicitly. The existing isolated npm environment,
 cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pack and install calls.
 The version verification child inherits the owned Node compile-cache path, which is removed with
-terminal apply staging; an uncertain live child retains that staging and its lease.
+terminal apply staging; an uncertain live child retains that staging and its lease. A verifier setup
+failure before any child exists is terminal evidence instead, so the lease is released and later applies are not blocked.
 The owned staging directory is canonicalized immediately after creation, so symlinked temporary roots
 and macOS's /var alias are supported without accepting a linked archive file.
 `src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
