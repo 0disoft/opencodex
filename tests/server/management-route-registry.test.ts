@@ -7,6 +7,7 @@ import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import * as updateJobs from "../../src/codex/cli-update-job";
 import * as cliUpdatePlanModule from "../../src/codex/cli-update-plan";
+import * as cliUpdateWorkerModule from "../../src/codex/cli-update-job-worker";
 import type { ManagementContext } from "../../src/server/management/context";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
@@ -113,10 +114,11 @@ describe("management route registry reconciliation", () => {
       packageVersion: "1.0.0", shim: { status: "not-tracked", backingKind: null },
       evidence: ["package_manifest", "global_npm_layout"] };
     const realPlan = cliUpdatePlanModule.createCodexCliUpdatePlan;
-    // Wrap the REAL planner so the route still runs the production resolver and async
-    // spawn path; only the install report, platform, and scan are fixed fixtures.
-    const planner = spyOn(cliUpdatePlanModule, "createCodexCliUpdatePlan").mockImplementation(deps =>
-      realPlan({ ...deps, platform: "linux", inspectionDeps: { arch: "x64" }, inspect: async () => managed as never,
+    // The route dispatches into another realm: parent planner spies cannot reach it.
+    // This dispatch seam tests HTTP + real async metadata-child behavior only;
+    // cli-update-worker.test.ts separately exercises the actual Worker boundary.
+    const planner = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker").mockImplementation(() =>
+      realPlan({ platform: "linux", inspectionDeps: { arch: "x64" }, inspect: async () => managed as never,
         spawnProcess: gatedSpawn,
         scanProcessesAsync: async () => ({ kind: "observed", processes: [] }) }));
     const oldHome = process.env.OPENCODEX_HOME;
@@ -154,12 +156,30 @@ describe("management route registry reconciliation", () => {
       const response = await planPromise;
       expect(response?.status).toBe(200);
       expect(await response?.json()).toMatchObject({ applicable: true, targetVersion: "1.4.2" });
+      expect(planner).toHaveBeenCalledTimes(1);
     } finally {
       planner.mockRestore();
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("plan dispatch failure returns HTTP 503 without a second dispatch", async () => {
+    const dispatch = spyOn(cliUpdateWorkerModule, "runCodexCliUpdatePlanInWorker")
+      .mockRejectedValue(new Error("plan_unavailable"));
+    const req = new Request("http://localhost/api/codex/cli-update/plan");
+    const ctx: ManagementContext = { req, url: new URL(req.url),
+      config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+      deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+      syncClaudeAgentDefsBestEffort: async () => {} };
+    try {
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(503);
+      expect(await response?.json()).toEqual({ error: "plan_unavailable" });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally { dispatch.mockRestore(); }
   });
 
   test("Codex CLI HTTP apply requires a GUI session and trusted loopback before admission", async () => {
