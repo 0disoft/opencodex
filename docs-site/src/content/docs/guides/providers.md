@@ -316,7 +316,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
@@ -388,10 +388,12 @@ to avoid its `assistant must not be empty` rejection. Nonempty text, whitespace,
 reasoning and tool calls/results are retained; stored client history is not rewritten.
 An empty message referenced by an `item_reference` in the same input is retained rather than leaving a dangling reference.
 
-Kimi Coding usage prices for `k3`, `k3[1m]`, and `k3-256k` are **API-reference estimates** across
-`kimi`, `kimi-code`, and `kimi-responses`, using the published default 5-minute cache-write rate.
-They do not reproduce Code Plan billing or quota: K3's 1M variant consumes about twice the quota
-of `k3-256k`. `kimi-for-coding` now points to K2.8 Preview, so its former K2.7 price is no longer
+Kimi Coding usage prices for `k3`, `k3[1m]`, `k3-256k`, `k3.1-pro`, and `k3.1-pro-highspeed` are
+**API-reference estimates** across `kimi`, `kimi-code`, and `kimi-responses`, using the published
+default 5-minute cache-write rate (the `moonshot` API preset prices the same models as `kimi-k3`,
+`kimi-k3.1-pro`, and `kimi-k3.1-pro-highspeed`). They do not reproduce Code Plan billing or quota:
+K3's 1M variant consumes about twice the quota of `k3-256k`, and K3.1 Pro Highspeed about twice
+that of `k3.1-pro`. `kimi-for-coding` now points to K2.8 Preview, so its former K2.7 price is no longer
 used; its estimate remains unavailable unless the operator supplies `modelCosts`. Unknown-price
 routing policies and cost caps that exclude unknown estimates can therefore exclude this alias.
 See [Kimi's model configuration](https://www.kimi.com/code/docs/en/kimi-code/models.html) and
@@ -673,7 +675,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 104 built-in presets: 84 key-based, 16 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1230,6 +1232,35 @@ Create a key in [Novita's key manager](https://novita.ai/settings/key-management
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
 
+### WorkBuddy AI subscription
+
+`workbuddy-ai` connects your international WorkBuddy AI subscription as a model provider.
+Choose **WorkBuddy AI** in Providers and log in, or run:
+
+```bash
+ocx login workbuddy-ai
+```
+
+Complete the browser sign-in; OpenCodex polls for authorization for up to five minutes.
+Tokens are stored in OpenCodex and refreshed on demand. Adding accounts uses the existing
+OAuth account list; team identity stays attached to its own token. No WorkBuddy desktop
+installation or credential-file import is required.
+
+Models and capabilities come from your account's live product catalog. Select a
+`workbuddy-ai/<model-id>` model after login; `workbuddy-ai/default-model` is the fallback
+selector when discovery is unavailable. Streaming, tool calls and buffered responses use
+WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits, used/total credits, base and gift
+balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
+account's billing summary; an unavailable read is not a zero balance. These credits are
+informational and do not disable free models when paid credits run out.
+
+This uses an unofficial subscription protocol based on
+[Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
+Upstream client-channel or account restrictions are returned to the caller. OpenCodex does
+not rewrite agent identity prompts to bypass them. Availability depends on your account,
+region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
+CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
+
 ### Official CodeBuddy Code CLI (Global & CN)
 
 OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code CLI via the `codebuddy` (Global) and `codebuddy-cn` (China) presets.
@@ -1295,9 +1326,11 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Authentication:** Create a PAT in the account integrations page
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
+- **Windows executables:** Each preset launches its CLI's native executable (`qoder.exe` or `qodercli.exe` for Global, `qodercn.exe` or `qoderclicn.exe` for CN) when one is on PATH. Within one PATH folder the `.exe` wins over a same-name `.cmd`, and a later candidate name such as `qoderclicn.exe` anywhere on PATH wins over `qodercn.cmd`; an earlier PATH folder that holds only `qodercn.cmd` still shadows a later folder's `qodercn.exe`. Qoder turns pass empty `--tools` and `--setting-sources` values to keep the CLI's built-in tools and local settings out, and a dispatcher that forwards through PowerShell drops those empty values. When only such a dispatcher is found, the turn fails before the CLI starts with `cli_dispatcher_drops_empty_args`; add the folder holding the native executable to PATH (the official CN installer places it in `%USERPROFILE%\.qoder-cn\bin\qoderclicn`) and retry. A dispatcher that passes arguments straight through, such as an npm shim, keeps working.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
+- **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.
@@ -1677,7 +1710,14 @@ provider-specific) is already consumed.
 Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
-custom provider.
+or Abliteration custom provider.
+
+**Abliteration credits.** A provider of any name whose `baseUrl` is
+`https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads
+`GET https://api.abliteration.ai/v1/credits` with its active key as a Bearer token and does not
+follow redirects. `total_credits` minus `total_usage` is the remaining USD balance, shown as a
+credits bar of consumed spend. An account with no credits shows no bar. A rejected key clears the
+row; `503 credit_balance_unavailable`, 408, and 429 keep the last reading.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and
