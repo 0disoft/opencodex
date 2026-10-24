@@ -18,16 +18,17 @@ type File = Extract<WindowsInstallationFilesResult, { kind: "observed" }>["files
 const id = (file: File): string => JSON.stringify([file.path, file.identity, file.digest]);
 const sameWindowsPath = (left: string, right: string): boolean => win32.resolve(left).toLowerCase() === win32.resolve(right).toLowerCase();
 /** Metadata queries execute only while the observed Node/npm and ancestors deny replacement. */
-export async function withWindowsCodexCliPlanToolchain<T>(report: CodexCliInstallReport, run: () => T): Promise<T | null> {
+export async function withWindowsCodexCliPlanToolchain<R>(report: CodexCliInstallReport,
+  run: () => R): Promise<Awaited<R> | null> {
   const toolchain = evidence.get(report);
   if (!toolchain) return null;
-  let result: T | null = null;
+  let result: Awaited<R> | null = null;
   const observed = await inspectWindowsInstallationFiles([
     { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
     { path: toolchain.npmCli, maxBytes: 256 * 1024 },
-  ], files => {
+  ], async files => {
     if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
-    result = run(); return true;
+    result = await run(); return true;
   });
   return observed.kind === "observed" ? result : null;
 }
