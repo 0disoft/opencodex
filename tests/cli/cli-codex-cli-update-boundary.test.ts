@@ -81,14 +81,17 @@ describe("Codex CLI selection inspection boundary", () => {
     for (const key of Object.keys(env)) {
       if (["home", "node_path"].includes(key.toLowerCase())) delete env[key];
     }
+    const startedAt = performance.now();
     const result = spawnSync("node", [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "check", "--json"], {
       cwd: repoRoot(), encoding: "utf8", timeout: 15_000, windowsHide: true,
       env: { ...env, Home: "C:\\" + "h".repeat(8 * 1024), Node_Path: "C:\\" + "n".repeat(8 * 1024),
         OPENCODEX_HOME: root, OPENCODEX_BUN_PATH: process.execPath,
         CODEX_CLI_PATH: "C:\\fixture\\codex.exe", OCX_NO_DESKTOP_HANDOFF: "1" },
     });
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
+    const diagnostic = JSON.stringify({ elapsedMs: performance.now() - startedAt, status: result.status,
+      signal: result.signal, error: result.error?.message, stdout: result.stdout?.slice(-2_048), stderr: result.stderr?.slice(-2_048) });
+    expect(result.error, diagnostic).toBeUndefined();
+    expect(result.status, diagnostic).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.candidateSource).toBe("environment");
     expect(report.reason).toBe("windows_inspection_deferred");
