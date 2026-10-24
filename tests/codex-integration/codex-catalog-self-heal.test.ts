@@ -709,6 +709,34 @@ describe("catalog path comparison", () => {
     expect(sameCatalogHealPath(sibling, leaf)).toBe(false);
   });
 
+  test("a link target crossing a symlinked directory climbs its real parent", () => {
+    const root = temporaryRoot(), a = join(root, "a"), realHome = join(root, "b", "subdir");
+    mkdirSync(realHome, { recursive: true });
+    mkdirSync(a, { recursive: true });
+    const real = join(root, "b", "catalog.json"), decoy = join(a, "catalog.json");
+    writeFileSync(real, JSON.stringify(full));
+    writeFileSync(decoy, JSON.stringify(full));
+    symlinkSync(realHome, join(a, "bridge"), process.platform === "win32" ? "junction" : "dir");
+    const link = join(a, "link.json");
+    symlinkSync("bridge/../catalog.json", link, "file");
+    expect(compareCatalogHealPaths(link, real)).toBe("same");
+    expect(compareCatalogHealPaths(real, link)).toBe("same");
+    expect(compareCatalogHealPaths(link, decoy)).toBe("different");
+    expect(compareCatalogHealPaths(decoy, link)).toBe("different");
+  });
+
+  test("a link target crossing a missing directory stays unknown", () => {
+    const root = temporaryRoot(), a = join(root, "a");
+    mkdirSync(a, { recursive: true });
+    const present = join(a, "catalog.json");
+    writeFileSync(present, JSON.stringify(full));
+    const link = join(a, "link.json");
+    symlinkSync("missing/../catalog.json", link, "file");
+    expect(compareCatalogHealPaths(link, present)).toBe("unknown");
+    expect(compareCatalogHealPaths(present, link)).toBe("unknown");
+    expect(inspectHealPath(link, read => read())).toEqual({ kind: "unavailable", hardlink: true });
+  });
+
   test("40-hop exhaustion stays uncertain independently of the comparator read budget", () => {
     const root = temporaryRoot(), cycle = join(root, "cycle.json");
     symlinkSync("cycle.json", cycle, "file");
