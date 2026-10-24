@@ -5,7 +5,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { createServer, connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
+import { applyCodexCliUpdate, verifyInstalledCodexVersion, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
@@ -15,6 +15,11 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { codexCliPlatformBacking } from "../../src/codex/cli-install-provenance";
 import { observeCodexCliFileSet, sameCodexCliFiles } from "../../src/codex/cli-update-files";
+import {
+  createCodexCliUpdateFence, cancelCodexCliUpdateFence, codexCliUpdateIsCancelled,
+  codexCliUpdateSelectionGate, beginCodexCliSelectionParentWrite,
+  createWorkerCommitWindow,
+} from "../../src/codex/cli-update-selection-gate";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
@@ -270,6 +275,27 @@ test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () =
   expect(views.every(value => value.reason === "metadata_returned")).toBe(true);
   expect(existsSync(installTrace)).toBe(false);
 });
+describe("default version verifier pre-child setup", () => {
+  test("a mkdir failure is terminal without creating a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const home = join(root, "version-home");
+    writeFileSync(home, "not a directory\n");
+    expect(await verifyInstalledCodexVersion("", "1.1.0", root, {})).toEqual({
+      terminal: true, ok: false, pid: null,
+    });
+    expect(readFileSync(home, "utf8")).toBe("not a directory\n");
+  });
+  test("a synchronous spawn throw is terminal without creating a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-version-setup-")); roots.push(root);
+    const command = "ocx-verifier\0must-not-spawn";
+    expect(() => spawn(command, ["--version"], { cwd: root, env: {} })).toThrow(/null bytes/);
+    expect(await verifyInstalledCodexVersion(command, "1.1.0", root, {})).toEqual({
+      terminal: true, ok: false, pid: null,
+    });
+    expect(lstatSync(join(root, "version-home")).isDirectory()).toBe(true);
+  });
+});
+
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("a held lease and an unsupported prefix are distinct refusal inputs", () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-policy-"))); roots.push(root);
@@ -541,36 +567,106 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
   }, 120_000);
-  test.each(["preimage-drift", "selection-change", "signal-abort"] as const)(
+  test("artifact fetch keeps the actual AbortSignal identity and event-listener contract", async () => {
+    const f = fixture(), id = await approved(f), controller = new AbortController();
+    const fence = createCodexCliUpdateFence();
+    const signals: AbortSignal[] = [], listeners: Array<() => void> = [];
+    let abortEvents = 0, installs = 0;
+    try {
+      const result = await applyCodexCliUpdate(id, depsFor(f, {
+        signal: controller.signal, isCancelled: codexCliUpdateIsCancelled(fence),
+        fetchArtifact: async (artifact, signal) => {
+          expect(signal).toBe(controller.signal);
+          expect(signal).toBeInstanceOf(AbortSignal);
+          const listener = () => { abortEvents++; };
+          signal!.addEventListener("abort", listener, { once: true });
+          signals.push(signal!); listeners.push(listener);
+          return artifact.installName === f.target.artifacts.main.installName ? f.target.main.bytes : f.target.backing.bytes;
+        },
+        install: () => { installs++; return Promise.resolve({ terminal: true, exitCode: 0 }); },
+      }));
+      expect(result).toMatchObject({ outcome: "not_applied", reason: "original_install_unchanged", leaseRetained: false });
+      expect(signals).toHaveLength(2); expect(installs).toBe(1); expect(abortEvents).toBe(0);
+      controller.abort(); expect(abortEvents).toBe(2);
+      expect(codexCliUpdateIsCancelled(fence)()).toBe(false);
+      expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+      expect(readdirSync(f.temporaryRoot)).toEqual([]);
+    } finally {
+      for (let i = 0; i < signals.length; i++) signals[i]!.removeEventListener("abort", listeners[i]!);
+    }
+  }, 120_000);
+  test.each(["preimage-drift", "selection-change", "signal-abort", "sab-cancel"] as const)(
     "a %s while the process scan is pending refuses before install", async lane => {
       const f = fixture(); const id = await approved(f); let installs = 0;
-      const controller = new AbortController();
-      let scans = 0, scanPending = false;
-      let release!: () => void;
-      const gate = new Promise<void>(resolve => { release = resolve; });
-      // apply calls the async scan seam three times — once inside each plan and
-      // once as the final pre-install scan. Only the last one is held open, so
-      // the mutation below lands strictly inside the awaited final-scan window.
+      const controller = new AbortController(), fence = createCodexCliUpdateFence();
+      const commitWindow = createWorkerCommitWindow({ gate: codexCliUpdateSelectionGate(), fence });
+      let scans = 0, release!: () => void, entered!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const scanEntered = new Promise<void>(resolve => { entered = resolve; });
+      // Two plan scans precede the final scan. Only that final awaited scan is held.
       const pending = applyCodexCliUpdate(id, depsFor(f, {
-        signal: controller.signal,
+        signal: controller.signal, isCancelled: codexCliUpdateIsCancelled(fence), commitWindow,
         scanProcessesAsync: async () => {
-          if (++scans < 3) return { kind: "observed", processes: [] } as never;
-          scanPending = true;
-          await gate;
-          return { kind: "observed", processes: [] } as never;
+          if (++scans === 3) { entered(); await held; }
+          return { kind: "observed", processes: [] };
         },
-        install: async () => { installs++; return { terminal: true, exitCode: 0 }; },
+        install: () => { installs++; return Promise.resolve({ terminal: true, exitCode: 0 }); },
       }));
-      while (!scanPending) await new Promise(resolve => setTimeout(resolve, 10));
-      if (lane === "preimage-drift") writeFileSync(join(f.prefix, "lib/node_modules/@openai/codex/bin/codex.js"),
-        "#!/usr/bin/env node\n// changed while the final scan was pending\n");
-      if (lane === "selection-change") { unlinkSync(f.launcher); symlinkSync(f.target.main.path, f.launcher); }
-      if (lane === "signal-abort") controller.abort();
-      release();
-      const result = await pending;
-      expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
-      expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+      try {
+        await waitForApplyAdmission(scanEntered, pending); expect(scans).toBe(3);
+        const writer = beginCodexCliSelectionParentWrite();
+        try { expect(writer.entered).toBe(false); } finally { writer.exit(); }
+        if (lane === "preimage-drift") writeFileSync(join(f.prefix, "lib/node_modules/@openai/codex/bin/codex.js"),
+          "#!/usr/bin/env node\n// changed while the final scan was pending\n");
+        if (lane === "selection-change") { unlinkSync(f.launcher); symlinkSync(f.target.main.path, f.launcher); }
+        if (lane === "signal-abort") controller.abort();
+        if (lane === "sab-cancel") {
+          expect(cancelCodexCliUpdateFence(fence)).toBe(true);
+          expect(controller.signal.aborted).toBe(false);
+        }
+        release(); const result = await pending;
+        expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
+        if (lane === "sab-cancel" || lane === "signal-abort") expect(result.reason).toBe("cancelled");
+        expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+        expect(readdirSync(f.temporaryRoot)).toEqual([]);
+        const next = beginCodexCliSelectionParentWrite();
+        try { expect(next.entered).toBe(true); } finally { next.exit(); }
+      } finally { release(); await pending.catch(() => {}); }
     }, 120_000);
+  test("actual apply commits while install is called synchronously, then frees gate before awaiting it", async () => {
+    const f = fixture(), id = await approved(f), fence = createCodexCliUpdateFence();
+    const commitWindow = createWorkerCommitWindow({ gate: codexCliUpdateSelectionGate(), fence });
+    let entered!: () => void, finish!: () => void, installs = 0, settled = false;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const terminal = new Promise<{ terminal: boolean; exitCode: number }>(resolve => {
+      finish = () => resolve({ terminal: true, exitCode: 0 });
+    });
+    const pending = applyCodexCliUpdate(id, depsFor(f, {
+      isCancelled: codexCliUpdateIsCancelled(fence), commitWindow,
+      // Deliberately NOT async: this is the documented same-turn child-start seam.
+      // It starts only this fake's admission marker, never the production installer.
+      install: () => {
+        installs++;
+        expect(cancelCodexCliUpdateFence(fence)).toBe(false); // commit won before invocation
+        expect(codexCliUpdateIsCancelled(fence)()).toBe(false);
+        const writer = beginCodexCliSelectionParentWrite();
+        try { expect(writer.entered).toBe(false); } finally { writer.exit(); }
+        entered(); return terminal;
+      },
+    })).then(result => { settled = true; return result; });
+    try {
+      await waitForApplyAdmission(started, pending);
+      expect(installs).toBe(1); expect(settled).toBe(false);
+      const writer = beginCodexCliSelectionParentWrite();
+      try { expect(writer.entered).toBe(true); } finally { writer.exit(); }
+      expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
+      expect(readdirSync(f.temporaryRoot).length).toBeGreaterThan(0);
+    } finally { finish(); await pending.catch(() => {}); }
+    expect(await pending).toMatchObject({ outcome: "not_applied", reason: "original_install_unchanged", leaseRetained: false });
+    expect(installs).toBe(1);
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    expect(readdirSync(f.temporaryRoot)).toEqual([]);
+  }, 120_000);
   test("exit zero with original full files is not_applied", async () => {
     const f = fixture(); const id = await approved(f);
     const result = await applyCodexCliUpdate(id, depsFor(f, { install: async () => ({ terminal: true, exitCode: 0 }) }));
@@ -723,5 +819,21 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(result.outcome, JSON.stringify(result)).toBe("not_applied");
     expect(result.cleanupErrors).toEqual(["lease_release_exception"]);
     expect(result.leaseRetained).toBe(true); expect(readdirSync(f.temporaryRoot)).toEqual([]);
+  }, 120_000);
+  test("a default verifier setup failure before any child releases the lease", async () => {
+    const f = fixture(); const id = await approved(f);
+    const result = await applyCodexCliUpdate(id, depsFor(f, { install: async invocation => {
+      f.privateNpm([...invocation.args]);
+      const staging = readdirSync(f.temporaryRoot).find(name => name.startsWith("ocx-codex-cli-apply-"));
+      expect(staging).toBeDefined();
+      writeFileSync(join(f.temporaryRoot, staging!, "version-home"), "not a directory\n"); // mkdirSync fails EEXIST
+      return { terminal: true, exitCode: 0 };
+    } }));
+    expect(result.outcome, JSON.stringify(result)).toBe("ambiguous");
+    expect(result.reason).toBe("version_readback_unverified");
+    expect(result.leaseRetained).toBe(false); expect(result.verificationPid).toBeNull();
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    const again = await applyCodexCliUpdate(id, depsFor(f));
+    expect(again.reason, JSON.stringify(again)).not.toBe("installation_busy");
   }, 120_000);
 });
