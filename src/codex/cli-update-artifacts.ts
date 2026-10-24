@@ -49,15 +49,38 @@ export function backingReference(main: Metadata, installName: string): { name: s
   const version = direct ? main.version : alias.slice("npm:@openai/codex@".length);
   return { name, version, spec: `${name}@${version}` };
 }
-export function codexCliArtifactSet(main: Metadata, query: (spec: string) => Metadata,
-  platform: NodeJS.Platform, arch: string): CodexCliArtifactSet {
+/** Main-metadata guard + reference derivation shared by the sync and async set builders. */
+function codexCliArtifactMain(main: Metadata, platform: NodeJS.Platform, arch: string) {
   const layout = codexCliPlatformBacking(platform, arch);
   if (!layout || main.name !== "@openai/codex") throw new Error("artifact_platform_unverified");
   const mainArtifact = artifact(main, "@openai/codex");
   const reference = backingReference(main, layout.package);
-  const backing = artifact(query(reference.spec), layout.package);
+  return { layout, mainArtifact, reference };
+}
+function codexCliArtifactFinish(mainArtifact: CodexCliArtifact,
+  reference: { name: string; version: string; spec: string },
+  layout: { package: string }, backingMeta: Metadata,
+  platform: NodeJS.Platform, arch: string): CodexCliArtifactSet {
+  const backing = artifact(backingMeta, layout.package);
   if (backing.name !== reference.name || backing.version !== reference.version) throw new Error("backing_metadata_unverified");
   return Object.freeze({ platform, arch, main: mainArtifact, backing });
+}
+export function codexCliArtifactSet(main: Metadata, query: (spec: string) => Metadata,
+  platform: NodeJS.Platform, arch: string): CodexCliArtifactSet {
+  // Main integrity is refused BEFORE the backing query is issued — the tarball query
+  // must never run on already-unverified metadata (integrity gate, 2 queries total).
+  const { layout, mainArtifact, reference } = codexCliArtifactMain(main, platform, arch);
+  return codexCliArtifactFinish(mainArtifact, reference, layout, query(reference.spec), platform, arch);
+}
+/**
+ * The request-path twin of {@link codexCliArtifactSet}: the backing query resolves off the
+ * event loop, so a waiting registry child cannot stall the proxy. The platform guard and
+ * main-artifact check still run before any backing query is issued.
+ */
+export async function codexCliArtifactSetAsync(main: Metadata, query: (spec: string) => Promise<Metadata>,
+  platform: NodeJS.Platform, arch: string): Promise<CodexCliArtifactSet> {
+  const { layout, mainArtifact, reference } = codexCliArtifactMain(main, platform, arch);
+  return codexCliArtifactFinish(mainArtifact, reference, layout, await query(reference.spec), platform, arch);
 }
 export function codexCliArtifactSetDigest(set: CodexCliArtifactSet): string {
   return createHash("sha256").update(JSON.stringify([set.platform, set.arch,
