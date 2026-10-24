@@ -1,5 +1,5 @@
 # Responses Transport
-
+WorkBuddy AI carries account-bound identity through initial dispatch and renewal under the [WorkBuddy contract](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -19,11 +19,15 @@ Responses-compatible streaming output. Every Responses serializer projects unref
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
 `forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
-Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented.
+Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
 [shared/Reserve policy](../providers/openai-tiers.md#public-provider-contract), including suppression of retired model-derived evidence before shared recovery. Plain-main HTTP/WS quota headers refresh `__main__` only on the canonical OpenAI forward provider when the materialized bearer and workspace match the owned main observation, using the hard-lock credential-match rule. `src/server/responses/passthrough-delivery.ts` captures the response-arrival dispatch before any await and keeps that proof for the arrival headers across body classification and deferred replacement, rechecking its credential generation after the awaited import; `src/server/responses/core-codex-account.ts` renews a live dispatch object for each WS observer without recapturing its credential or config fences, retains that copy across frames, and rechecks it for each frame. Rotated credentials and unmatched workspaces publish nothing; dispatch proofs also reject any OpenCodex-owned credential publication epoch change, including native main refresh or same-account reauth before quota re-observation; each plain-main WS observer invocation claims its captured dispatch before liveness checks, and this claim is the authoritative HTTP publication guard across Response replacement; WS upstream responses and separately marked pre-response prelude projections (4xx refusals and 502/504 gateway failures) skip plain-main HTTP quota writes; prelude headers remain available to Pool replay, real HTTP fallbacks still publish; each operator-granted HTTP replacement renews the dispatch object with its original credential and config fences unchanged, and Pool health/failover gates remain unchanged.
+
+### Passthrough message phase inference
+
+Opt-in `messagePhaseInference` gives native passthrough Responses streams the commentary/final_answer semantics the Chat bridge owns under [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md). The block rewrite in `src/server/responses-phase-inference.ts`, wired through the `src/server/responses/passthrough-delivery.ts` chain, retains each completed message whose phase is missing, null, or not commentary/final_answer until the next typed protocol event: a following tool call, reasoning, or message classifies it as commentary; a terminal event or `[DONE]` classifies it as final_answer. Text deltas keep streaming, but completion may wait for that next event. Explicitly phased messages forward immediately; keepalives and unparseable blocks pass through without consuming the pending decision. Valid explicit phases are retained like inferred ones. Each decision is keyed by item id and by `output_index`; completed and incomplete snapshots fill absent phases from the decision with the same id, or from the decision at the same output position when the event or the snapshot item has no id, so an item-done event and its snapshot entry never disagree. Unmatched items, including a different id at a known position, fall back to final_answer; explicit snapshot phases take precedence even when they disagree with an earlier event. Failed terminal bodies remain unchanged. The pending block and per-id decisions are charged to the request's translator budget; overflow fails through the shared buffer-limit error. State is released on every terminal event, `[DONE]`, rewrite failure, and relay teardown (`tests/responses/responses-phase-inference.test.ts`). The same client rewrite chain also runs when upstream SSE is reconstructed into a buffered JSON response; ordinary upstream JSON is not phase-rewritten.
 
 ### Credential-bearing HTTP redirects
 
@@ -76,13 +80,9 @@ semantic no-progress budget. The turn lease in `src/server/lifecycle.ts` subscri
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
 > Decision record: [ADR-0032](../decisions/ADR-0032-responses-http-sse.md)
 > Decision record: [ADR-0033](../decisions/ADR-0033-responses-http-sse.md)
-
 > Decision record: [ADR-0034](../decisions/ADR-0034-responses-http-sse.md)
-
 > Decision record: [ADR-0035](../decisions/ADR-0035-responses-http-sse.md)
-
 > Decision record: [ADR-0036](../decisions/ADR-0036-responses-http-sse.md)
-
 > Decision record: [ADR-0037](../decisions/ADR-0037-responses-http-sse.md)
 
 Two coordinates that lower to the same wire name are treated as one tool when they denote one:
@@ -197,7 +197,7 @@ This table is not an unknown-parameter sanitizer, and the distinction is the poi
 client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
 being deleted on the theory that the destination would have rejected it. `codex_output_schema` is
 deliberately absent for that reason: in codex-rs it is the `name` of the JSON-schema `text.format`
-object, not a top-level key, so listing it would remove a field this client never sends.
+object, not a top-level key, so listing it would remove a field this client never sends. Private input item TYPES are a third table, `CANONICAL_ONLY_INPUT_ITEM_TYPES` (`stripCanonicalOnlyInputItems`, same destination boundary in the passthrough and native compact gateway replay). It holds Codex 0.164 `configuration_update` (`{type, reasoning: {effort}}`), a positional effort control: OpenAI-operated destinations receive it verbatim and in order, other gateways get the conversation without it, the translated parser drops it without clearing pending reasoning, and the agent-task tail walkers skip it like `compaction_trigger`. Codex sends it only for rows with `supports_reasoning_effort_updates`, which `normalizeRoutedCatalogEntry` removes from routed rows; its effort is never mapped onto a routed request (#6895). Coverage: `tests/responses/codex-0164-request-compat.test.ts`.
 
 After that namespace boundary has produced public function tools, the Grok CLI Responses transport
 applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
