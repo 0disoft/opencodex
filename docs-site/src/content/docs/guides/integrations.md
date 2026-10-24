@@ -912,6 +912,8 @@ ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
 
+Under the table, **Change history** lists every change a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `codex-agent-roles.jsonl` in the opencodex config directory; the omo card's Restore center above tracks only `~/.omo/agent/models.json`.
+
 ## Kilo
 
 Kilo CLI, VS Code, and JetBrains share one global config. This integration writes

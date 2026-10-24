@@ -144,9 +144,11 @@ test("apply all writes each remaining proposal once and skips unsized roles", as
   await mount();
   await click(button("Auto-assign"));
   await click(button("Apply all"));
+  const batch = (requests[1]!.body as { batch: string }).batch;
+  expect(batch).toMatch(/^[0-9a-f-]{36}$/);
   expect(requests.slice(1)).toEqual([
-    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "a/small", effort: "low" } },
-    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid" } },
+    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "a/small", effort: "low", batch } },
+    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid", batch } },
   ]);
   expect(container.textContent).toContain("Applied 2 of 2 proposals.");
   expect(button("Apply all").disabled).toBe(true);
@@ -206,7 +208,7 @@ test("Apply all merges both confirmed rows when every reload fails", async () =>
   await click(button("Auto-assign"));
   reloadFails = true;
   await click(button("Apply all"));
-  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low" }, { model: "a/mid" }]);
+  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low", batch: expect.any(String) }, { model: "a/mid", batch: expect.any(String) }]);
   expect(roleRow("explorer").querySelectorAll("td")[1]!.textContent).toBe("a/small · low");
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · high");
   await expectEffortOptions("explorer", ["Inherit effort", "low", "medium", "high"]);

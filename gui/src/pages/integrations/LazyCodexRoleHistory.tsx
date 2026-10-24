@@ -1,0 +1,83 @@
+import { useState } from "react";
+import { useT } from "../../i18n/shared";
+import { Notice } from "../../ui";
+
+export interface RoleSetting {
+  model: string | null;
+  effort: string | null;
+}
+
+export interface RoleChange {
+  at: string;
+  batch: string;
+  role: string;
+  before: RoleSetting;
+  after: RoleSetting;
+}
+
+type Restore = (role: string, model: string | undefined, effort: string | null, batch: string) => Promise<boolean>;
+
+/** Newest first, as the server lists them; one entry per batch, so Apply all reads as one action. */
+function groupByBatch(history: RoleChange[]): RoleChange[][] {
+  const groups = new Map<string, RoleChange[]>();
+  for (const change of history) groups.set(change.batch, [...(groups.get(change.batch) ?? []), change]);
+  return [...groups.values()];
+}
+
+/** A role changed twice in one batch goes back to what it held before the first change. */
+function earliestBefore(group: RoleChange[]): Map<string, RoleSetting> {
+  const before = new Map<string, RoleSetting>();
+  for (const change of group) before.set(change.role, change.before);
+  return before;
+}
+
+export default function LazyCodexRoleHistory({ history, busy, restore }: { history: RoleChange[]; busy: boolean; restore: Restore }) {
+  const t = useT();
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  if (history.length === 0) return null;
+
+  const describe = (setting: RoleSetting) => {
+    const model = setting.model ?? t("integrations.lazycodexRoles.none");
+    return setting.effort ? `${model} · ${setting.effort}` : model;
+  };
+
+  const restoreGroup = async (group: RoleChange[]) => {
+    setRestoring(group[0]!.batch);
+    setSummary(null);
+    const batch = crypto.randomUUID();
+    let count = 0;
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
+    for (const [role, setting] of earliestBefore(group)) {
+      // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
+      if (await restore(role, setting.model ?? undefined, setting.effort, batch)) count += 1;
+    }
+    setSummary(t("integrations.lazycodexRoles.history.restored", { count: String(count), time: new Date(group[0]!.at).toLocaleString() }));
+    setRestoring(null);
+  };
+
+  return (
+    <div className="lazycodex-role-history">
+      <h5>{t("integrations.lazycodexRoles.history.title")}</h5>
+      <p className="page-sub">{t("integrations.lazycodexRoles.history.hint")}</p>
+      {summary && <Notice tone="ok">{summary}</Notice>}
+      <ul>
+        {groupByBatch(history).map(group => (
+          <li key={group[0]!.batch}>
+            <span className="integration-meta">{new Date(group[0]!.at).toLocaleString()}</span>
+            <ul>
+              {group.map(change => (
+                <li key={`${change.at}-${change.role}`}>
+                  <code>{change.role}</code>: <code>{describe(change.before)}</code> → <code>{describe(change.after)}</code>
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="btn btn-sm" disabled={busy || restoring !== null} onClick={() => void restoreGroup(group)}>
+              {restoring === group[0]!.batch ? t("common.saving") : t("integrations.lazycodexRoles.history.restore")}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

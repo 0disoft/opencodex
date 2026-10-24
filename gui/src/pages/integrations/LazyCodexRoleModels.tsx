@@ -5,6 +5,7 @@ import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Select, type SelectOption } from "../../ui";
 import LazyCodexRoleAutoAssign from "./LazyCodexRoleAutoAssign";
+import LazyCodexRoleHistory, { type RoleChange } from "./LazyCodexRoleHistory";
 
 interface RoleRow {
   role: string;
@@ -19,6 +20,7 @@ type OmoWriteStatus = "written" | "unchanged" | "absent" | "skipped_comments" | 
 interface RoleModels {
   detected: boolean;
   roles: RoleRow[];
+  history: RoleChange[];
   omoJsonc: { state: OmoFileState } | null;
   available: string[];
   efforts: string[];
@@ -40,11 +42,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const load = useCallback(async (signal: AbortSignal): Promise<RoleModels> => {
-    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; omoJsonc?: { state: OmoFileState } | null }>(
+    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; history?: RoleChange[]; omoJsonc?: { state: OmoFileState } | null }>(
       await fetch(`${apiBase}/api/codex-agent-roles`, { signal }),
       t("integrations.lazycodexRoles.loadFailed"),
     );
-    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], omoJsonc: null, available: [], efforts: [] };
+    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], history: [], omoJsonc: null, available: [], efforts: [] };
     // The effort list is the one the Subagents page offers for its delegation model. It only adds
     // choices, so a failed lookup leaves each row with its pinned effort instead of failing the table.
     const [models, delegation] = await Promise.all([
@@ -57,6 +59,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     return {
       detected: true,
       roles: roles.roles ?? [],
+      history: roles.history ?? [],
       omoJsonc: roles.omoJsonc ?? null,
       available: models?.available ?? [],
       efforts: delegation?.efforts ?? [],
@@ -74,7 +77,13 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
 
   // An undefined model saves the effort alone and leaves the role's model pin, or its inheritance,
   // as it is. Auto-assign and model picks always pass a model.
-  const save = async (role: string, model: string | undefined, effort: string | null | undefined = undefined, displayedEffort?: string): Promise<boolean> => {
+  const save = async (
+    role: string,
+    model: string | undefined,
+    effort: string | null | undefined = undefined,
+    displayedEffort?: string,
+    batch?: string,
+  ): Promise<boolean> => {
     if (pending !== null) return false;
     // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
     // path (the row or auto-assign) cannot drop it. An explicit effort replaces the retry.
@@ -86,7 +95,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       const response = await fetch(`${apiBase}/api/codex-agent-roles/${encodeURIComponent(role)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(model !== undefined ? { model } : {}), ...(sent !== undefined ? { effort: sent } : {}) }),
+        body: JSON.stringify({
+          ...(model !== undefined ? { model } : {}),
+          ...(sent !== undefined ? { effort: sent } : {}),
+          ...(batch !== undefined ? { batch } : {}),
+        }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
         response,
@@ -167,7 +180,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         <p className="page-sub">{t("integrations.lazycodexRoles.empty")}</p>
       ) : (
         <>
-        <LazyCodexRoleAutoAssign apiBase={apiBase} busy={pending !== null} apply={save} />
+        <LazyCodexRoleAutoAssign
+          apiBase={apiBase}
+          busy={pending !== null}
+          apply={(role, model, effort, batch) => save(role, model, effort, undefined, batch)}
+        />
         <div className="tbl-wrap">
           <table className="tbl">
             <thead>
@@ -235,6 +252,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
             </tbody>
           </table>
         </div>
+        <LazyCodexRoleHistory
+          history={data.history}
+          busy={pending !== null}
+          restore={(role, model, effort, batch) => save(role, model, effort, undefined, batch)}
+        />
         </>
       )}
     </section>

@@ -535,3 +535,26 @@ test("picking a model after a failed effort-only mirror sends both, and only the
   expect(puts.map(entry => entry.body)).toEqual([{ effort: "low" }, { model: "xai/grok-4.5", effort: "low" }]);
   expect(current("librarian")).toBe("xai/grok-4.5 · low");
 });
+
+test("lists the role change history as one entry per batch and restores a batch's earlier values together", async () => {
+  rolesBody = {
+    ...(rolesBody as Record<string, unknown>),
+    history: [
+      { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+      { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+    ],
+  };
+  await mount();
+  const entries = container.querySelectorAll(".lazycodex-role-history > ul > li");
+  expect(entries.length).toBe(1);
+  expect(entries[0]!.textContent).toContain("explorer: gpt-5.5 → xai/grok-4.5 · low");
+  const restore = entries[0]!.querySelector("button") as HTMLButtonElement;
+  await act(async () => { restore.click(); });
+  await settle();
+  expect(puts.map(put => ({ role: put.url.slice(put.url.lastIndexOf("/") + 1), body: put.body }))).toEqual([
+    { role: "librarian", body: { effort: "medium", batch: (puts[0]!.body as { batch: string }).batch } },
+    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: (puts[0]!.body as { batch: string }).batch } },
+  ]);
+  expect((puts[0]!.body as { batch: string }).batch).not.toBe("apply-all");
+  expect(container.textContent).toContain("Restored 2 role(s)");
+});
