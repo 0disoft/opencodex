@@ -64,10 +64,12 @@ function readRecords(): DeviceRecord[] {
     const entry = lstatSync(path);
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > STORE_LIMIT || entry.isSymbolicLink()
       || stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("unsafe dashboard session store");
-    const bytes = Buffer.alloc(STORE_LIMIT + 1);
+    // Size the read from the stat we validated: a store that grows mid-read overflows
+    // the +1 sentinel byte and is rejected instead of silently truncated at a fixed limit.
+    const bytes = Buffer.alloc(stat.size + 1);
     let length = 0;
     while (length < bytes.length) { const count = readSync(fd, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
-    if (length > STORE_LIMIT) throw new Error("dashboard session store too large");
+    if (length > stat.size) throw new Error("dashboard session store changed during read");
     const value: unknown = JSON.parse(bytes.subarray(0, length).toString("utf8"));
     if (!Array.isArray(value) || value.length > RECORD_LIMIT) throw new Error("invalid dashboard session store");
     for (const row of value) {

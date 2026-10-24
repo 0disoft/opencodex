@@ -261,7 +261,7 @@ export const en = {
   "auth.adminTokenUnavailable": "The admin token could not be verified. Try again.",
   "auth.adminTokenHelp": "This is the OpenCodex management admin token, not a provider API key. The proxy writes it to ~/.opencodex/admin-api-token (or $OPENCODEX_HOME/admin-api-token) on first start, and OPENCODEX_ADMIN_AUTH_TOKEN overrides it.",
   "auth.rememberDevice": "Remember this device",
-  "auth.rememberDeviceHint": "Keep a revocable HttpOnly dashboard session for 30 days, not the admin token. Requires a direct HTTPS dashboard (or local loopback).",
+  "auth.rememberDeviceHint": "Keep a revocable HttpOnly dashboard session for 30 days, not the admin token. Requires a direct HTTPS dashboard that is same-origin with the API (or local loopback).",
   "connection.forgetDevice": "Forget this device",
   "connection.forgetDeviceFailed": "Could not forget this device. The session was kept.",
   "auth.adminTokenDocsLink": "How to find it",

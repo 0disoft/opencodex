@@ -260,7 +260,7 @@ export const tr: Record<TKey, string> = {
   "auth.adminTokenUnavailable": "Yönetici jetonu doğrulanamadı. Tekrar deneyin.",
   "auth.adminTokenHelp": "Bu, sağlayıcı API anahtarı değil, OpenCodex yönetim API’sinin yönetici jetonudur. Proxy ilk açılışta bunu ~/.opencodex/admin-api-token (veya $OPENCODEX_HOME/admin-api-token) dosyasına yazar; OPENCODEX_ADMIN_AUTH_TOKEN bu değeri geçersiz kılar.",
   "auth.rememberDevice": "Bu cihazı hatırla",
-  "auth.rememberDeviceHint": "Yönetici belirteci yerine iptal edilebilir HttpOnly oturumunu 30 gün tutar. Doğrudan HTTPS paneli (veya yerel loopback) gerekir.",
+  "auth.rememberDeviceHint": "Yönetici belirteci yerine iptal edilebilir HttpOnly oturumunu 30 gün tutar. API ile aynı origin'de doğrudan bir HTTPS paneli (veya yerel loopback) gerekir.",
   "connection.forgetDevice": "Bu cihazı unut",
   "connection.forgetDeviceFailed": "Bu cihaz unutulamadı. Oturum korundu.",
   "auth.adminTokenDocsLink": "Nasıl bulunur",
