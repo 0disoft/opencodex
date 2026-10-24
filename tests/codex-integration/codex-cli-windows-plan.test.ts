@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
@@ -376,6 +376,62 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
     // afterEach retains this fixture even if the test times out before this
     // finally is reached. No terminate() or fabricated terminal evidence.
     if (worker && !closed) liveWorkerRoots.add(f.root);
+  }
+}, 60_000);
+
+function separateWorkerFixture() {
+  const f = fixture(true), hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+  copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
+  expect(existsSync(join(f.prefix, "node.exe"))).toBe(false);
+  const marker = join(f.root, "metadata-ran"), integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+    `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'metadata\\n'); const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  return { ...f, marker, integrity };
+}
+
+async function separateWorkerPlan(f: ReturnType<typeof separateWorkerFixture>, arch: "x64" | "arm64" | null, drift = false) {
+  let starts = 0, closed = false;
+  const plan = await runCodexCliUpdatePlanInWorker({
+    snapshot: { codexCliPath: f.deps.env.CODEX_CLI_PATH, path: f.toolchainPrefix, pathExt: ".EXE;.CMD",
+      home: f.root, nodePath: null, managerRoots: {}, transportEnv: {}, configDir: f.deps.configDir, arch },
+    spawnWorkerFn: (url, key) => {
+      expect(key).toBe("cli-update-worker"); starts++;
+      // Drift needs a test-only injection seam; the positive and arch refusals use the production entry.
+      const worker = new Worker(drift ? repoPath("tests", "helpers", "cli-windows-plan-drift-worker.ts") : url, { type: "module" });
+      liveWorkerRoots.add(f.root);
+      worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+      return worker;
+    },
+  });
+  // afterEach retains the root if dispatch/test timeout occurs without real close.
+  expect(starts).toBe(1); expect(closed).toBe(true);
+  return plan;
+}
+
+native("a fresh production Worker binds a separate Node/npm metadata vehicle with the launcher arch", async () => {
+  const f = separateWorkerFixture(), plan = await separateWorkerPlan(f, "x64");
+  expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
+    targetIntegrity: f.integrity, applicable: false });
+  expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expect(readFileSync(f.marker, "utf8")).toContain("metadata");
+  expect(JSON.stringify(plan)).not.toContain(f.root);
+}, 60_000);
+
+native("fresh Worker realms refuse missing or mismatched arch and reject post-inspection npm drift before metadata", async () => {
+  for (const mode of ["missing", "mismatch", "drift"] as const) {
+    const f = separateWorkerFixture();
+    const plan = await separateWorkerPlan(f, mode === "missing" ? null : mode === "mismatch" ? "arm64" : "x64", mode === "drift");
+    expect(plan).toMatchObject({ managed: mode === "drift", applicable: false, targetVersion: null,
+      refusal: mode === "drift" ? "target_unresolved" : "windows_inspection_deferred" });
+    if (mode === "drift") expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+    else expect(plan.installContentDigest).toBeNull();
+    expect(existsSync(f.marker)).toBe(false);
+    expect(JSON.stringify(plan)).not.toContain(f.root);
   }
 }, 60_000);
 
