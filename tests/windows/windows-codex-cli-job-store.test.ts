@@ -158,11 +158,21 @@ describe("Windows CLI update job store backend", () => {
   // write. One hardened root under the volume root gives a clean write-private
   // parent with a single trusted ancestor — the same hardening the store applies
   // to directories it creates itself.
-  async function fixture(prefix: string): Promise<{ outer: string; configDir: string }> {
+  async function fixture(prefix: string, onCreated?: (root: string) => void): Promise<{ outer: string; configDir: string }> {
     const outer = mkdtempSync("C:\\" + prefix);
+    onCreated?.(outer);
     fixtures.push(outer);
     await hardenSecretDirAsync(outer, { required: true });
     return { outer, configDir: join(outer, "ocx") };
+  }
+  async function withOwnedFixture(prefix: string,
+    run: (input: { outer: string; configDir: string }) => Promise<void>): Promise<void> {
+    let releaseBase: (() => void) | undefined;
+    try {
+      // Acquire before fixture()'s first await, including ACL hardening and admission.
+      const input = await fixture(prefix, root => { releaseBase = holdFixture(root); });
+      await run(input);
+    } finally { releaseBase?.(); }
   }
   function useHome(configDir: string): void {
     envStack.push(process.env.OPENCODEX_HOME);
@@ -176,8 +186,7 @@ describe("Windows CLI update job store backend", () => {
       syncClaudeAgentDefsBestEffort: async () => {} };
   }
 
-  test.skipIf(!winOnly)("private-store admission and status fence one production Worker completion", async () => {
-    const { outer, configDir } = await fixture("ocx-winjob-worker-");
+  test.skipIf(!winOnly)("private-store admission and status fence one production Worker completion", () => withOwnedFixture("ocx-winjob-worker-", async ({ outer, configDir }) => {
     useHome(configDir);
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-worker-once-01", planId: result.planId, confirmed: true, configDir });
     expect(accepted.kind).toBe("accepted");
@@ -225,10 +234,9 @@ describe("Windows CLI update job store backend", () => {
     expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "refused", ownerState: "finished" });
     const ledger = JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")) as { jobs: { revision: number }[] };
     expect(ledger.jobs[0]!.revision).toBe(2);
-  }, 60_000);
+  }), 60_000);
 
-  test.skipIf(!winOnly)("private-store completion preserves an unknown live Worker without replaying its engine", async () => {
-    const { outer, configDir } = await fixture("ocx-winjob-worker-unknown-");
+  test.skipIf(!winOnly)("private-store completion preserves an unknown live Worker without replaying its engine", () => withOwnedFixture("ocx-winjob-worker-unknown-", async ({ outer, configDir }) => {
     useHome(configDir);
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-worker-unknown-01", planId: result.planId, confirmed: true, configDir });
     const control = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * FIXTURE_CONTROL_WORDS));
@@ -271,7 +279,7 @@ describe("Windows CLI update job store backend", () => {
     }
     expect(codexCliUpdateUnjoinedWorkerCount()).toBe(initial);
     expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "ambiguous", reason: "job_result_unknown" });
-  }, 60_000);
+  }), 60_000);
 
   test.skipIf(!winOnly)("admission dedupes, conflicts, applies and reads back through the real private store", async () => {
     const { configDir } = await fixture("ocx-winjob-admit-");
