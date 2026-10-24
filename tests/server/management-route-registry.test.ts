@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import * as updateJobs from "../../src/codex/cli-update-job";
+import * as cliUpdatePlanModule from "../../src/codex/cli-update-plan";
 import type { ManagementContext } from "../../src/server/management/context";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
@@ -81,6 +82,84 @@ describe("management route registry reconciliation", () => {
       expect(response?.status).toBe(200);
       expect(await response?.json()).toMatchObject({ applicable: false, schemaVersion: 1 });
     } finally { initializeNodeLauncherContext(["bun", "test"], {}); }
+  });
+
+  test("a gated registry child leaves concurrent management requests responsive", async () => {
+    // Regression for the planning P1: a slow npm query must not park the proxy event
+    // loop. The gated child answers like npm view --json but only once the release
+    // file appears — with its own cap so a regression cannot hang the suite — and it
+    // runs through the production async spawn runner, not a mocked event loop.
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-gated-npm-")));
+    const gateFile = join(dir, "release");
+    const integrity = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
+    const mainJson = JSON.stringify({ name: "@openai/codex", version: "1.4.2",
+      optionalDependencies: { "@openai/codex-linux-x64": "1.4.2" },
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz" } });
+    const backingJson = JSON.stringify({ name: "@openai/codex-linux-x64", version: "1.4.2",
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex-linux-x64/-/codex-linux-x64-1.4.2.tgz" } });
+    const gatedSpawn: cliUpdatePlanModule.CodexCliUpdateSpawn = (_bin, args, options) =>
+      cliUpdatePlanModule.spawnCodexCliUpdateMetadata(process.execPath, [
+        "-e",
+        'const fs=require("node:fs"),g=process.env.OCX_GATE_FILE,a=process.env.OCX_GATE_ANSWER,d=Date.now()+Number(process.env.OCX_GATE_CAP_MS);'
+        + 'const t=setInterval(()=>{if(!fs.existsSync(g)&&Date.now()<=d)return;clearInterval(t);process.stdout.write(a+"\\n",()=>process.exit(0))},15)',
+      ], { ...options, windowsVerbatimArguments: false,
+        env: { ...options.env, OCX_GATE_FILE: gateFile, OCX_GATE_CAP_MS: "4000",
+          OCX_GATE_ANSWER: args.join(" ").includes("@openai/codex-linux-x64@") ? backingJson : mainJson } });
+    const managed = { schemaVersion: 1, candidateAvailable: true, candidateVersion: "1.0.0",
+      candidateSource: "environment", selectionAttested: true,
+      versionEvidence: { kind: "package-manifest" }, provenance: "npm-global", managed: true,
+      reason: "managed_npm_global", location: "<npm-global>/@openai/codex",
+      installDigest: "a".repeat(64), installContentDigest: "c".repeat(64),
+      packageVersion: "1.0.0", shim: { status: "not-tracked", backingKind: null },
+      evidence: ["package_manifest", "global_npm_layout"] };
+    const realPlan = cliUpdatePlanModule.createCodexCliUpdatePlan;
+    // Wrap the REAL planner so the route still runs the production resolver and async
+    // spawn path; only the install report, platform, and scan are fixed fixtures.
+    const planner = spyOn(cliUpdatePlanModule, "createCodexCliUpdatePlan").mockImplementation(deps =>
+      realPlan({ ...deps, platform: "linux", inspectionDeps: undefined, inspect: async () => managed as never,
+        spawnProcess: gatedSpawn,
+        scanProcessesAsync: async () => ({ kind: "observed", processes: [] }) }));
+    const oldHome = process.env.OPENCODEX_HOME;
+    const emptyHome = join(dir, "empty-home");
+    mkdirSync(emptyHome, { recursive: true });
+    process.env.OPENCODEX_HOME = emptyHome;
+    try {
+      const makeCtx = (pathname: string): ManagementContext => {
+        const req = new Request(`http://localhost${pathname}`);
+        return { req, url: new URL(req.url), config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+          deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+          convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+          syncClaudeAgentDefsBestEffort: async () => {} };
+      };
+      const planPromise = handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/plan"));
+      // Let the first gated child spawn, then an unrelated request must still answer.
+      const firedAt = Date.now();
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const concurrent = await Promise.race([
+        handleCodexCliUpdateRoutes(makeCtx("/api/codex/cli-update/jobs/11111111-2222-3333-4444-555555555555"))
+          .then(response => ({ kind: "responded" as const, response })),
+        new Promise<{ kind: "blocked" }>(resolve => setTimeout(() => resolve({ kind: "blocked" }), 3_000)),
+      ]);
+      // Under a synchronous spawn this race can only settle after the child cap.
+      expect(concurrent.kind).toBe("responded");
+      // A parked event loop defers BOTH arms past the child cap, so the response
+      // arriving "first" is not enough — the wall clock is the discriminator.
+      expect(Date.now() - firedAt).toBeLessThan(2_500);
+      if (concurrent.kind === "responded") {
+        // POSIX reads an empty store (404); Windows refuses the unsupported store
+        // lane (503). Either way the unrelated request answered while planning waited.
+        expect([404, 503]).toContain(concurrent.response?.status ?? 0);
+      }
+      writeFileSync(gateFile, "release");
+      const response = await planPromise;
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ applicable: true, targetVersion: "1.4.2" });
+    } finally {
+      planner.mockRestore();
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("Codex CLI HTTP apply requires a GUI session and trusted loopback before admission", async () => {

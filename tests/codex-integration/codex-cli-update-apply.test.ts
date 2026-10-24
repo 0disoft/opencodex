@@ -541,6 +541,36 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
   }, 120_000);
+  test.each(["preimage-drift", "selection-change", "signal-abort"] as const)(
+    "a %s while the process scan is pending refuses before install", async lane => {
+      const f = fixture(); const id = await approved(f); let installs = 0;
+      const controller = new AbortController();
+      let scans = 0, scanPending = false;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      // apply calls the async scan seam three times — once inside each plan and
+      // once as the final pre-install scan. Only the last one is held open, so
+      // the mutation below lands strictly inside the awaited final-scan window.
+      const pending = applyCodexCliUpdate(id, depsFor(f, {
+        signal: controller.signal,
+        scanProcessesAsync: async () => {
+          if (++scans < 3) return { kind: "observed", processes: [] } as never;
+          scanPending = true;
+          await gate;
+          return { kind: "observed", processes: [] } as never;
+        },
+        install: async () => { installs++; return { terminal: true, exitCode: 0 }; },
+      }));
+      while (!scanPending) await new Promise(resolve => setTimeout(resolve, 10));
+      if (lane === "preimage-drift") writeFileSync(join(f.prefix, "lib/node_modules/@openai/codex/bin/codex.js"),
+        "#!/usr/bin/env node\n// changed while the final scan was pending\n");
+      if (lane === "selection-change") { unlinkSync(f.launcher); symlinkSync(f.target.main.path, f.launcher); }
+      if (lane === "signal-abort") controller.abort();
+      release();
+      const result = await pending;
+      expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
+      expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    }, 120_000);
   test("exit zero with original full files is not_applied", async () => {
     const f = fixture(); const id = await approved(f);
     const result = await applyCodexCliUpdate(id, depsFor(f, { install: async () => ({ terminal: true, exitCode: 0 }) }));
