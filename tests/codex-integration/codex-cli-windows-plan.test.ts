@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
+import { trackBackgroundWork } from "../../src/lib/background-work";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
@@ -359,7 +360,11 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
         // Pin this integration to current source, not a leftover generated bundle.
         worker = new Worker(url, { type: "module" });
         liveWorkerRoots.add(f.root);
-        worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+        const actualClose = Promise.withResolvers<void>();
+        void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+        worker.addEventListener("close", () => {
+          closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+        }, { once: true });
         return worker;
       },
     });
@@ -406,7 +411,11 @@ async function separateWorkerPlan(f: ReturnType<typeof separateWorkerFixture>, a
       // Drift needs a test-only injection seam; the positive and arch refusals use the production entry.
       const worker = new Worker(drift ? repoPath("tests", "helpers", "cli-windows-plan-drift-worker.ts") : url, { type: "module" });
       liveWorkerRoots.add(f.root);
-      worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+      const actualClose = Promise.withResolvers<void>();
+      void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+      worker.addEventListener("close", () => {
+        closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+      }, { once: true });
       return worker;
     },
   });
@@ -460,6 +469,8 @@ function checkPublishedNodeCliPlan(separateNodeToolchain: boolean) {
   if (run.error || run.status !== 0 || run.signal) {
     // A failed synchronous result does not prove Node/Bun descendants have exited.
     liveWorkerRoots.add(f.root);
+    // Keep the preload's ancestor sandbox too; only external ownership checks can release it.
+    void trackBackgroundWork("windows-plan-fixture-cli-unsettled", new Promise<void>(() => {}));
     console.error(JSON.stringify({ layout: separateNodeToolchain ? "separate-PATH" : "prefix-local",
       elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
       errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
