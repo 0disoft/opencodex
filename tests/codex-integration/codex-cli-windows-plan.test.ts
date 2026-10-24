@@ -281,8 +281,13 @@ native("published Node CLI uses the production inspector and observed toolchain 
     // Keep a real supported positive path even when this host's TEMP ancestry is
     // writable by other users. Only newly owned fixture directories are hardened.
     const f = fixture(separate, parse(process.cwd()).root);
-    await hardenSecretDirAsync(f.root, { required: true });
-    await hardenSecretDirAsync(f.prefix, { required: true });
+    // The helper hardens one entry, not every already-created descendant's DACL.
+    // Bind the fixture's full package authority chain explicitly, without /T or
+    // changing the volume root or any pre-existing host directory.
+    for (const directory of [f.root, f.prefix, join(f.prefix, "node_modules"),
+      join(f.prefix, "node_modules", "@openai"), f.packageRoot]) {
+      await hardenSecretDirAsync(directory, { required: true });
+    }
     const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
     const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
     const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
