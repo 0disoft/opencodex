@@ -222,7 +222,7 @@ native("Windows toolchain pins survive an awaited callback; bounded shared prefi
   write(join(tools, "node.exe"), f.old.backingFiles[nativePath]);
   write(join(tools, "node_modules/npm/package.json"), JSON.stringify({ name: "npm", version: "11.0.0", bin: { npm: "bin/npm-cli.js" } }));
   write(npmCli, "// never executed\n"); f.deps.inspectionDeps.env.PATH = tools;
-  const report = await inspectCodexCliInstall(f.deps.inspectionDeps);
+  const report = await inspectCodexCliInstall({ ...f.deps.inspectionDeps, observeInstallContent: true });
   expect(report.managed).toBe(true);
   expect(await withWindowsCodexCliPlanToolchain(report, async () => {
     await Bun.sleep(10);
@@ -231,7 +231,7 @@ native("Windows toolchain pins survive an awaited callback; bounded shared prefi
     expect(() => writeFileSync(npmCli, "replacement")).toThrow(); return 42;
   })).toBe(42);
   writeFileSync(npmCli, "// changed after release\n");
-  const refreshed = await inspectCodexCliInstall(f.deps.inspectionDeps);
+  const refreshed = await inspectCodexCliInstall({ ...f.deps.inspectionDeps, observeInstallContent: true });
   const pin = await holdWindowsCodexCliPlanToolchain(refreshed); expect(pin).not.toBeNull(); expect(await pin!.release()).toBe(true);
   mkdirSync(join(f.prefix, "node_modules", "unrelated"));
   expect((await createCodexCliUpdatePlan(f.deps)).applicable).toBe(true);
