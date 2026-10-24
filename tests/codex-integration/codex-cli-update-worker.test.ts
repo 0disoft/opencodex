@@ -7,7 +7,7 @@
  * operations have their own regression cases elsewhere.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
@@ -246,6 +246,38 @@ describe("process-wide selection commit gate and cancellation fence", () => {
   });
 });
 describe("actual Worker dispatch and parent responsiveness", () => {
+  test("fresh main-thread entry and fixture imports preserve the message sentinel", async () => {
+    expect(Bun.isMainThread).toBe(true);
+    const scope = globalThis as unknown as { onmessage: unknown };
+    const previous = scope.onmessage, sentinel = () => {};
+    scope.onmessage = sentinel;
+    try {
+      for (const path of ["../../src/codex/cli-update-worker.ts", "../helpers/cli-update-fixture-worker.ts"]) {
+        const url = new URL(path, import.meta.url);
+        url.searchParams.set("fresh-main-import", crypto.randomUUID());
+        await import(url.href); // Query defeats earlier static-import module caching.
+        expect(scope.onmessage).toBe(sentinel);
+      }
+    } finally { scope.onmessage = previous; }
+  });
+  test("detached message handler keeps a real Bun child alive until observed exit", async () => {
+    const releasePath = join(home(), "release-child");
+    const f = fixture({ reply: "ambiguous", childDrain: { releasePath } });
+    const initial = codexCliUpdateUnjoinedWorkerCount();
+    const operation = runCodexCliUpdateApplyInWorker(planId, { ...f.options, closeGraceMs: 10 });
+    try {
+      expect(await operation).toMatchObject({ outcome: "ambiguous", reason: "job_result_unknown", leaseRetained: true });
+      const started = f.owner.messages.find(m => (m as { type?: string }).type === "fixture-child-started") as { pid: number };
+      expect(started?.pid).toBeGreaterThan(0);
+      expect(f.owner.closed).toBe(false);
+      expect(f.owner.terminateCalls).toBe(0);
+      expect(codexCliUpdateUnjoinedWorkerCount()).toBe(initial + 1);
+      expect(f.owner.messages.some(m => (m as { type?: string }).type === "fixture-child-exited")).toBe(false);
+    } finally { writeFileSync(releasePath, "release"); }
+    await joined(f.owner);
+    expect(f.owner.messages).toContainEqual(expect.objectContaining({ type: "fixture-child-exited", exitCode: 0 }));
+    await until(() => codexCliUpdateUnjoinedWorkerCount() === initial, "real child owner drained");
+  });
   test("parent HTTP health and stream advance while the Worker is synchronously blocked", async () => {
     const f = fixture({ block: "before-reply" });
     let push!: (bytes: Uint8Array) => void;

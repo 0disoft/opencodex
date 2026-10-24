@@ -1,5 +1,5 @@
 /**
- * Draft fixture only. No provider, installer, filesystem, or production worker entry runs.
+ * Test fixture only. No provider, installer, or production worker entry runs.
  * Configure before the host's RunMsg via postMessage; Worker FIFO preserves this order.
  * Every blocking fixture must be released through its SAB in the test's finally block.
  */
@@ -20,6 +20,8 @@ export interface FixtureConfiguration {
   staleField?: "requestId" | "jobId" | "both";
   /** Uses only the frozen 0/1/2 CAS protocol, not an invented production export. */
   commitFenceBeforeReply?: boolean;
+  /** Real Bun child waits for a test-owned release file, not a simulated SAB child. */
+  childDrain?: { releasePath: string };
 }
 interface RunMessage {
   type: "run";
@@ -37,12 +39,11 @@ type ControlMessage = FixtureConfiguration | { type: "fixture-close" };
 type WorkerScope = {
   onmessage: ((event: MessageEvent<RunMessage | ControlMessage>) => void) | null;
   postMessage(value: unknown): void;
-  close(): void;
 };
 const scope = globalThis as unknown as WorkerScope;
 
-if (typeof document === "undefined" && typeof scope.close === "function"
-    && typeof scope.postMessage === "function") {
+if (typeof Bun !== "undefined" && Bun.isMainThread === false
+    && typeof self !== "undefined" && typeof scope.postMessage === "function") {
   let configuration: FixtureConfiguration | undefined;
   let running = false;
   const send = (view: Int32Array, value: unknown) => {
@@ -56,7 +57,7 @@ if (typeof document === "undefined" && typeof scope.close === "function"
       Atomics.wait(view, FIXTURE_RELEASE, 0);
     }
   };
-  scope.onmessage = event => {
+  scope.onmessage = async event => {
     const message = event.data;
     if (message.type === "fixture-config") {
       if (configuration || running) throw new Error("fixture configured twice");
@@ -64,7 +65,7 @@ if (typeof document === "undefined" && typeof scope.close === "function"
       return;
     }
     if (message.type === "fixture-close") {
-      scope.close();
+      scope.onmessage = null;
       return;
     }
     if (message.type !== "run") return;
@@ -73,7 +74,17 @@ if (typeof document === "undefined" && typeof scope.close === "function"
     Atomics.add(view, FIXTURE_RUNS, 1);
     if (running) return; // Match production run-once: never execute a late second run.
     running = true;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
     try {
+      if (config.childDrain) {
+        child = Bun.spawn([process.execPath, "--no-env-file", "--no-install", "-e",
+          'const {existsSync}=await import("node:fs");console.log("ready");const timer=setInterval(()=>{if(existsSync(process.argv[1]))clearInterval(timer)},5);',
+          config.childDrain.releasePath], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+        const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+        const ready = await reader.read(); reader.releaseLock();
+        if (new TextDecoder().decode(ready.value).trim() !== "ready") throw new Error("fixture child not ready");
+        scope.postMessage({ type: "fixture-child-started", pid: child.pid });
+      }
       if (config.block === "before-reply") barrier(view);
       if (config.commitFenceBeforeReply) {
         // Commit cannot overwrite a parent cancellation that has already won.
@@ -124,7 +135,11 @@ if (typeof document === "undefined" && typeof scope.close === "function"
       Atomics.store(view, FIXTURE_FINISHED, 1);
       Atomics.notify(view, FIXTURE_FINISHED);
       // "none"/"die" deliberately close without replying; after-reply blocks until released.
-      scope.close();
+      scope.onmessage = null;
+      if (child) {
+        const exitCode = await child.exited;
+        scope.postMessage({ type: "fixture-child-exited", pid: child.pid, exitCode });
+      }
     }
   };
 }

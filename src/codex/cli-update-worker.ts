@@ -88,7 +88,8 @@ const applyAbort = new AbortController();
 let ran = false;
 
 // Guarded so the module can be imported directly by tests without a Worker host.
-if (typeof self !== "undefined" && typeof (self as { onmessage?: unknown }) === "object") {
+if (typeof Bun !== "undefined" && Bun.isMainThread === false
+  && typeof self !== "undefined" && typeof self.postMessage === "function") {
   self.onmessage = async (event: MessageEvent<unknown>) => {
     const data = event.data;
     if (data && typeof data === "object" && !Array.isArray(data)
@@ -133,11 +134,10 @@ if (typeof self !== "undefined" && typeof (self as { onmessage?: unknown }) === 
         message: error instanceof Error ? error.message : "cli_update_worker_failed",
       } satisfies CodexCliUpdateWorkerReply);
     } finally {
-      // Close from inside the Worker so the thread begins exiting on its own;
-      // the parent requires this close AND the result before settling done.
-      try {
-        (self as unknown as { close?: () => void }).close?.();
-      } catch { /* already closing */ }
+      // Bun 1.4.4 has no self.close(). Remove this realm's message keepalive;
+      // pending referenced child/I/O work must drain before natural termination.
+      // The parent's close event is not proof that every OS descendant exited.
+      self.onmessage = null;
     }
   };
 }

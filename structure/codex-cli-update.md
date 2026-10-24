@@ -144,6 +144,15 @@ the lease reported retained and the still-live worker tracked rather than silent
 throw before the run message exists is the only `refused`/`preparation_failed` path, because no job
 code provably ran. Ledger completion writes keep their existing bounded retry.
 
+Entry installation is limited to `Bun.isMainThread === false`; importing either entry or its
+test fixture in the main realm must not replace that realm's message handler. Bun 1.4.4 does not
+provide `self.close()`: completion removes the worker's message handler and lets referenced work
+drain naturally, without `process.exit()` or parent termination. A real Bun-subprocess regression
+keeps the worker alive after handler removal until that exact child exits. This establishes the
+referenced Bun-child path only, not arbitrary native handles or all OS descendants. Bun's close
+event marks worker termination and can precede full thread exit; it is not independent proof that
+every installer descendant or retained native owner has finished.
+
 Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
 PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous
 sections, and the worker's own PREPARING-to-COMMITTED CAS immediately before the installer spawn is the

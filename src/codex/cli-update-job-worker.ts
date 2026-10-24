@@ -296,10 +296,10 @@ async function runInWorker(
     : trustedNodeLauncherContext()?.codexCliInspectionEnv ?? null;
   let worker: Worker;
   try {
-    worker = (options.spawnWorkerFn ?? spawnWorker)(
-      new URL("./cli-update-worker.ts", import.meta.url).href,
-      "cli-update-worker",
-    );
+    const injectedSpawn = options.spawnWorkerFn;
+    worker = injectedSpawn === undefined || injectedSpawn === null
+      ? spawnWorker(new URL("./cli-update-worker.ts", import.meta.url).href, "cli-update-worker")
+      : injectedSpawn(new URL("./cli-update-worker.ts", import.meta.url).href, "cli-update-worker");
   } catch {
     // Spawn threw before the run message existed: provably no job code ran.
     return { kind: "spawn_failed" };
