@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
-import { linkSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -709,32 +709,69 @@ describe("catalog path comparison", () => {
     expect(sameCatalogHealPath(sibling, leaf)).toBe(false);
   });
 
-  test("a link target crossing a symlinked directory climbs its real parent", () => {
+  test("a link target crossing a symlinked directory follows the platform's .. semantics", () => {
     const root = temporaryRoot(), a = join(root, "a"), realHome = join(root, "b", "subdir");
     mkdirSync(realHome, { recursive: true });
     mkdirSync(a, { recursive: true });
     const real = join(root, "b", "catalog.json"), decoy = join(a, "catalog.json");
-    writeFileSync(real, JSON.stringify(full));
-    writeFileSync(decoy, JSON.stringify(full));
+    writeFileSync(real, "MARKER-B-REAL");
+    writeFileSync(decoy, "MARKER-A-DECOY");
     symlinkSync(realHome, join(a, "bridge"), process.platform === "win32" ? "junction" : "dir");
     const link = join(a, "link.json");
     symlinkSync("bridge/../catalog.json", link, "file");
-    expect(compareCatalogHealPaths(link, real)).toBe("same");
-    expect(compareCatalogHealPaths(real, link)).toBe("same");
-    expect(compareCatalogHealPaths(link, decoy)).toBe("different");
-    expect(compareCatalogHealPaths(decoy, link)).toBe("different");
+    // Independent OS oracle: Windows normalizes ".." lexically across a reparse
+    // point (opens decoy); POSIX climbs the link's real parent (opens real).
+    const actual = process.platform === "win32" ? decoy : real;
+    const other = process.platform === "win32" ? real : decoy;
+    expect(readFileSync(link, "utf8")).toBe(readFileSync(actual, "utf8"));
+    expect(realpathSync.native(link)).toBe(realpathSync.native(actual));
+    expect(compareCatalogHealPaths(link, actual)).toBe("same");
+    expect(compareCatalogHealPaths(actual, link)).toBe("same");
+    expect(compareCatalogHealPaths(link, other)).toBe("different");
+    expect(compareCatalogHealPaths(other, link)).toBe("different");
   });
 
-  test("a link target crossing a missing directory stays unknown", () => {
+  test("a link target crossing a missing directory follows the platform's crossing rules", () => {
     const root = temporaryRoot(), a = join(root, "a");
     mkdirSync(a, { recursive: true });
     const present = join(a, "catalog.json");
-    writeFileSync(present, JSON.stringify(full));
+    writeFileSync(present, "MARKER-A-PRESENT");
     const link = join(a, "link.json");
     symlinkSync("missing/../catalog.json", link, "file");
-    expect(compareCatalogHealPaths(link, present)).toBe("unknown");
-    expect(compareCatalogHealPaths(present, link)).toBe("unknown");
-    expect(inspectHealPath(link, read => read())).toEqual({ kind: "unavailable", hardlink: true });
+    if (process.platform === "win32") {
+      // The lexical ".." applies before the missing component is ever opened.
+      expect(readFileSync(link, "utf8")).toBe(readFileSync(present, "utf8"));
+      expect(realpathSync.native(link)).toBe(realpathSync.native(present));
+      expect(compareCatalogHealPaths(link, present)).toBe("same");
+      expect(compareCatalogHealPaths(present, link)).toBe("same");
+    } else {
+      // POSIX refuses to cross a missing intermediate directory.
+      expect(() => readFileSync(link)).toThrow();
+      expect(() => realpathSync.native(link)).toThrow();
+      expect(compareCatalogHealPaths(link, present)).toBe("unknown");
+      expect(compareCatalogHealPaths(present, link)).toBe("unknown");
+      expect(inspectHealPath(link, read => read())).toEqual({ kind: "unavailable", hardlink: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("a POSIX link target keeps literal backslashes inside names", () => {
+    // Windows has no such filenames; only POSIX must not split on "\\".
+    const root = temporaryRoot(), a = join(root, "a");
+    const backslashDir = join(a, "we\\ird");
+    mkdirSync(backslashDir, { recursive: true });
+    const real = join(backslashDir, "catalog.json"), decoy = join(a, "catalog.json");
+    writeFileSync(real, "MARKER-BACKSLASH");
+    writeFileSync(decoy, "MARKER-A-DECOY");
+    const link = join(a, "link.json"), dotdot = join(a, "dot.json");
+    symlinkSync("we\\ird/catalog.json", link, "file");
+    symlinkSync("we\\ird/../catalog.json", dotdot, "file");
+    expect(realpathSync.native(link)).toBe(realpathSync.native(real));
+    expect(readFileSync(link, "utf8")).toBe(readFileSync(real, "utf8"));
+    expect(compareCatalogHealPaths(link, real)).toBe("same");
+    expect(compareCatalogHealPaths(link, decoy)).toBe("different");
+    expect(realpathSync.native(dotdot)).toBe(realpathSync.native(decoy));
+    expect(compareCatalogHealPaths(dotdot, decoy)).toBe("same");
+    expect(compareCatalogHealPaths(dotdot, real)).toBe("different");
   });
 
   test("40-hop exhaustion stays uncertain independently of the comparator read budget", () => {

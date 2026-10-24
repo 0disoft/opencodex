@@ -1,5 +1,5 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, realpathSync, statSync, type BigIntStats, type Stats } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { readCodexHomeJournal } from "../codex-home-owner";
 import { samePath, type RawCatalog } from "./parsing";
 
@@ -27,11 +27,12 @@ function unchanged(before: BigIntStats, after: BigIntStats): boolean {
     && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
 }
 
-/** A ".." climbs the real parent, so intermediate components need filesystem resolution. */
-function resolveLinkTarget(base: string, value: string, read: PathRead): string {
+/** Windows normalizes ".." lexically across reparse points; POSIX resolves each component. */
+function resolveLinkTarget(base: string, value: string, read: PathRead, links: LinkObservation[]): string {
+  if (process.platform === "win32") return resolve(base, value);
   let current = base;
   if (isAbsolute(value)) current = parse(value).root;
-  const segments = (isAbsolute(value) ? value.slice(parse(value).root.length) : value).split(/[\\/]+/);
+  const segments = (isAbsolute(value) ? value.slice(parse(value).root.length) : value).split("/");
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     if (segment === "" || segment === ".") continue;
@@ -39,7 +40,12 @@ function resolveLinkTarget(base: string, value: string, read: PathRead): string 
     const next = join(current, segment);
     if (index === segments.length - 1) return next;
     const stat = read(() => lstatSync(next, { bigint: true }));
-    if (stat.isSymbolicLink()) current = read(() => realpathSync.native(next));
+    if (stat.isSymbolicLink()) {
+      // Keep the intermediate link inside the same revalidation snapshot as leaf hops.
+      const parent = current, parentStat = read(() => statSync(parent, { bigint: true })), target = read(() => readlinkSync(next));
+      links.push({ path: next, stat, value: target, parent, parentStat });
+      current = read(() => realpathSync.native(next));
+    }
     else if (stat.isDirectory()) current = next;
     else throw new Error("Link target crosses a non-directory");
   }
@@ -58,7 +64,7 @@ export function inspectHealPath(path: string, read: PathRead): PathObservation {
         observedSymlink = true;
         const parent = dirname(path), parentStat = read(() => statSync(parent, { bigint: true })), value = read(() => readlinkSync(path));
         links.push({ path, stat, value, parent, parentStat });
-        path = resolveLinkTarget(read(() => realpathSync.native(parent)), value, read);
+        path = resolveLinkTarget(read(() => realpathSync.native(parent)), value, read, links);
         continue;
       }
       // Keep native leaf aliases outside the macOS multi-link FD-name bug.
