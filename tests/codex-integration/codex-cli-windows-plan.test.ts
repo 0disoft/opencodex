@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, parse } from "node:path";
+import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
@@ -12,11 +12,10 @@ import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cl
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
 import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
-import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
-import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
+import { trackBackgroundWork } from "../../src/lib/background-work";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
@@ -26,8 +25,8 @@ afterEach(async () => {
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
-    // A test timeout does not cancel its async body. Keep even that body's
-    // fixture owned until a real Worker close, never remove beneath native I/O.
+    // A test timeout does not cancel its async body. Retain fixtures until a real
+    // Worker close, or external reconciliation of an unsettled CLI process tree.
     if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
     await removeTreeAfterBackgroundWork(root);
   }
@@ -38,8 +37,8 @@ const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
   '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
 ].join('\r\n');
-function fixture(separateNodeToolchain = false, parent = tmpdir()) {
-  const root = mkdtempSync(join(parent, "ocx-windows-plan-")); roots.push(root);
+function fixture(separateNodeToolchain = false) {
+  const root = mkdtempSync(join(tmpdir(), "ocx-windows-plan-")); roots.push(root);
   const prefix = join(root, "npm");
   const toolchainPrefix = separateNodeToolchain ? join(root, "nodejs") : prefix;
   const npmRoot = join(toolchainPrefix, "node_modules", "npm");
@@ -367,19 +366,22 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
         // Pin this integration to current source, not a leftover generated bundle.
         worker = new Worker(url, { type: "module" });
         liveWorkerRoots.add(f.root);
-        worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+        const actualClose = Promise.withResolvers<void>();
+        void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+        worker.addEventListener("close", () => {
+          closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+        }, { once: true });
         return worker;
       },
     });
     expect(starts).toBe(1);
     expect(closed).toBe(true);
     expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
-      targetIntegrity: integrity });
+      targetIntegrity: integrity, applicable: false });
     expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
     // Real process observation may find active/unreadable sessions. Either refusal
     // is after private-evidence admission and successful fixture metadata resolution.
-    if (plan.applicable) expect(plan.refusal).toBeNull();
-    else expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   } finally {
     // afterEach retains this fixture even if the test times out before this
@@ -388,68 +390,110 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
   }
 }, 60_000);
 
-native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", async () => {
-  const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
-  for (const separate of [false, true]) {
-    // Keep a real supported positive path even when this host's TEMP ancestry is
-    // writable by other users. Only newly owned fixture directories are hardened.
-    const f = fixture(separate, parse(process.cwd()).root);
-    // The helper hardens one entry, not every already-created descendant's DACL.
-    // Bind the fixture's full package authority chain explicitly, without /T or
-    // changing the volume root or any pre-existing host directory.
-    for (const directory of [f.root, f.prefix, join(f.prefix, "node_modules"),
-      join(f.prefix, "node_modules", "@openai"), f.packageRoot]) {
-      await hardenSecretDirAsync(directory, { required: true });
-    }
-    const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
-    const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
-    const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
-      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
-    const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
-      tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
-    const calls = join(f.root, "npm-calls.jsonl"), forbidden = join(f.root, "forbidden-execution");
-    writeFileSync(join(f.packageRoot, "bin/codex.js"),
-      `require('node:fs').writeFileSync(${JSON.stringify(forbidden)},'candidate');process.exit(97);`);
-    // Controlled registry protocol fixture; no real npm installation or network request.
-    writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-      `const fs=require('node:fs'), args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');` +
-      `if(args[0]!=='view'){fs.writeFileSync(${JSON.stringify(forbidden)},'npm mutation');process.exit(98);}` +
-      `const spec=args[1];console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
-    const controlled = await createCodexCliUpdatePlan({ inspectionDeps: f.deps,
-      scanProcesses: () => ({ kind: "observed", processes: [] }) });
-    expect(controlled).toMatchObject({ applicable: true, refusal: null, session: { state: "none", matches: 0 } });
-    const before = [...f.files.keys()].map(path => readFileSync(path));
-    writeFileSync(calls, "");
-    const run = await spawnTestChild([node, repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
-      cwd: repoRoot(), deadlineMs: 45_000,
-      env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
-        CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
-        OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
-    });
-    expect(run.reaped && run.pipesClosed).toBe(true); expect(run.timedOut).toBe(false); expect(run.exitCode, run.stderr).toBe(0);
-    const plan = JSON.parse(run.stdout);
-    expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
-    expect(plan.targetIntegrity).toBe(integrity);
-    // The public CLI scans real sessions. Assert the exact evidence-dependent
-    // contract, never a permissive list of unrelated refusal reasons.
-    if (plan.session.state === "active") {
-      expect(plan.session.matches).toBeGreaterThan(0);
-      expect(plan.applicable).toBe(false); expect(plan.refusal).toBe("blocked_active_session");
-    } else if (plan.session.state === "unknown") {
-      expect(plan.session.matches).toBeNull();
-      expect(plan.applicable).toBe(false); expect(plan.refusal).toBe("blocked_process_state_unknown");
-    } else {
-      expect(plan.session).toEqual({ state: "none", matches: 0 });
-      expect(plan.applicable).toBe(true); expect(plan.refusal).toBeNull();
-      expect(plan.planId).toBe(controlled.planId);
-    }
-    const queries = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(queries.map(args => args.slice(0, 2))).toEqual([
-      ["view", "@openai/codex@latest"], ["view", "@openai/codex@1.2.4"], ["view", "@openai/codex-win32-x64@1.2.4"],
-    ]);
-    expect(existsSync(forbidden)).toBe(false);
-    expect([...f.files.keys()].map(path => readFileSync(path))).toEqual(before);
-    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+function separateWorkerFixture(copyExecutable = true) {
+  const f = fixture(true);
+  if (copyExecutable) {
+    const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+    copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
+  }
+  expect(existsSync(join(f.prefix, "node.exe"))).toBe(false);
+  const marker = join(f.root, "metadata-ran"), integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+    `require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'metadata\\n'); const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  return { ...f, marker, integrity };
+}
+
+async function separateWorkerPlan(f: ReturnType<typeof separateWorkerFixture>, arch: "x64" | "arm64" | null, drift = false) {
+  let starts = 0, closed = false;
+  const plan = await runCodexCliUpdatePlanInWorker({
+    snapshot: { codexCliPath: f.deps.env.CODEX_CLI_PATH, path: f.toolchainPrefix, pathExt: ".EXE;.CMD",
+      home: f.root, nodePath: null, managerRoots: {}, transportEnv: {}, configDir: f.deps.configDir, arch },
+    spawnWorkerFn: (url, key) => {
+      expect(key).toBe("cli-update-worker"); starts++;
+      // Drift needs a test-only injection seam; the positive and arch refusals use the production entry.
+      const worker = new Worker(drift ? repoPath("tests", "helpers", "cli-windows-plan-drift-worker.ts") : url, { type: "module" });
+      liveWorkerRoots.add(f.root);
+      const actualClose = Promise.withResolvers<void>();
+      void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+      worker.addEventListener("close", () => {
+        closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+      }, { once: true });
+      return worker;
+    },
+  });
+  // afterEach retains the root if dispatch/test timeout occurs without real close.
+  expect(starts).toBe(1); expect(closed).toBe(true);
+  return plan;
+}
+
+native("a fresh production Worker binds a separate Node/npm metadata vehicle with the launcher arch", async () => {
+  const f = separateWorkerFixture(), plan = await separateWorkerPlan(f, "x64");
+  expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
+    targetIntegrity: f.integrity, applicable: false });
+  expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expect(readFileSync(f.marker, "utf8")).toContain("metadata");
+  expect(JSON.stringify(plan)).not.toContain(f.root);
+}, 60_000);
+
+native("fresh Worker realms refuse missing or mismatched arch and reject post-inspection npm drift before metadata", async () => {
+  for (const mode of ["missing", "mismatch", "drift"] as const) {
+    const f = separateWorkerFixture(mode === "drift");
+    const plan = await separateWorkerPlan(f, mode === "missing" ? null : mode === "mismatch" ? "arm64" : "x64", mode === "drift");
+    expect(plan).toMatchObject({ managed: mode === "drift", applicable: false, targetVersion: null,
+      refusal: mode === "drift" ? "target_unresolved" : "windows_inspection_deferred" });
+    if (mode === "drift") expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+    else expect(plan.installContentDigest).toBeNull();
+    expect(existsSync(f.marker)).toBe(false);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   }
+}, 60_000);
+
+function checkPublishedNodeCliPlan(separateNodeToolchain: boolean) {
+  const started = performance.now();
+  const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+  const f = fixture(separateNodeToolchain);
+  const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
+  const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+  // Controlled registry protocol fixture; no real npm installation or network request.
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
+    cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
+    env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
+      CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
+      OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
+  });
+  if (run.error || run.status !== 0 || run.signal) {
+    // A failed synchronous result does not prove Node/Bun descendants have exited.
+    liveWorkerRoots.add(f.root);
+    // Keep the preload's ancestor sandbox too; only external ownership checks can release it.
+    void trackBackgroundWork("windows-plan-fixture-cli-unsettled", new Promise<void>(() => {}));
+    console.error(JSON.stringify({ layout: separateNodeToolchain ? "separate-PATH" : "prefix-local",
+      elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
+      errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
+  }
+  expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+  const plan = JSON.parse(run.stdout);
+  expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
+  expect(plan.targetIntegrity).toBe(integrity);
+  expect(plan.applicable).toBe(false);
+  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expect(JSON.stringify(plan)).not.toContain(f.root);
+}
+
+native("published Node CLI plans with the production inspector and prefix-local toolchain", () => {
+  checkPublishedNodeCliPlan(false);
+}, 60_000);
+
+native("published Node CLI plans with the production inspector and separate PATH toolchain", () => {
+  checkPublishedNodeCliPlan(true);
 }, 60_000);
