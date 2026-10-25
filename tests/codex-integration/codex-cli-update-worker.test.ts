@@ -27,7 +27,7 @@ import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoRoot } from "../helpers/repo-root";
 import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
-import { WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
+import { WindowsApplyAcquisition, WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -172,6 +172,34 @@ afterEach(async () => {
   if (firstError !== undefined) throw firstError;
 });
 describe("process-wide selection commit gate and cancellation fence", () => {
+  test("a rejected authority acquisition roots failed pins before any returned authority exists", () => {
+    const pins = new WindowsApplyAuthorityPins();
+    let fault = true, closes = 0, detached = 0;
+    const kernel = { symbols: { CloseHandle: () => { closes++; return fault ? 0 : 1; } } }
+      as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const anchor: { acquisition?: WindowsApplyAcquisition } = {};
+    const token = lifetime.retain(anchor);
+    // Model the actual callback order: ctx publication -> pin creation -> failure -> finally.
+    anchor.acquisition = new WindowsApplyAcquisition({ fixtureContext: true }, pins);
+    const exactPin = pins.keep(456n);
+    try { throw new Error("fixture acquisition rejected"); }
+    catch { pins.closeAll(kernel); }
+    expect(anchor.acquisition.releaseIfClean(token)).toBe(false);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    expect(pins.remaining).toBe(1); expect(closes).toBe(1);
+    pins.closeAll(kernel); expect(closes).toBe(1);
+    // Only explicit fixture recovery retries the exact fake handle; not an automatic policy.
+    fault = false;
+    expect(pins.release(exactPin, kernel)).toBe(true);
+    expect(anchor.acquisition.releaseIfClean(token)).toBe(true);
+    expect(detached).toBe(1);
+    const cleanAnchor = new WindowsApplyAcquisition({}, new WindowsApplyAuthorityPins());
+    let released = 0;
+    expect(cleanAnchor.releaseIfClean({ release() { released++; } })).toBe(true);
+    expect(released).toBe(1);
+  });
   test("a failed pin close keeps its lifetime token without an automatic close retry", () => {
     const pins = new WindowsApplyAuthorityPins(), handle = pins.keep(123n);
     let attempts = 0, fault = true, detached = 0;

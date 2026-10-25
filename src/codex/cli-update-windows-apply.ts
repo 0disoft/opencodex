@@ -4,7 +4,7 @@ import type { CodexCliApplyDeps, CodexCliApplyResult, CodexCliApplyCleanupError 
 import { createCodexCliUpdatePlan, createNpmConfigIsolation } from "./cli-update-plan";
 import { inspectCodexCliInstall, observeCodexCliSelectedCommand } from "./cli-install-provenance";
 import { holdWindowsCodexCliPlanToolchain, windowsCodexCliPlanEvidence, windowsCodexCliSelectionMatches } from "./cli-windows-plan-provenance";
-import { openWindowsCliApplyAuthority } from "./cli-update-job-store-windows";
+import { openWindowsCliApplyAuthority, type WindowsApplyAcquisition } from "./cli-update-job-store-windows";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../lib/windows-secret-acl";
 import { verifyWindowsCodexCliLayout, matchesWindowsCodexCliLayout } from "./cli-update-windows-layout";
 import { observeWindowsInstall, sameWindowsInstall, sameWindowsPreservedEntries, windowsCodexOwnedPath,
@@ -97,12 +97,23 @@ export async function applyWindowsCodexCliUpdate(planId: string, deps: CodexCliA
     if (!artifacts || artifacts.platform !== "win32" || artifacts.arch !== "x64") return finish("refused", "target_artifacts_unverified");
     // Root the acquisition anchor before await/Owner registration. If registration
     // throws, the Worker token still owns any acquired authority through this anchor.
-    const anchor: { authority?: Authority; owner?: Owner } = {};
+    const anchor: { acquisition?: WindowsApplyAcquisition; authority?: Authority; owner?: Owner } = {};
     const retention = deps.retainExecution?.(anchor);
     let authority: Authority;
-    try { authority = anchor.authority = await openWindowsCliApplyAuthority(evidence.prefix, true); }
-    catch (error) { retention?.release(); return finish("refused", error instanceof Error && error.message === "job_store_busy"
-      ? "installation_busy" : "installation_prefix_unsupported"); }
+    try {
+      authority = anchor.authority = await openWindowsCliApplyAuthority(evidence.prefix, true,
+        acquisition => { anchor.acquisition = acquisition; });
+    } catch (error) {
+      // Authority's finally has already attempted cleanup, without retrying failed pins.
+      // A rejected acquisition can still own handles even though no Authority was returned.
+      if (anchor.acquisition && !anchor.acquisition.releaseIfClean(retention)) {
+        ownerRegistrationPending = true;
+        return finish("ambiguous", "installer_or_readback_error");
+      }
+      if (!anchor.acquisition) retention?.release(); // Native load/validation failed before any ctx existed.
+      return finish("refused", error instanceof Error && error.message === "job_store_busy"
+        ? "installation_busy" : "installation_prefix_unsupported");
+    }
     ownerRegistrationPending = true;
     owner = anchor.owner = { retention, authority, staging: win32.join(authority.lock, "stage"), toolchain: null };
     retained.add(owner);

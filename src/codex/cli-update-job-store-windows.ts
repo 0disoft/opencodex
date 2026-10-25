@@ -179,6 +179,16 @@ export class WindowsApplyAuthorityPins extends PinSet {
   }
 }
 
+/** Internal acquisition root; never serialized into job/HTTP DTOs. */
+export class WindowsApplyAcquisition {
+  constructor(readonly resources: object, private readonly pins: WindowsApplyAuthorityPins) {}
+  releaseIfClean(token?: { release(): void }): boolean {
+    if (this.pins.remaining !== 0) return false;
+    token?.release();
+    return true;
+  }
+}
+
 interface Prepared {
   readonly config: string;
   readonly dir: string;
@@ -631,7 +641,8 @@ export interface WindowsJobStoreIo {
  * Directory pins allow npm's writes but deny replacement of the prefix/ancestry.
  * The serving account and kernel-equivalent principals remain inside the trust boundary.
  */
-export async function openWindowsCliApplyAuthority(prefix: string, acquire: boolean) {
+export async function openWindowsCliApplyAuthority(prefix: string, acquire: boolean,
+  onAcquiring?: (owner: WindowsApplyAcquisition) => void) {
   assertNotRealHomeUnderTest(prefix);
   const { ffi, kernel, nt } = await loadNative();
   const pins = new WindowsApplyAuthorityPins();
@@ -640,6 +651,9 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
   let transferred = false;
   let closed = false;
   try {
+    // Publish the context before the first pin/open or async verification can fail.
+    // The caller already holds its Worker token; failed cleanup remains rooted there.
+    onAcquiring?.(new WindowsApplyAcquisition(ctx, pins));
     // The prefix is an ancestry pin, not a writable store directory. A write-access
     // pin would prevent the ordinary deny-write installation snapshot from opening
     // it, even though npm's child-file writes do not require that access on our pin.

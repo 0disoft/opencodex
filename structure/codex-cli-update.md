@@ -303,6 +303,11 @@ every installer descendant or retained native owner has finished.
 
 Windows native ownership acquires an internal execution-retention token before authority acquisition.
 The token roots the acquisition anchor, then the registered Owner, across registration exceptions.
+The authority publishes its context to that anchor before opening pins or awaiting ACL checks.
+If acquisition rejects, its finally attempts cleanup before the caller checks the published pin set;
+only an empty set releases the token. Failed pins keep the context/realm rooted and report ambiguous
+ownership even though no successful Authority object was returned. Native-load failure before a
+context exists holds no such pins. This internal callback never crosses a job/HTTP DTO boundary.
 Raw FFI handles alone are not considered Worker keepalive: unresolved process/Job/pipe or cleanup
 keeps the run-once handler installed. Only successful terminal cleanup removes the Owner and releases
 its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
