@@ -3401,6 +3401,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "無法讀取變更記錄，因此無法還原。角色編輯仍可正常使用。",
   "integrations.lazycodexRoles.history.restore": "還原",
   "integrations.lazycodexRoles.history.restored": "已將 {count} 個角色還原到 {time} 之前的狀態。",
+  "integrations.lazycodexRoles.history.partial": "還原在 {role} 停止：{total} 個角色中已還原 {count} 個，其餘保留目前的值。請先修正上方的錯誤，再重新還原。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc 中有註解，因此在這裡儲存只會更新角色檔案。請自行設定 omo.jsonc 中的 [codex].agents。",
   "integrations.lazycodexRoles.auto.button": "自動指派",
   "integrations.lazycodexRoles.auto.running": "正在評估角色…",

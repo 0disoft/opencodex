@@ -1927,6 +1927,7 @@ export const zh: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "无法读取变更记录，因此无法恢复。角色编辑仍可正常使用。",
   "integrations.lazycodexRoles.history.restore": "恢复",
   "integrations.lazycodexRoles.history.restored": "已将 {count} 个角色恢复到 {time} 之前的状态。",
+  "integrations.lazycodexRoles.history.partial": "恢复在 {role} 停止：{total} 个角色中已恢复 {count} 个，其余保留当前的值。请先修复上方的错误，再重新恢复。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc 中有注释，因此在这里保存只会更新角色文件。请自行设置 omo.jsonc 中的 [codex].agents。",
   "integrations.lazycodexRoles.auto.button": "自动分配",
   "integrations.lazycodexRoles.auto.running": "正在评估角色…",

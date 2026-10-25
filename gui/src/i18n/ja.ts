@@ -2363,6 +2363,7 @@ export const ja: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "変更履歴を読み込めなかったため、元に戻す機能は使えません。ロールの編集はそのまま使えます。",
   "integrations.lazycodexRoles.history.restore": "元に戻す",
   "integrations.lazycodexRoles.history.restored": "{count} 件のロールを {time} より前の状態に戻しました。",
+  "integrations.lazycodexRoles.history.partial": "{role} で元に戻す処理が止まりました。{total} 件中 {count} 件のロールが戻り、残りは現在の値のままです。上のエラーを解消してからもう一度元に戻してください。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc にコメントがあるため、ここで保存するとロールファイルだけが更新されます。omo.jsonc の [codex].agents はご自身で設定してください。",
   "integrations.lazycodexRoles.auto.button": "自動割り当て",
   "integrations.lazycodexRoles.auto.running": "ロールを評価中…",

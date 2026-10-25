@@ -2512,6 +2512,7 @@ export const pt: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "Não foi possível ler o histórico de alterações, por isso Restaurar não está disponível. A edição de papéis continua funcionando.",
   "integrations.lazycodexRoles.history.restore": "Restaurar",
   "integrations.lazycodexRoles.history.restored": "{count} papel(is) restaurado(s) ao estado anterior a {time}.",
+  "integrations.lazycodexRoles.history.partial": "A restauração parou em {role}: {count} de {total} papel(is) voltaram, e os demais mantêm os valores atuais. Corrija o erro acima e restaure novamente.",
   "integrations.lazycodexRoles.omoCommentsState": "O omo.jsonc tem comentários, então salvar aqui atualiza só os arquivos de papel. Defina [codex].agents no omo.jsonc você mesmo.",
   "integrations.lazycodexRoles.auto.button": "Atribuir automaticamente",
   "integrations.lazycodexRoles.auto.running": "Dimensionando funções…",

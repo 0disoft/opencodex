@@ -2454,6 +2454,7 @@ export const ru: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "Не удалось прочитать историю изменений, поэтому восстановление недоступно. Редактирование ролей по-прежнему работает.",
   "integrations.lazycodexRoles.history.restore": "Восстановить",
   "integrations.lazycodexRoles.history.restored": "Восстановлено ролей: {count}, состояние до {time}.",
+  "integrations.lazycodexRoles.history.partial": "Восстановление остановилось на {role}: возвращено ролей {count} из {total}, остальные сохраняют текущие значения. Исправьте ошибку выше и восстановите снова.",
   "integrations.lazycodexRoles.omoCommentsState": "В omo.jsonc есть комментарии, поэтому сохранение здесь обновляет только файлы ролей. Задайте [codex].agents в omo.jsonc сами.",
   "integrations.lazycodexRoles.auto.button": "Автоназначение",
   "integrations.lazycodexRoles.auto.running": "Оценка ролей…",

@@ -1954,6 +1954,7 @@ export const ko: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "변경 기록을 읽지 못해 되돌리기를 쓸 수 없습니다. 역할 편집은 그대로 할 수 있습니다.",
   "integrations.lazycodexRoles.history.restore": "되돌리기",
   "integrations.lazycodexRoles.history.restored": "{count}개 역할을 {time} 이전 상태로 되돌렸습니다.",
+  "integrations.lazycodexRoles.history.partial": "{role}에서 되돌리기가 멈췄습니다. {total}개 중 {count}개 역할만 되돌아갔고 나머지는 현재 값을 유지합니다. 위의 오류를 해결한 뒤 다시 되돌리세요.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc에 주석이 있어 여기서 저장하면 역할 파일만 바뀝니다. omo.jsonc의 [codex].agents는 직접 맞춰 주세요.",
   "integrations.lazycodexRoles.auto.button": "자동 배정",
   "integrations.lazycodexRoles.auto.running": "역할 평가 중…",

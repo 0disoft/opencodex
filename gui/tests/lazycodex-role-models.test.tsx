@@ -566,3 +566,21 @@ test("keeps the role table editable and says why Restore is gone when the histor
   expect(container.querySelector(".lazycodex-role-history")).toBeNull();
   expect(saveButton("explorer")).not.toBeNull();
 });
+
+test("stops a Restore at the first failed role and warns that the batch is only partly back", async () => {
+  rolesBody = {
+    ...(rolesBody as Record<string, unknown>),
+    history: [
+      { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+      { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+    ],
+  };
+  await mount();
+  putFailure = { status: 500, body: { error: "write failed" } };
+  const restore = container.querySelector(".lazycodex-role-history > ul > li button") as HTMLButtonElement;
+  await act(async () => { restore.click(); });
+  await settle();
+  expect(puts).toHaveLength(1);
+  expect(container.textContent).toContain("Restore stopped at librarian: 0 of 2 role(s) went back");
+  expect(container.textContent).not.toContain("Restored 0 role(s)");
+});

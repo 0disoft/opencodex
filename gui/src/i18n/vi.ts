@@ -2489,6 +2489,7 @@ export const vi: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "Không đọc được lịch sử thay đổi nên không thể khôi phục. Bạn vẫn chỉnh sửa vai trò như bình thường.",
   "integrations.lazycodexRoles.history.restore": "Khôi phục",
   "integrations.lazycodexRoles.history.restored": "Đã khôi phục {count} vai trò về trạng thái trước {time}.",
+  "integrations.lazycodexRoles.history.partial": "Khôi phục dừng ở {role}: {count}/{total} vai trò đã được khôi phục, các vai trò còn lại giữ giá trị hiện tại. Hãy sửa lỗi ở trên rồi khôi phục lại.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc có chú thích, nên lưu ở đây chỉ cập nhật các tệp vai trò. Hãy tự đặt [codex].agents trong omo.jsonc.",
   "integrations.lazycodexRoles.auto.button": "Tự động gán",
   "integrations.lazycodexRoles.auto.running": "Đang đánh giá vai trò…",

@@ -2541,6 +2541,7 @@ export const en = {
   "integrations.lazycodexRoles.history.unavailable": "The change history could not be read, so Restore is unavailable. Role editing still works.",
   "integrations.lazycodexRoles.history.restore": "Restore",
   "integrations.lazycodexRoles.history.restored": "Restored {count} role(s) to how they were before {time}.",
+  "integrations.lazycodexRoles.history.partial": "Restore stopped at {role}: {count} of {total} role(s) went back, and the rest keep their current values. Fix the error above and restore again.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc has comments, so saving here updates only the role files. Set [codex].agents in omo.jsonc yourself.",
   "integrations.lazycodexRoles.auto.button": "Auto-assign",
   "integrations.lazycodexRoles.auto.running": "Sizing roles…",

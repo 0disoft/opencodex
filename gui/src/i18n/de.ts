@@ -1910,6 +1910,7 @@ export const de: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "Der Änderungsverlauf konnte nicht gelesen werden, daher ist Wiederherstellen nicht verfügbar. Rollen lassen sich weiterhin bearbeiten.",
   "integrations.lazycodexRoles.history.restore": "Wiederherstellen",
   "integrations.lazycodexRoles.history.restored": "{count} Rolle(n) auf den Stand vor {time} zurückgesetzt.",
+  "integrations.lazycodexRoles.history.partial": "Wiederherstellen bei {role} abgebrochen: {count} von {total} Rolle(n) wurden zurückgesetzt, die übrigen behalten ihre aktuellen Werte. Behebe den Fehler oben und stelle erneut wieder her.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc enthält Kommentare, daher ändert Speichern hier nur die Rollendateien. Setze [codex].agents in omo.jsonc selbst.",
   "integrations.lazycodexRoles.auto.button": "Automatisch zuweisen",
   "integrations.lazycodexRoles.auto.running": "Rollen werden eingestuft…",

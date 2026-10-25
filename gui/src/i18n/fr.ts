@@ -2468,6 +2468,7 @@ export const fr: Record<TKey, string> = {
   "integrations.lazycodexRoles.history.unavailable": "L'historique des modifications n'a pas pu être lu, donc Restaurer n'est pas disponible. La modification des rôles fonctionne toujours.",
   "integrations.lazycodexRoles.history.restore": "Restaurer",
   "integrations.lazycodexRoles.history.restored": "{count} rôle(s) rétabli(s) à leur état d'avant {time}.",
+  "integrations.lazycodexRoles.history.partial": "La restauration s'est arrêtée à {role} : {count} rôle(s) sur {total} ont été rétablis, les autres gardent leurs valeurs actuelles. Corrigez l'erreur ci-dessus et restaurez à nouveau.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc contient des commentaires : enregistrer ici ne met à jour que les fichiers de rôle. Définissez [codex].agents dans omo.jsonc vous-même.",
   "integrations.lazycodexRoles.auto.button": "Attribution auto",
   "integrations.lazycodexRoles.auto.running": "Évaluation des rôles…",

@@ -34,7 +34,7 @@ function earliestBefore(group: RoleChange[]): Map<string, RoleSetting> {
 export default function LazyCodexRoleHistory({ history, unavailable, busy, restore }: { history: RoleChange[]; unavailable: boolean; busy: boolean; restore: Restore }) {
   const t = useT();
   const [restoring, setRestoring] = useState<string | null>(null);
-  const [summary, setSummary] = useState<string | null>(null);
+  const [summary, setSummary] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   if (unavailable) return <Notice tone="warn">{t("integrations.lazycodexRoles.history.unavailable")}</Notice>;
   if (history.length === 0) return null;
 
@@ -47,13 +47,18 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
     setRestoring(group[0]!.batch);
     setSummary(null);
     const batch = crypto.randomUUID();
+    const roles = [...earliestBefore(group)];
     let count = 0;
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
-    for (const [role, setting] of earliestBefore(group)) {
+    for (const [role, setting] of roles) {
       // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
-      if (await restore(role, setting.model ?? undefined, setting.effort, batch)) count += 1;
+      if (!(await restore(role, setting.model ?? undefined, setting.effort, batch))) break;
+      count += 1;
     }
-    setSummary(t("integrations.lazycodexRoles.history.restored", { count: String(count), time: new Date(group[0]!.at).toLocaleString() }));
+    const time = new Date(group[0]!.at).toLocaleString();
+    setSummary(count === roles.length
+      ? { tone: "ok", text: t("integrations.lazycodexRoles.history.restored", { count: String(count), time }) }
+      : { tone: "warn", text: t("integrations.lazycodexRoles.history.partial", { count: String(count), total: String(roles.length), role: roles[count]![0] }) });
     setRestoring(null);
   };
 
@@ -61,7 +66,7 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
     <div className="lazycodex-role-history">
       <h5>{t("integrations.lazycodexRoles.history.title")}</h5>
       <p className="page-sub">{t("integrations.lazycodexRoles.history.hint")}</p>
-      {summary && <Notice tone="ok">{summary}</Notice>}
+      {summary && <Notice tone={summary.tone}>{summary.text}</Notice>}
       <ul>
         {groupByBatch(history).map(group => (
           <li key={group[0]!.batch}>
