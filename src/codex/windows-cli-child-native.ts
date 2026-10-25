@@ -47,7 +47,8 @@ export function securityAttributes(inherit: boolean, descriptor = 0n): Buffer {
   return bytes;
 }
 
-type OwnedDispatch<SymbolsTable> = { -readonly [Key in keyof SymbolsTable]: SymbolsTable[Key] };
+type OwnedDispatch<SymbolsTable> = { -readonly [Key in keyof SymbolsTable]:
+  SymbolsTable[Key] extends (...args: infer Args) => infer Result ? (...args: Args) => Result : SymbolsTable[Key] };
 
 /** Owns only handles returned by this invocation, never PID-reopened handles. */
 export class WindowsChildNative {
