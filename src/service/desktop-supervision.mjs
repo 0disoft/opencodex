@@ -82,25 +82,75 @@ const WINDOWS_ACQUISITION_TIMEOUT_MS = 3_000;
 const WINDOWS_MIN_ACQUISITION_MS = 250;
 const WINDOWS_DESKTOP_IMAGE = "opencodex-desktop.exe";
 
-/** Node cannot call GetSystemDirectoryW; its launcher safely treats the probe as unknown. */
+/** Bun resolves the system directory via FFI; the Node lane derives it from loaded KnownDLL paths. */
 export function windowsPowerShellPath(resolveSystemDirectory = resolveWindowsSystemDirectory) {
   const system = resolveSystemDirectory();
   return win32.join(system, "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+const WINDOWS_REPORT_PATH_LIMIT = 260; // Node's module-name buffer is WCHAR[MAX_PATH] (src/debug_utils.cc).
+const WINDOWS_KNOWN_DLLS = ["kernel32.dll", "ntdll.dll"];
+
+// A resolved system directory is stable for the process lifetime; only success is
+// memoized, so failures keep the existing retry-on-next-call recovery contract.
+let windowsSystemDirectoryCache = null;
+
 function resolveWindowsSystemDirectory() {
-  if (process.platform !== "win32" || !process.versions.bun) throw new Error("trusted Windows resolver unavailable");
+  if (process.platform !== "win32") throw new Error("trusted Windows resolver unavailable");
+  if (windowsSystemDirectoryCache !== null) return windowsSystemDirectoryCache;
+  const directory = process.versions.bun ? resolveWindowsSystemDirectoryViaFfi() : resolveWindowsSystemDirectoryViaSharedObjects();
+  return (windowsSystemDirectoryCache = directory);
+}
+
+function resolveWindowsSystemDirectoryViaFfi() {
   const { dlopen, ptr } = createRequire(import.meta.url)("bun:ffi");
   const lib = dlopen("kernel32.dll", { GetSystemDirectoryW: { args: ["ptr", "u32"], returns: "u32" } });
-  let size = 260;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const buffer = new Uint16Array(size);
-    const written = lib.symbols.GetSystemDirectoryW(ptr(buffer.buffer), size);
-    if (written === 0) throw new Error("GetSystemDirectoryW failed");
-    if (written >= size) { size = written + 1; continue; }
-    return String.fromCharCode(...buffer.subarray(0, written)).replace(/[/\\]+$/, "");
+  try {
+    let size = 260;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const buffer = new Uint16Array(size);
+      const written = lib.symbols.GetSystemDirectoryW(ptr(buffer.buffer), size);
+      if (written === 0) throw new Error("GetSystemDirectoryW failed");
+      if (written >= size) { size = written + 1; continue; }
+      return String.fromCharCode(...buffer.subarray(0, written)).replace(/[/\\]+$/, "");
+    }
+    throw new Error("Windows system directory is too long");
+  } finally {
+    lib.close();
   }
-  throw new Error("Windows system directory is too long");
+}
+
+/** Pure consistency check over loaded-module paths — no env, no filesystem. Exported for tests. */
+export function windowsSystemDirectoryFromSharedObjects(loaded) {
+  if (!Array.isArray(loaded)) throw new Error("trusted Windows resolver unavailable");
+  const parents = new Map(); // lowercased -> first-seen casing (kernel32 is processed first)
+  for (const known of WINDOWS_KNOWN_DLLS) {
+    // Collect every raw namesake first: a malformed or truncated namesake must
+    // cause rejection, not disappear behind a format filter.
+    const namesakes = loaded.filter(path => typeof path === "string" && win32.basename(path).toLowerCase() === known);
+    for (const candidate of namesakes) {
+      if (candidate.length >= WINDOWS_REPORT_PATH_LIMIT || !/^[A-Za-z]:[\\/]/.test(candidate))
+        throw new Error("trusted Windows resolver unavailable");
+    }
+    if (namesakes.length !== 1) throw new Error("trusted Windows resolver unavailable");
+    const parent = win32.dirname(win32.normalize(namesakes[0]));
+    if (!parents.has(parent.toLowerCase())) parents.set(parent.toLowerCase(), parent);
+  }
+  if (parents.size !== 1) throw new Error("trusted Windows resolver unavailable");
+  return [...parents.values()][0];
+}
+
+// The report object carries environment secrets: read .sharedObjects only — never
+// log, serialize, store or pass it on. Existence checks stay outside the pure validator.
+// An unavailable or ambiguous report stays the bounded unknown residual.
+function resolveWindowsSystemDirectoryViaSharedObjects() {
+  const loaded = process.report?.getReport?.()?.sharedObjects;
+  const directory = windowsSystemDirectoryFromSharedObjects(loaded);
+  for (const required of [...WINDOWS_KNOWN_DLLS, win32.join("WindowsPowerShell", "v1.0", "powershell.exe")]) {
+    try { accessSync(win32.join(directory, required), constants.F_OK); }
+    catch { throw new Error("trusted Windows resolver unavailable"); }
+  }
+  return directory;
 }
 
 function windowsPowerShellEnv(systemDirectory) {
@@ -113,8 +163,9 @@ function windowsProcessScript(pid) {
   return [
     "$ErrorActionPreference='Stop'",
     "$PSModuleAutoLoadingPreference='None'",
-    "Import-Module ([IO.Path]::Combine($PSHOME,'Modules','CimCmdlets','CimCmdlets.psd1')) -Force",
+    // Utility loads first: the CimCmdlets manifest needs Set-Alias, which autoload 'None' cannot supply.
     "Import-Module ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')) -Force",
+    "Import-Module ([IO.Path]::Combine($PSHOME,'Modules','CimCmdlets','CimCmdlets.psd1')) -Force",
     "function Row($p) { if ($null -eq $p) { return $null }; [ordered]@{ pid=[string]$p.ProcessId; parent=[string]$p.ParentProcessId; exe=$p.ExecutablePath; session=[string]$p.SessionId; created=$(if ($p.CreationDate) { [string]$p.CreationDate.ToUniversalTime().Ticks } else { $null }) } }",
     `$c=CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${pid}'`,
     "$p=$null",

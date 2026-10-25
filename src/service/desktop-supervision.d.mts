@@ -47,6 +47,9 @@ export const procfs: ProcReader;
 export function processIdentity(pid: number, execute?: DesktopSupervisionDeps["run"], onExecutable?: (path: string) => void):
   { parent: number; executable: string } | null;
 export function windowsPowerShellPath(resolveSystemDirectory?: () => string): string;
+/** Pure consistency check over loaded-module paths; throws unless exactly one well-formed
+ *  namesake per KnownDLL shares one parent directory. Exported for tests. */
+export function windowsSystemDirectoryFromSharedObjects(loaded: unknown): string;
 export function windowsProcessPair(pid: number, execute?: DesktopSupervisionDeps["run"], options?: WindowsProcessReadOptions): WindowsProcessPair;
 export function inspectDesktopSupervision(deps?: DesktopSupervisionDeps): SupervisionEvidence;
 export function createSupervisionLatch(): { observe(evidence: SupervisionEvidence): boolean };
