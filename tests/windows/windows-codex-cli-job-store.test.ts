@@ -368,13 +368,14 @@ describe("Windows CLI update job store backend", () => {
     expect(ledger.jobs[0]!.revision).toBe(2);
   }, 180_000);
 
-  test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped", async () => {
-    const { configDir } = await fixture("ocx-winjob-restart-");
+  test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped",
+    () => withOwnedFixture("ocx-winjob-restart-", async ({ outer, configDir }) => {
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-restart-001", planId: result.planId, confirmed: true, configDir });
     let release: () => void = () => {};
+    const releaseStore = holdFixture(outer);
     const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise<CodexCliApplyResult>(resolve => {
       release = () => resolve(result);
-    }), configDir);
+    }), configDir).finally(releaseStore);
     // A status probe may see a transient unsafe_store (e.g. a killed ACL-read child
     // racing the running phase); the poll retries rather than asserting transport.
     const probe = async () => {
@@ -382,23 +383,37 @@ describe("Windows CLI update job store backend", () => {
       catch { return null; }
     };
     try {
-      for (let i = 0; i < 200 && (await probe())?.status !== "running"; i++) await Bun.sleep(10);
-      expect(await probe()).toMatchObject({ status: "running", ownerState: "active" });
+      // Bounded wall-time poll that also watches pending's own settlement: a failed
+      // begin resolves early with the queued DTO, so the job never reads "running".
+      let settled: Awaited<typeof pending> | undefined;
+      void pending.then(value => { settled = value; }, () => { settled = null; });
+      const deadline = Date.now() + 120_000;
+      let seen: Awaited<ReturnType<typeof probe>> = null;
+      while (settled === undefined && Date.now() < deadline) {
+        seen = await probe();
+        if (seen?.status === "running") break;
+        await Bun.sleep(10);
+      }
+      expect(settled !== undefined ? settled : seen).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)};
         console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
-      const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 120_000,
-        env: { ...process.env, OPENCODEX_HOME: configDir } });
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(JSON.parse(child.stdout.trim())).toMatchObject({ status: "ambiguous", outcome: "ambiguous",
-        ownerState: "unknown", lifetimeUncertain: true, reason: "owner_state_unknown" });
+      const releaseChild = holdFixture(outer);
+      try {
+        const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 120_000,
+          env: { ...process.env, OPENCODEX_HOME: configDir } });
+        expect({ error: child.error ?? null, status: child.status, signal: child.signal,
+          stdout: child.stdout?.trim() ?? null, stderr: child.stderr?.trim() ?? null })
+          .toMatchObject({ error: null, status: 0 });
+        expect(JSON.parse(child.stdout.trim())).toMatchObject({ status: "ambiguous", outcome: "ambiguous",
+          ownerState: "unknown", lifetimeUncertain: true, reason: "owner_state_unknown" });
+      } finally { releaseChild(); }
     } finally {
       release();
       await pending.catch(() => undefined);
     }
     expect(await pending).toMatchObject({ status: "applied", ownerState: "finished" });
-  }, 300_000);
+  }), 300_000);
 
   test.skipIf(!winOnly)("HTTP apply advertises retry on a leftover lock and status reads the same durable record", async () => {
     const { configDir } = await fixture("ocx-winjob-http-");

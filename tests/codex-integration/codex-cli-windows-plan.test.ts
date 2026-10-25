@@ -163,7 +163,9 @@ native("a published-size Windows npm backing binds; one past the shared finite l
   expect(process.env.SystemRoot).toBeDefined();
   const sparse = spawnSync(join(process.env.SystemRoot!, "System32", "fsutil.exe"), ["sparse", "setflag", binary],
     { windowsHide: true, encoding: "utf8", timeout: 5_000 });
-  expect(sparse.error).toBeUndefined(); expect(sparse.status).toBe(0);
+  expect({ error: sparse.error ?? null, status: sparse.status, signal: sparse.signal,
+    stdout: sparse.stdout?.trim() ?? null, stderr: sparse.stderr?.trim() ?? null })
+    .toMatchObject({ error: null, status: 0 });
   truncateSync(binary, 295_408_944);
   const report = await inspectCodexCliInstall(f.deps);
   expect(report.managed).toBe(true); expect(report.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -363,7 +365,9 @@ native("published Node CLI uses the production inspector and observed toolchain 
     env: { ...process.env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
       OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
   });
-  expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+  expect({ error: run.error ?? null, status: run.status, signal: run.signal,
+    stdout: run.stdout?.trim() ?? null, stderr: run.stderr?.trim() ?? null })
+    .toMatchObject({ error: null, status: 0 });
   const plan = JSON.parse(run.stdout);
   expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
   expect(plan.targetIntegrity).toBe(integrity);
