@@ -368,37 +368,57 @@ describe("Windows CLI update job store backend", () => {
     expect(ledger.jobs[0]!.revision).toBe(2);
   }, 180_000);
 
-  test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped", async () => {
-    const { configDir } = await fixture("ocx-winjob-restart-");
+  test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped",
+    () => withOwnedFixture("ocx-winjob-restart-", async ({ outer, configDir }) => {
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-restart-001", planId: result.planId, confirmed: true, configDir });
-    let release: () => void = () => {};
-    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise<CodexCliApplyResult>(resolve => {
-      release = () => resolve(result);
-    }), configDir);
-    // A status probe may see a transient unsafe_store (e.g. a killed ACL-read child
-    // racing the running phase); the poll retries rather than asserting transport.
-    const probe = async () => {
-      try { return await readCodexCliUpdateJob(accepted.job.jobId, configDir); }
-      catch { return null; }
-    };
+    // Both resolves exist before the engine callback can be entered: entered marks
+    // that begin committed the running revision, and whenever finally runs release()
+    // settles the engine even if the engine starts late or never.
+    let entered!: () => void;
+    let release!: () => void;
+    const engineEntered = new Promise<void>(resolve => { entered = resolve; });
+    const engineGate = new Promise<CodexCliApplyResult>(resolve => { release = () => resolve(result); });
+    const releaseStore = holdFixture(outer);
+    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation,
+      () => { entered(); return engineGate; }, configDir).finally(releaseStore);
     try {
-      for (let i = 0; i < 200 && (await probe())?.status !== "running"; i++) await Bun.sleep(10);
-      expect(await probe()).toMatchObject({ status: "running", ownerState: "active" });
+      // Wait on the causal precondition instead of polling the store for its
+      // projection: engine entry means begin committed "running" with live+started
+      // registered, so a single read at that point is stable evidence. A failed
+      // begin settles pending early with its read-back DTO (production swallows the
+      // begin error), so that DTO or error is asserted as-is; the 120s deadline
+      // still bounds a begin that neither settles nor commits.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const observation = await Promise.race([
+        engineEntered.then(() => "entered" as const),
+        pending.then(() => "settled" as const, () => "settled" as const),
+        new Promise<"timeout">(resolve => { deadline = setTimeout(() => resolve("timeout"), 120_000); }),
+      ]);
+      if (deadline) clearTimeout(deadline);
+      const observed = observation === "entered"
+        ? await readCodexCliUpdateJob(accepted.job.jobId, configDir)
+        : observation === "settled" ? await pending
+        : null;
+      expect(observed).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)};
         console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
-      const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 120_000,
-        env: { ...process.env, OPENCODEX_HOME: configDir } });
-      expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(JSON.parse(child.stdout.trim())).toMatchObject({ status: "ambiguous", outcome: "ambiguous",
-        ownerState: "unknown", lifetimeUncertain: true, reason: "owner_state_unknown" });
+      const releaseChild = holdFixture(outer);
+      try {
+        const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 120_000,
+          env: { ...process.env, OPENCODEX_HOME: configDir } });
+        expect({ error: child.error ?? null, status: child.status, signal: child.signal,
+          stdout: child.stdout?.trim() ?? null, stderr: child.stderr?.trim() ?? null })
+          .toMatchObject({ error: null, status: 0 });
+        expect(JSON.parse(child.stdout.trim())).toMatchObject({ status: "ambiguous", outcome: "ambiguous",
+          ownerState: "unknown", lifetimeUncertain: true, reason: "owner_state_unknown" });
+      } finally { releaseChild(); }
     } finally {
       release();
       await pending.catch(() => undefined);
     }
     expect(await pending).toMatchObject({ status: "applied", ownerState: "finished" });
-  }, 300_000);
+  }), 300_000);
 
   test.skipIf(!winOnly)("HTTP apply advertises retry on a leftover lock and status reads the same durable record", async () => {
     const { configDir } = await fixture("ocx-winjob-http-");
