@@ -231,6 +231,8 @@ describe("GET /api/settings", () => {
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
     const { chmodSync } = await import("node:fs");
     const {
+      codexRuntimeStateEpoch,
+      peekCodexRuntimeProcessCache,
       persistEffortClamp,
       resetCodexRuntimeResolveCacheForTests,
       resolveCodexRuntimeAsync,
@@ -254,24 +256,39 @@ describe("GET /api/settings", () => {
       affectedModels: ["gpt-5.6-sol"],
     }, { configDir: TEST_DIR });
 
+    type CodexRuntimeSettingsBody = {
+      codexRuntime?: {
+        path?: string;
+        version?: string | null;
+        source?: string;
+        warning?: string | null;
+        newerAvailable?: { path?: string; version?: string | null } | null;
+        catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
+      };
+    };
     const previousCli = process.env.CODEX_CLI_PATH;
     const previousPath = process.env.PATH;
+    // Hoisted so the catch below can attach the same snapshot on failure; each
+    // stays undefined if the resolve threw before assigning it.
+    let resolvedRuntime: Awaited<ReturnType<typeof resolveCodexRuntimeAsync>> | undefined;
+    let resolveMs = -1;
+    let cachePeek: ReturnType<typeof peekCodexRuntimeProcessCache> | undefined;
+    let stateEpoch: number | undefined;
+    let observedBody: CodexRuntimeSettingsBody | undefined;
     try {
       process.env.CODEX_CLI_PATH = fakeCodex;
       process.env.PATH = "";
       // Settings serve the runtime stale-while-revalidate; land the probe first so this
       // asserts the validated projection rather than the cold deferred answer.
-      await resolveCodexRuntimeAsync();
-      const body = await (await getSettings(baseConfig()))!.json() as {
-        codexRuntime?: {
-          path?: string;
-          version?: string | null;
-          source?: string;
-          warning?: string | null;
-          newerAvailable?: { path?: string; version?: string | null } | null;
-          catalogClamp?: { active?: boolean; removedEfforts?: string[]; runtimeVersion?: string | null };
-        };
-      };
+      const resolveStarted = performance.now();
+      resolvedRuntime = await resolveCodexRuntimeAsync();
+      resolveMs = Math.round(performance.now() - resolveStarted);
+      // Read-only peek at the freshly published memo — whether the GET below can
+      // serve the probed answer is exactly what this test asserts.
+      cachePeek = peekCodexRuntimeProcessCache();
+      stateEpoch = codexRuntimeStateEpoch();
+      const body = await (await getSettings(baseConfig()))!.json() as CodexRuntimeSettingsBody;
+      observedBody = body;
       expect(typeof body.codexRuntime?.path).toBe("string");
       // OPENCODEX_HOME lives under the OS user profile; username must stay redacted on all OS.
       expect(body.codexRuntime?.path?.toLowerCase()).not.toMatch(/[/\\]users[/\\][^/\\[\]]+[/\\]/i);
@@ -289,6 +306,66 @@ describe("GET /api/settings", () => {
       ).toBe(true);
       expect(typeof body.codexRuntime?.warning).toBe("string");
       expect(body.codexRuntime?.warning).toContain("0.133.0");
+    } catch (error) {
+      // Failure-only diagnostics for the 0.133.0 -> null macOS control
+      // regression: rethrow with a path-free snapshot appended. Nothing is
+      // emitted on success, and no command, env, or raw exec output leaves the
+      // process — probe reasons are capped to the fixed classifier set plus a
+      // coarse failed/deadline bucket.
+      const knownReasons = new Set([
+        "path does not exist",
+        "program not found (ENOENT)",
+        "not a spawnable Codex launcher on this platform",
+        "Codex app bundle identity mismatch or unavailable",
+        "unrecognized --version output",
+        "probe sandbox unavailable",
+      ]);
+      const probeReasonSummary = (reason: string): string => {
+        if (reason.startsWith("failed --version")) {
+          return reason.includes("deadline") ? "failed --version (deadline)" : "failed --version";
+        }
+        return knownReasons.has(reason) ? reason : "other";
+      };
+      const diagnostics = {
+        resolveMs: resolveMs >= 0 ? resolveMs : null,
+        stateEpoch: stateEpoch ?? null,
+        resolved: resolvedRuntime === undefined ? null : {
+          source: resolvedRuntime.runtime.source,
+          version: resolvedRuntime.runtime.version,
+          envCandidateSelected: resolvedRuntime.runtime.command === fakeCodex,
+          newerAvailableVersion: resolvedRuntime.newerAvailable?.version ?? null,
+          replacedConfigured: resolvedRuntime.replacedConfigured !== undefined,
+          supersededDiscovered: resolvedRuntime.supersededDiscovered !== undefined,
+          persistError: resolvedRuntime.persistError !== undefined,
+          failures: resolvedRuntime.failures.map(item => ({
+            source: item.source,
+            reason: probeReasonSummary(item.reason),
+          })),
+        },
+        cache: cachePeek === undefined ? null : cachePeek.kind === "available"
+          ? {
+            kind: cachePeek.kind,
+            epoch: cachePeek.epoch,
+            valueIdentity: cachePeek.valueIdentity,
+            source: cachePeek.value.runtime.source,
+            version: cachePeek.value.runtime.version,
+          }
+          : { kind: cachePeek.kind, epoch: cachePeek.epoch },
+        projection: observedBody === undefined || observedBody.codexRuntime === undefined
+          ? null
+          : {
+            source: observedBody.codexRuntime.source,
+            version: observedBody.codexRuntime.version,
+            newerAvailableVersion: observedBody.codexRuntime.newerAvailable?.version ?? null,
+            catalogClamp: observedBody.codexRuntime.catalogClamp ?? null,
+            warning: observedBody.codexRuntime.warning ?? null,
+          },
+      };
+      const enriched = new Error(
+        `${error instanceof Error ? error.message : String(error)}\ncodexRuntime diagnostics: ${JSON.stringify(diagnostics)}`,
+      );
+      if (error instanceof Error && error.stack) enriched.stack = error.stack;
+      throw enriched;
     } finally {
       if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
       else process.env.CODEX_CLI_PATH = previousCli;
