@@ -2486,6 +2486,7 @@ export const vi: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "Thử lại omo.jsonc",
   "integrations.lazycodexRoles.history.title": "Lịch sử thay đổi",
   "integrations.lazycodexRoles.history.hint": "Mọi lần lưu và tự động gán trong phần này đều được liệt kê ở đây. Khôi phục ghi lại mô hình và mức suy luận trước đó như một lần lưu thông thường, nên thao tác đó cũng được liệt kê. Vai trò trước đây không ghim mô hình sẽ giữ mô hình hiện tại; chỉ mức suy luận được khôi phục.",
+  "integrations.lazycodexRoles.history.unavailable": "Không đọc được lịch sử thay đổi nên không thể khôi phục. Bạn vẫn chỉnh sửa vai trò như bình thường.",
   "integrations.lazycodexRoles.history.restore": "Khôi phục",
   "integrations.lazycodexRoles.history.restored": "Đã khôi phục {count} vai trò về trạng thái trước {time}.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc có chú thích, nên lưu ở đây chỉ cập nhật các tệp vai trò. Hãy tự đặt [codex].agents trong omo.jsonc.",

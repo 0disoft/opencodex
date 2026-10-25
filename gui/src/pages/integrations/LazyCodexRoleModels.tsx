@@ -21,6 +21,7 @@ interface RoleModels {
   detected: boolean;
   roles: RoleRow[];
   history: RoleChange[];
+  historyUnavailable: boolean;
   omoJsonc: { state: OmoFileState } | null;
   available: string[];
   efforts: string[];
@@ -42,11 +43,11 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   const [result, setResult] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(null);
 
   const load = useCallback(async (signal: AbortSignal): Promise<RoleModels> => {
-    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; history?: RoleChange[]; omoJsonc?: { state: OmoFileState } | null }>(
+    const roles = await readJsonOrThrow<{ lazycodex?: { detected?: boolean }; roles?: RoleRow[]; history?: RoleChange[]; historyUnavailable?: boolean; omoJsonc?: { state: OmoFileState } | null }>(
       await fetch(`${apiBase}/api/codex-agent-roles`, { signal }),
       t("integrations.lazycodexRoles.loadFailed"),
     );
-    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], history: [], omoJsonc: null, available: [], efforts: [] };
+    if (roles?.lazycodex?.detected !== true) return { detected: false, roles: [], history: [], historyUnavailable: false, omoJsonc: null, available: [], efforts: [] };
     // The effort list is the one the Subagents page offers for its delegation model. It only adds
     // choices, so a failed lookup leaves each row with its pinned effort instead of failing the table.
     const [models, delegation] = await Promise.all([
@@ -60,6 +61,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       detected: true,
       roles: roles.roles ?? [],
       history: roles.history ?? [],
+      historyUnavailable: roles.historyUnavailable === true,
       omoJsonc: roles.omoJsonc ?? null,
       available: models?.available ?? [],
       efforts: delegation?.efforts ?? [],
@@ -254,6 +256,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
         </div>
         <LazyCodexRoleHistory
           history={data.history}
+          unavailable={data.historyUnavailable}
           busy={pending !== null}
           restore={(role, model, effort, batch) => save(role, model, effort, undefined, batch)}
         />

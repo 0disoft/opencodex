@@ -558,3 +558,11 @@ test("lists the role change history as one entry per batch and restores a batch'
   expect((puts[0]!.body as { batch: string }).batch).not.toBe("apply-all");
   expect(container.textContent).toContain("Restored 2 role(s)");
 });
+
+test("keeps the role table editable and says why Restore is gone when the history cannot be read", async () => {
+  rolesBody = { ...(rolesBody as Record<string, unknown>), history: [], historyUnavailable: true };
+  await mount();
+  expect(container.textContent).toContain("The change history could not be read");
+  expect(container.querySelector(".lazycodex-role-history")).toBeNull();
+  expect(saveButton("explorer")).not.toBeNull();
+});

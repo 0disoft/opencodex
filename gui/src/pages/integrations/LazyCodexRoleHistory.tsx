@@ -31,10 +31,11 @@ function earliestBefore(group: RoleChange[]): Map<string, RoleSetting> {
   return before;
 }
 
-export default function LazyCodexRoleHistory({ history, busy, restore }: { history: RoleChange[]; busy: boolean; restore: Restore }) {
+export default function LazyCodexRoleHistory({ history, unavailable, busy, restore }: { history: RoleChange[]; unavailable: boolean; busy: boolean; restore: Restore }) {
   const t = useT();
   const [restoring, setRestoring] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  if (unavailable) return <Notice tone="warn">{t("integrations.lazycodexRoles.history.unavailable")}</Notice>;
   if (history.length === 0) return null;
 
   const describe = (setting: RoleSetting) => {

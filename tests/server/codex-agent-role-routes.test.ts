@@ -70,6 +70,21 @@ describe("/api/codex-agent-roles", () => {
     expect(history.some(change => change.batch === "older")).toBe(false);
   });
 
+  test("an unreadable history file leaves the role list and role saves working", async () => {
+    // A directory where the history file belongs makes every read of it fail (EISDIR) on every platform.
+    mkdirSync(join(root, "ocx", "integrations", "codex-agent-roles.jsonl"), { recursive: true });
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const listed = await call("/api/codex-agent-roles");
+      expect(listed.status).toBe(200);
+      expect(listed.body).toMatchObject({ roles: [{ role: "explorer", model: "gpt-5.5" }], history: [], historyUnavailable: true });
+      expect((await put("explorer", "xai/grok-4.5")).status).toBe(200);
+      expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model = "xai/grok-4.5"');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("records each written change with its earlier values, newest first, and skips an unchanged save", async () => {
     const write = (body: Record<string, unknown>) => call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify(body) });
     expect((await write({ model: "xai/grok-4.5", effort: "high", batch: "apply-all-1" })).status).toBe(200);

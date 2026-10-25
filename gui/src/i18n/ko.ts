@@ -1951,6 +1951,7 @@ export const ko: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc 다시 시도",
   "integrations.lazycodexRoles.history.title": "변경 기록",
   "integrations.lazycodexRoles.history.hint": "이 섹션에서 저장하거나 자동 배정한 변경이 모두 여기에 남습니다. 되돌리기는 이전 모델과 추론 강도를 일반 저장과 같은 방식으로 다시 쓰고, 그 자체도 기록됩니다. 원래 모델이 지정되지 않았던 역할은 현재 모델을 유지하고 추론 강도만 되돌립니다.",
+  "integrations.lazycodexRoles.history.unavailable": "변경 기록을 읽지 못해 되돌리기를 쓸 수 없습니다. 역할 편집은 그대로 할 수 있습니다.",
   "integrations.lazycodexRoles.history.restore": "되돌리기",
   "integrations.lazycodexRoles.history.restored": "{count}개 역할을 {time} 이전 상태로 되돌렸습니다.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc에 주석이 있어 여기서 저장하면 역할 파일만 바뀝니다. omo.jsonc의 [codex].agents는 직접 맞춰 주세요.",

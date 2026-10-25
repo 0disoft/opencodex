@@ -36,6 +36,15 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     if (!lazycodex.detected) return jsonResponse({ lazycodex, omoJsonc: null, roles: [] }, 200, req, config);
     const omoState = omo.readOmoRoleModels(omo.omoJsoncPath());
     const omoModels = omoState.state === "present" ? omoState.models : {};
+    // History is optional: a file that cannot be read costs the Restore list, never role editing.
+    let changes: import("../../codex/role-model-history").RoleModelChange[] = [];
+    let historyUnavailable = false;
+    try {
+      changes = history.listRoleModelChanges();
+    } catch (error) {
+      console.error(`[codex-agent-roles] could not read the change history: ${String(error)}`);
+      historyUnavailable = true;
+    }
     return jsonResponse({
       lazycodex,
       omoJsonc: { state: omoState.state },
@@ -44,7 +53,8 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
         effort: roles.readCodexAgentRoleEffort(entry.role, codexHome),
         omoJsoncModel: omoModels[entry.role] ?? null,
       })),
-      history: history.listRoleModelChanges(),
+      history: changes,
+      ...(historyUnavailable ? { historyUnavailable } : {}),
     }, 200, req, config);
   }
 

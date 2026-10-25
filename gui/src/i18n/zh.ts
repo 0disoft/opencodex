@@ -1924,6 +1924,7 @@ export const zh: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "重试 omo.jsonc",
   "integrations.lazycodexRoles.history.title": "变更记录",
   "integrations.lazycodexRoles.history.hint": "本节中的每次保存和自动分配都会记录在这里。恢复会像普通保存一样写回之前的模型和推理强度，这次操作本身也会被记录。原先没有固定模型的角色保留当前模型，只恢复推理强度。",
+  "integrations.lazycodexRoles.history.unavailable": "无法读取变更记录，因此无法恢复。角色编辑仍可正常使用。",
   "integrations.lazycodexRoles.history.restore": "恢复",
   "integrations.lazycodexRoles.history.restored": "已将 {count} 个角色恢复到 {time} 之前的状态。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc 中有注释，因此在这里保存只会更新角色文件。请自行设置 omo.jsonc 中的 [codex].agents。",

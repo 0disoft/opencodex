@@ -2477,6 +2477,7 @@ export const tr: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc'yi yeniden dene",
   "integrations.lazycodexRoles.history.title": "Değişiklik geçmişi",
   "integrations.lazycodexRoles.history.hint": "Bu bölümdeki her kaydetme ve otomatik atama burada listelenir. Geri yükleme önceki modeli ve çabayı sıradan bir kaydetme gibi geri yazar ve o da listelenir. Önceden sabitlenmiş modeli olmayan bir rol mevcut modelini korur; yalnızca çabası geri döner.",
+  "integrations.lazycodexRoles.history.unavailable": "Değişiklik geçmişi okunamadı, bu yüzden Geri yükleme kullanılamıyor. Rol düzenleme çalışmaya devam ediyor.",
   "integrations.lazycodexRoles.history.restore": "Geri yükle",
   "integrations.lazycodexRoles.history.restored": "{count} rol {time} öncesindeki durumuna geri yüklendi.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc yorumlar içeriyor, bu yüzden burada kaydetmek yalnızca rol dosyalarını günceller. omo.jsonc içindeki [codex].agents değerini kendiniz ayarlayın.",

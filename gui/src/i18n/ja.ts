@@ -2360,6 +2360,7 @@ export const ja: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc を再試行",
   "integrations.lazycodexRoles.history.title": "変更履歴",
   "integrations.lazycodexRoles.history.hint": "このセクションでの保存と自動割り当てはすべてここに記録されます。元に戻すと以前のモデルと推論強度が通常の保存と同じ方法で書き戻され、その操作も記録されます。以前モデルが固定されていなかったロールは現在のモデルを保ち、推論強度だけを戻します。",
+  "integrations.lazycodexRoles.history.unavailable": "変更履歴を読み込めなかったため、元に戻す機能は使えません。ロールの編集はそのまま使えます。",
   "integrations.lazycodexRoles.history.restore": "元に戻す",
   "integrations.lazycodexRoles.history.restored": "{count} 件のロールを {time} より前の状態に戻しました。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc にコメントがあるため、ここで保存するとロールファイルだけが更新されます。omo.jsonc の [codex].agents はご自身で設定してください。",

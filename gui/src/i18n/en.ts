@@ -2538,6 +2538,7 @@ export const en = {
   "integrations.lazycodexRoles.retryMirror": "Retry omo.jsonc",
   "integrations.lazycodexRoles.history.title": "Change history",
   "integrations.lazycodexRoles.history.hint": "Each save and auto-assign in this section is listed here. Restore writes the earlier model and effort back as an ordinary save, so it is listed too. A role that had no model pin keeps its current one; only its effort goes back.",
+  "integrations.lazycodexRoles.history.unavailable": "The change history could not be read, so Restore is unavailable. Role editing still works.",
   "integrations.lazycodexRoles.history.restore": "Restore",
   "integrations.lazycodexRoles.history.restored": "Restored {count} role(s) to how they were before {time}.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc has comments, so saving here updates only the role files. Set [codex].agents in omo.jsonc yourself.",

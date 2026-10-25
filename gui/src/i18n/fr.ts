@@ -2465,6 +2465,7 @@ export const fr: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "Réessayer omo.jsonc",
   "integrations.lazycodexRoles.history.title": "Historique des modifications",
   "integrations.lazycodexRoles.history.hint": "Chaque enregistrement et chaque attribution automatique de cette section figure ici. Restaurer réécrit le modèle et l'effort précédents comme un enregistrement ordinaire, qui figure donc aussi ici. Un rôle sans modèle épinglé auparavant garde son modèle actuel ; seul son effort est rétabli.",
+  "integrations.lazycodexRoles.history.unavailable": "L'historique des modifications n'a pas pu être lu, donc Restaurer n'est pas disponible. La modification des rôles fonctionne toujours.",
   "integrations.lazycodexRoles.history.restore": "Restaurer",
   "integrations.lazycodexRoles.history.restored": "{count} rôle(s) rétabli(s) à leur état d'avant {time}.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc contient des commentaires : enregistrer ici ne met à jour que les fichiers de rôle. Définissez [codex].agents dans omo.jsonc vous-même.",

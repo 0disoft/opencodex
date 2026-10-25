@@ -1907,6 +1907,7 @@ export const de: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc erneut versuchen",
   "integrations.lazycodexRoles.history.title": "Änderungsverlauf",
   "integrations.lazycodexRoles.history.hint": "Jedes Speichern und jede automatische Zuweisung in diesem Abschnitt wird hier aufgeführt. Wiederherstellen schreibt das frühere Modell und den früheren Aufwand wie ein normales Speichern zurück und wird ebenfalls aufgeführt. Eine Rolle ohne frühere Modellbindung behält ihr aktuelles Modell; nur der Aufwand wird zurückgesetzt.",
+  "integrations.lazycodexRoles.history.unavailable": "Der Änderungsverlauf konnte nicht gelesen werden, daher ist Wiederherstellen nicht verfügbar. Rollen lassen sich weiterhin bearbeiten.",
   "integrations.lazycodexRoles.history.restore": "Wiederherstellen",
   "integrations.lazycodexRoles.history.restored": "{count} Rolle(n) auf den Stand vor {time} zurückgesetzt.",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc enthält Kommentare, daher ändert Speichern hier nur die Rollendateien. Setze [codex].agents in omo.jsonc selbst.",

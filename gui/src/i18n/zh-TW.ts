@@ -3398,6 +3398,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.lazycodexRoles.retryMirror": "重試 omo.jsonc",
   "integrations.lazycodexRoles.history.title": "變更紀錄",
   "integrations.lazycodexRoles.history.hint": "本區段中的每次儲存與自動分配都會記錄在這裡。還原會像一般儲存一樣寫回先前的模型與推理強度，這次操作本身也會被記錄。原先沒有固定模型的角色保留目前模型，只還原推理強度。",
+  "integrations.lazycodexRoles.history.unavailable": "無法讀取變更記錄，因此無法還原。角色編輯仍可正常使用。",
   "integrations.lazycodexRoles.history.restore": "還原",
   "integrations.lazycodexRoles.history.restored": "已將 {count} 個角色還原到 {time} 之前的狀態。",
   "integrations.lazycodexRoles.omoCommentsState": "omo.jsonc 中有註解，因此在這裡儲存只會更新角色檔案。請自行設定 omo.jsonc 中的 [codex].agents。",
