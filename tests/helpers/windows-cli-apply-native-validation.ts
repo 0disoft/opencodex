@@ -4,6 +4,7 @@ import { dirname, join, parse } from "node:path";
 import { dlopen, ptr } from "bun:ffi";
 import type { Library } from "bun:ffi";
 import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
+import type { CodexCliApplyResult } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
 import type { WindowsApplyAcquisition, WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
@@ -34,8 +35,12 @@ const owned: {
   token?: { release(): void }; tokenCount: number; releaseCount: number;
   closeAttempts: number; closeResult?: boolean; closeError?: number; protected?: boolean;
   protectionVerified?: boolean;
+  stage: string; runSettled: boolean; runInFlight: boolean; caseFailed: boolean; stateNonce?: string;
+  originalResult?: CodexCliApplyResult; faultError?: string;
   applyFinished: boolean; recoveryStarted: boolean; sequence: number;
-} = { tokenCount: 0, releaseCount: 0, closeAttempts: 0, applyFinished: false, recoveryStarted: false, sequence: 0 };
+} = { tokenCount: 0, releaseCount: 0, closeAttempts: 0, applyFinished: false, recoveryStarted: false, sequence: 0,
+  stage: "BEFORE_RUN", runSettled: false, runInFlight: false, caseFailed: false };
+const commandIds = new Set<string>();
 function emit(type: string, fields: Record<string, unknown> = {}) {
   self.postMessage({ ...owned.ids, sequence: ++owned.sequence, type, ...fields });
 }
@@ -96,9 +101,9 @@ async function prepareFixture() {
   return {
     platform: "win32" as const,
     inspectionDeps: { env: { CODEX_CLI_PATH: join(owned.prefix, "codex.cmd"), PATH: owned.prefix, PATHEXT: ".EXE;.CMD" },
-      configDir: join(owned.root, "absent-home"), selectionAttested: true, arch: "x64", observeInstallContent: true },
+      configDir: join(owned.root, "absent-home"), selectionAttested: true, arch: "x64" as const, observeInstallContent: true },
     resolveTarget: () => ({ kind: "resolved" as const, version: "1.1.0", integrity: main.integrity,
-      artifacts: { platform: "win32" as const, arch: "x64", main, backing } }),
+      artifacts: { platform: "win32" as const, arch: "x64" as const, main, backing } }),
     scanProcesses: () => ({ kind: "observed" as const, processes: [] }),
   };
 }
@@ -117,22 +122,30 @@ function observeAcquisition(value: WindowsApplyAcquisition) {
   context.pins.keep = function(handle) {
     const result = Reflect.apply(owned.keep!, this, [handle]);
     owned.handle = handle; // Exact real registered handle is rooted before any flag assertion.
-    if (owned.ids!.caseId === "A1") {
-      need(owned.flags!.symbols.SetHandleInformation(handle, 2, 2), "SetHandleInformation_failed");
-      owned.protected = true;
-      need((handleFlags() & 2) === 2, "protection_readback_failed");
-    } else need((handleFlags() & 2) === 0, "counterarm_unexpected_protection");
-    owned.protectionVerified = true;
+    owned.stage = "REAL_PIN_REGISTERED";
+    try {
+      if (owned.ids!.caseId === "A1") {
+        need(owned.flags!.symbols.SetHandleInformation(handle, 2, 2), "SetHandleInformation_failed");
+        owned.protected = true; owned.stage = "PROTECT_SET_READBACK_PENDING";
+        need((handleFlags() & 2) === 2, "protection_readback_failed");
+      } else need((handleFlags() & 2) === 0, "counterarm_unexpected_protection");
+      owned.protectionVerified = true; owned.stage = "FLAG_OBSERVED";
+    } catch (error) {
+      owned.faultError = error instanceof FixtureCheckError ? error.message : "flag_observation_error";
+      throw error; // Production catch/finally still attempts the real close.
+    }
     throw new Error("fixture-induced-acquisition-rejection");
   };
 }
 async function run(ids: Ids) {
   owned.ids = ids;
+  owned.stage = "PREPARING_FIXTURE";
   need(process.platform === "win32" && process.arch === "x64", "native_platform_unavailable");
   const deps = await prepareFixture();
   const plan = await createCodexCliUpdatePlan(deps);
   need(plan.applicable && plan.planId, "fixture_plan_not_applicable");
   owned.flags = dlopen("kernel32.dll", FLAGS);
+  owned.stage = "APPLY_ACQUISITION";
   const result = await applyCodexCliUpdate(plan.planId, { ...deps,
     retainExecution: anchor => {
       const token = lifetime.retain(anchor); owned.tokenCount++;
@@ -143,9 +156,11 @@ async function run(ids: Ids) {
     },
     startWindowsChild: () => { emit("native-start"); throw new Error("unexpected_child_start"); },
   });
+  owned.originalResult = result;
   owned.applyFinished = true;
   need(owned.context && owned.handle !== undefined && owned.acquisition, "acquisition_seam_not_reached");
   restoreInstrumentation();
+  if (owned.faultError) throw new FixtureCheckError(owned.faultError);
   emit("native-observation", { closeAttempts: owned.closeAttempts, closeReturned: owned.closeResult,
     closeLastError: owned.closeError, protectedFlag: owned.protected === true,
     protectionVerified: owned.protectionVerified === true,
@@ -159,21 +174,41 @@ async function run(ids: Ids) {
   }
   lifetime.finish();
 }
-function recover() {
-  need(owned.ids?.caseId === "A1" && owned.applyFinished && !owned.recoveryStarted, "recovery_not_admitted");
-  owned.recoveryStarted = true;
-  need(owned.context && owned.flags && owned.handle !== undefined && owned.acquisition && owned.token, "recovery_owner_missing");
+function inspectOwnedState() {
+  owned.stateNonce = crypto.randomUUID();
+  let protection: number | "UNOBSERVED" | "UNAVAILABLE" = "UNOBSERVED";
+  if (owned.context?.pins.remaining && owned.handle !== undefined && owned.flags) {
+    try { protection = handleFlags() & 2; } catch { protection = "UNAVAILABLE"; }
+  }
+  return { stage: owned.stage, runSettled: owned.runSettled, caseFailed: owned.caseFailed,
+    runInFlight: owned.runInFlight,
+    stateNonce: owned.stateNonce, knownOwnedPin: !!owned.context && owned.handle !== undefined,
+    remainingPins: owned.context?.pins.remaining ?? 0, protection, tokenCount: owned.tokenCount,
+    hasAcquisition: !!owned.acquisition, flagsLibraryOpen: !!owned.flags };
+}
+function recover(stateNonce: unknown) {
+  need(owned.runSettled && !owned.runInFlight && typeof stateNonce === "string" && stateNonce === owned.stateNonce, "fresh_inspect_required");
+  owned.stateNonce = undefined; // Consumed before action; uncertain actions are never auto-replayed.
+  need(owned.context && owned.acquisition && owned.token, "recovery_owner_missing");
   restoreInstrumentation();
-  need(owned.context.pins.remaining === 1 && (handleFlags() & 2) === 2, "recovery_identity_state_mismatch");
-  need(owned.flags.symbols.SetHandleInformation(owned.handle, 2, 0), "clear_protect_failed");
-  need((handleFlags() & 2) === 0, "clear_protect_readback_failed");
-  owned.protected = false;
-  need(owned.context.pins.release(owned.handle, owned.context.kernel), "explicit_exact_pin_release_failed");
+  owned.stage = "EXACT_RECOVERY";
+  if (owned.context.pins.remaining !== 0) {
+    need(owned.context.pins.remaining === 1 && owned.handle !== undefined && owned.flags, "recovery_identity_state_mismatch");
+    const flags = handleFlags(); // Fresh query of the exact still-owned pin, not cached success.
+    if ((flags & 2) !== 0) {
+      need(owned.flags.symbols.SetHandleInformation(owned.handle, 2, 0), "clear_protect_failed");
+      need((handleFlags() & 2) === 0, "clear_protect_readback_failed");
+    }
+    owned.protected = false;
+    need(owned.context.pins.release(owned.handle, owned.context.kernel), "explicit_exact_pin_release_failed");
+  }
   need(owned.context.pins.remaining === 0, "pins_not_empty_after_recovery");
-  owned.flags.close(); owned.flags = undefined;
+  if (owned.flags) { owned.flags.close(); owned.flags = undefined; }
+  owned.protected = false;
   need(owned.acquisition.releaseIfClean(owned.token), "token_release_not_clean");
   need(owned.tokenCount === 0 && owned.releaseCount === 1, "token_release_count_mismatch");
   emit("cleanup-receipt", cleanupReceipt());
+  lifetime.finish();
 }
 if (Bun.isMainThread === false) {
   self.onmessage = async event => {
@@ -182,19 +217,28 @@ if (Bun.isMainThread === false) {
       if (!owned.ids) {
         need(input?.type === "run" && ["A1", "A2"].includes(input.caseId)
           && [input.runNonce, input.requestId, input.jobId].every(value => typeof value === "string" && value.length >= 16), "bad_first_envelope");
-        await run(input);
+        owned.runInFlight = true;
+        try { await run(input); }
+        finally { owned.runInFlight = false; owned.runSettled = true; }
       } else {
         need(input?.runNonce === owned.ids.runNonce && input.caseId === owned.ids.caseId
           && input.requestId === owned.ids.requestId && input.jobId === owned.ids.jobId, "uncorrelated_command");
-        if (input.type === "probe") {
+        need(typeof input.commandId === "string" && !commandIds.has(input.commandId), "duplicate_or_missing_command");
+        commandIds.add(input.commandId);
+        emit("command-ack", { commandId: input.commandId });
+        if (input.type === "inspect") {
+          emit("owned-state", inspectOwnedState());
+        } else if (input.type === "probe") {
           need(owned.applyFinished && owned.tokenCount === 1, "probe_not_retained");
           emit("lifetime-probe-ack", { probeNonce: input.probeNonce, remainingPins: owned.context!.pins.remaining, tokenCount: owned.tokenCount });
-        } else if (input.type === "recover") recover();
+        } else if (input.type === "recover") recover(input.stateNonce);
         else throw new Error("unknown_command");
       }
     } catch (error) {
       // No finally-disposal here: an unexplained error keeps every recorded root/handle.
-      emit("fixture-error", { phase: error instanceof FixtureCheckError ? error.message : "unexpected_fixture_error" });
+      owned.caseFailed = true;
+      emit("fixture-error", { phase: error instanceof FixtureCheckError ? error.message : "unexpected_fixture_error",
+        knownOwnership: inspectOwnedState(), originalApplyResult: owned.originalResult });
     }
   };
 }
