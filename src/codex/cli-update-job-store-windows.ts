@@ -427,7 +427,7 @@ async function prepareStore(
   let configPin: bigint;
   let configPrivate = false;
   try {
-    configPin = keep(ctx, relOpen(ctx, parentPin.handle, configName, true, ACCESS_READ, SHARE_DIR));
+    configPin = relOpen(ctx, parentPin.handle, configName, true, ACCESS_READ, SHARE_DIR);
     inspect(ctx, configPin, true);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !opts.createConfigRoot) {
@@ -436,7 +436,7 @@ async function prepareStore(
     }
     // Only a confirmed apply admission may create one absent config-root level.
     mkdirSync(config);
-    configPin = keep(ctx, relOpen(ctx, parentPin.handle, configName, true, ACCESS_READ, SHARE_DIR));
+    configPin = relOpen(ctx, parentPin.handle, configName, true, ACCESS_READ, SHARE_DIR);
     inspect(ctx, configPin, true);
     await hardenSecretDirAsync(config, { required: true });
     configPrivate = true;
@@ -445,7 +445,7 @@ async function prepareStore(
   const jobdirAccess = opts.createJobDir ? ACCESS_DIR_PIN : ACCESS_READ;
   let jobdir: bigint;
   try {
-    jobdir = keep(ctx, relOpen(ctx, configPin, CODEX_CLI_JOB_STORE_DIR, true, jobdirAccess, SHARE_DIR));
+    jobdir = relOpen(ctx, configPin, CODEX_CLI_JOB_STORE_DIR, true, jobdirAccess, SHARE_DIR);
     inspect(ctx, jobdir, true);
     await verifyAcl([{ path: dir, directory: true, policy: "private" }]);
   } catch (error) {
@@ -454,7 +454,7 @@ async function prepareStore(
       throw error;
     }
     mkdirSync(dir);
-    jobdir = keep(ctx, relOpen(ctx, configPin, CODEX_CLI_JOB_STORE_DIR, true, jobdirAccess, SHARE_DIR));
+    jobdir = relOpen(ctx, configPin, CODEX_CLI_JOB_STORE_DIR, true, jobdirAccess, SHARE_DIR);
     inspect(ctx, jobdir, true);
     await hardenSecretDirAsync(dir, { required: true });
     await verifyAcl([{ path: dir, directory: true, policy: "private" }]);
@@ -469,7 +469,7 @@ async function readStoreBody(ctx: Ctx, prepared: Prepared): Promise<string | nul
     // Verify-only opens stay read-only: ACCESS_LEAF carries DELETE, which a
     // read-only-shared pin cannot admit; share-delete is offered so a held
     // delete-capable pin (this process or another trusted writer) can coexist.
-    leaf = keep(ctx, relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_FILE, false, ACCESS_READ, SHARE_LEAF_VERIFY));
+    leaf = relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_FILE, false, ACCESS_READ, SHARE_LEAF_VERIFY);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -499,7 +499,7 @@ async function writeStoreBody(ctx: Ctx, prepared: Prepared, body: string): Promi
   try {
     const fd = openSync(temp, "wx", 0o600);
     try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
-    leaf = keep(ctx, relOpen(ctx, prepared.jobdir, tempName, false, ACCESS_LEAF, SHARE_LEAF));
+    leaf = relOpen(ctx, prepared.jobdir, tempName, false, ACCESS_LEAF, SHARE_LEAF);
     const stat = inspect(ctx, leaf, false);
     if (stat.links !== 1 || stat.size !== bytes) throw unsafe();
     if (!readAll(ctx, leaf, stat.size).equals(Buffer.from(body))) throw unsafe();
@@ -512,8 +512,8 @@ async function writeStoreBody(ctx: Ctx, prepared: Prepared, body: string): Promi
     try {
       // The renamed object is still held by `leaf` with share-read: only a
       // read-access reopen can coexist, which is all the identity/byte proof needs.
-      published = keep(ctx, relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_FILE, false,
-        ACCESS_READ, SHARE_LEAF_VERIFY));
+      published = relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_FILE, false,
+        ACCESS_READ, SHARE_LEAF_VERIFY);
       const fresh = inspect(ctx, published, false);
       if (!sameIdentity(fresh, stat) || fresh.links !== 1 || fresh.size !== bytes) throw unsafe();
       await verifyAcl([{ path: prepared.file, directory: false, policy: "private" }]);
@@ -578,8 +578,8 @@ async function acquireLock(ctx: Ctx, prepared: Prepared): Promise<HeldLock> {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new CodexCliJobStoreBusyError();
     throw error;
   }
-  const lockDir = keep(ctx, relOpen(ctx, prepared.jobdir, prepared.lock.slice(prepared.dir.length + 1), true,
-    ACCESS_DIR_WRITE, SHARE_DIR));
+  const lockDir = relOpen(ctx, prepared.jobdir, prepared.lock.slice(prepared.dir.length + 1), true,
+    ACCESS_DIR_WRITE, SHARE_DIR);
   const lockIdentity = inspect(ctx, lockDir, true);
   const ownerPath = join(prepared.lock, "owner.json");
   const record = JSON.stringify({ version: 1, token: randomUUID() });
@@ -589,7 +589,7 @@ async function acquireLock(ctx: Ctx, prepared: Prepared): Promise<HeldLock> {
   try {
     const fd = openSync(ownerPath, "wx", 0o600);
     try { writeFileSync(fd, record); fsyncSync(fd); } finally { closeSync(fd); }
-    owner = keep(ctx, relOpen(ctx, lockDir, "owner.json", false, ACCESS_LEAF, SHARE_LEAF));
+    owner = relOpen(ctx, lockDir, "owner.json", false, ACCESS_LEAF, SHARE_LEAF);
     ownerIdentity = inspect(ctx, owner, false);
     if (ownerIdentity.links !== 1 || ownerIdentity.size !== recordBytes) throw unsafe();
     if (!readAll(ctx, owner, recordBytes).equals(Buffer.from(record))) throw unsafe();

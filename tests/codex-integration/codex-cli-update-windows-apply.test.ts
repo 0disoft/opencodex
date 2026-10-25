@@ -5,8 +5,9 @@ import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { inspectCodexCliInstall } from "../../src/codex/cli-install-provenance";
 import { holdWindowsCodexCliPlanToolchain, withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-plan-provenance";
-import { openWindowsCliApplyAuthority } from "../../src/codex/cli-update-job-store-windows";
+import { openWindowsCliApplyAuthority, type WindowsApplyAcquisition } from "../../src/codex/cli-update-job-store-windows";
 import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { trackBackgroundWork } from "../../src/lib/background-work";
 import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { fixtureArtifact, fixtureTar } from "../helpers/codex-cli-apply-artifact";
 import { fixturePath, repoPath, repoRoot } from "../helpers/repo-root";
@@ -127,25 +128,54 @@ async function approved(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 native("Windows apply holds distinct prefix lease and private staging, then releases exact owners", async () => {
-  const f = await fixture();
-  const guard = await openWindowsCliApplyAuthority(f.prefix, true);
+  // Register before fixture setup/acquisition can yield. A failed assertion or
+  // unknown native release leaves both the exact root and preload producer held.
+  let settleOwnership!: () => void;
+  trackBackgroundWork("windows apply authority fixture", new Promise<void>(resolve => { settleOwnership = resolve; }));
+  const f = await fixture(undefined, root => liveFixtureRoots.add(root));
+  const acquisitions: WindowsApplyAcquisition[] = [];
+  const acquire = () => openWindowsCliApplyAuthority(f.prefix, true, owner => {
+    acquisitions.push(owner); // Root this acquisition before its first pin is opened.
+    expect(owner.releaseIfClean()).toBe(true);
+  });
+  const guard = await acquire();
+  const original = acquisitions[0]!;
   try {
+    expect(original.releaseIfClean()).toBe(false);
     await guard.createStaging();
     expect(() => guard.verifyIdentitySync()).not.toThrow();
     expect(() => renameSync(f.prefix, f.prefix + "-moved")).toThrow();
     expect(() => renameSync(join(f.prefix, "node_modules", "@openai"), join(f.prefix, "node_modules", "moved"))).toThrow();
-    await expect(openWindowsCliApplyAuthority(f.prefix, true)).rejects.toThrow();
+    await expect(acquire()).rejects.toThrow();
+    expect(acquisitions).toHaveLength(2);
+    expect(acquisitions[1]!.releaseIfClean()).toBe(true);
     await guard.verify(); await guard.removeStaging();
-  } finally { expect(await guard.release()).toBe(true); }
+  } finally {
+    const released = await guard.release(); // One attempt; never repeat a failed close.
+    const pinsClean = original.releaseIfClean();
+    expect(released, JSON.stringify({ pinsClean, lockExists: existsSync(guard.lock) })).toBe(true);
+    expect(pinsClean).toBe(true);
+  }
   expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
-  const replacement = await openWindowsCliApplyAuthority(f.prefix, true);
+  const replacement = await acquire();
+  expect(acquisitions).toHaveLength(3);
+  const replacementAcquisition = acquisitions[2]!;
   try {
+    expect(replacementAcquisition.releaseIfClean()).toBe(false);
     await expect(guard.createStaging()).rejects.toThrow();
     await expect(guard.verify()).rejects.toThrow();
     expect(() => guard.verifyIdentitySync()).toThrow();
     expect(existsSync(join(replacement.lock, "stage"))).toBe(false);
     await replacement.createStaging(); await replacement.removeStaging();
-  } finally { expect(await replacement.release()).toBe(true); }
+  } finally {
+    const released = await replacement.release();
+    const pinsClean = replacementAcquisition.releaseIfClean();
+    expect(released, JSON.stringify({ pinsClean, lockExists: existsSync(replacement.lock) })).toBe(true);
+    expect(pinsClean).toBe(true);
+  }
+  expect(existsSync(replacement.lock)).toBe(false);
+  liveFixtureRoots.delete(f.root);
+  settleOwnership(); // Only fully verified cleanup releases afterEach/preload ownership.
 }, 60000);
 
 native("Windows native installer starts under commit CAS and frees gate before native wait", async () => {
