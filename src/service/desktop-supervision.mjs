@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, win32 } from "node:path";
 
 // Node >=18 also imports this module from bin/ocx.mjs; do not import TS or Bun APIs.
-function run(command, args, timeout = 750) {
+function run(command, args, timeout = 750, env) {
   return execFileSync(command, args, {
-    encoding: "utf8", timeout, maxBuffer: 128 * 1024, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    encoding: "utf8", timeout, env, maxBuffer: 128 * 1024,
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   }).trim();
 }
 
@@ -80,22 +82,44 @@ const WINDOWS_ACQUISITION_TIMEOUT_MS = 3_000;
 const WINDOWS_MIN_ACQUISITION_MS = 250;
 const WINDOWS_DESKTOP_IMAGE = "opencodex-desktop.exe";
 
-/** Mirrors src/update/npm-invocation.mjs: plain ESM cannot reach the FFI system-directory resolver. */
-export function windowsPowerShellPath(env = process.env) {
-  const root = env.SystemRoot ?? env.windir;
-  const base = root && /^[A-Za-z]:\\/.test(root.replaceAll("/", "\\")) ? root : "C:\\Windows";
-  return win32.join(base, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+/** Node cannot call GetSystemDirectoryW; its launcher safely treats the probe as unknown. */
+export function windowsPowerShellPath(resolveSystemDirectory = resolveWindowsSystemDirectory) {
+  const system = resolveSystemDirectory();
+  return win32.join(system, "WindowsPowerShell", "v1.0", "powershell.exe");
+}
+
+function resolveWindowsSystemDirectory() {
+  if (process.platform !== "win32" || !process.versions.bun) throw new Error("trusted Windows resolver unavailable");
+  const { dlopen, ptr } = createRequire(import.meta.url)("bun:ffi");
+  const lib = dlopen("kernel32.dll", { GetSystemDirectoryW: { args: ["ptr", "u32"], returns: "u32" } });
+  let size = 260;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const buffer = new Uint16Array(size);
+    const written = lib.symbols.GetSystemDirectoryW(ptr(buffer.buffer), size);
+    if (written === 0) throw new Error("GetSystemDirectoryW failed");
+    if (written >= size) { size = written + 1; continue; }
+    return String.fromCharCode(...buffer.subarray(0, written)).replace(/[/\\]+$/, "");
+  }
+  throw new Error("Windows system directory is too long");
+}
+
+function windowsPowerShellEnv(systemDirectory) {
+  const root = win32.dirname(systemDirectory);
+  return { SystemRoot: root, WINDIR: root, PATH: systemDirectory, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
 }
 
 function windowsProcessScript(pid) {
   // pid is a validated safe integer; it only ever reaches a numeric WQL filter.
   return [
     "$ErrorActionPreference='Stop'",
+    "$PSModuleAutoLoadingPreference='None'",
+    "Import-Module ([IO.Path]::Combine($PSHOME,'Modules','CimCmdlets','CimCmdlets.psd1')) -Force",
+    "Import-Module ([IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')) -Force",
     "function Row($p) { if ($null -eq $p) { return $null }; [ordered]@{ pid=[string]$p.ProcessId; parent=[string]$p.ParentProcessId; exe=$p.ExecutablePath; session=[string]$p.SessionId; created=$(if ($p.CreationDate) { [string]$p.CreationDate.ToUniversalTime().Ticks } else { $null }) } }",
-    `$c=Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${pid}'`,
+    `$c=CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId=${pid}'`,
     "$p=$null",
-    "if ($c -and [uint32]$c.ParentProcessId -gt 0) { $p=Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + [uint32]$c.ParentProcessId) }",
-    "[ordered]@{ child=(Row $c); parent=(Row $p) } | ConvertTo-Json -Compress",
+    "if ($c -and [uint32]$c.ParentProcessId -gt 0) { $p=CimCmdlets\\Get-CimInstance -ClassName Win32_Process -Filter ('ProcessId=' + [uint32]$c.ParentProcessId) }",
+    "[ordered]@{ child=(Row $c); parent=(Row $p) } | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress",
   ].join("; ");
 }
 
@@ -120,9 +144,11 @@ function windowsRow(row) {
 /** One bounded Win32_Process read of a process and its parent. */
 export function windowsProcessPair(pid, execute = run, options = {}) {
   if (!validPid(pid)) throw new Error("invalid pid");
-  const output = execute(windowsPowerShellPath(options.env), [
+  const resolveSystemDirectory = options.resolveSystemDirectory ?? resolveWindowsSystemDirectory;
+  const systemDirectory = resolveSystemDirectory();
+  const output = execute(windowsPowerShellPath(() => systemDirectory), [
     "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", windowsProcessScript(pid),
-  ], options.timeoutMs ?? WINDOWS_ACQUISITION_TIMEOUT_MS);
+  ], options.timeoutMs ?? WINDOWS_ACQUISITION_TIMEOUT_MS, windowsPowerShellEnv(systemDirectory));
   const raw = JSON.parse(output);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid process pair");
   // A Desktop parent seen before a later field fails validation must keep its veto.
@@ -154,7 +180,7 @@ export function inspectDesktopSupervision(deps = {}) {
   const now = deps.now ?? Date.now;
   const deadline = now() + WINDOWS_INSPECTION_BUDGET_MS;
   const readWindowsPair = deps.windowsProcesses
-    ?? ((pid, options) => windowsProcessPair(pid, execute, { ...options, env: deps.env }));
+    ?? ((pid, options) => windowsProcessPair(pid, execute, { ...options, resolveSystemDirectory: deps.resolveWindowsSystemDirectory }));
   function identity(pid, parent = false) {
     if (platform === "darwin") return processIdentity(pid, execute, parent ? seen : undefined);
     const executable = proc.exe(pid);

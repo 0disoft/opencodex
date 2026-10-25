@@ -166,30 +166,37 @@ test("one inspection shares a 6 s budget: slow successful reads pass, an exhaust
   expect(exhausted.state.reads).toBe(1);
 });
 
-test("the default reader runs one fixed PowerShell under the system root with a numeric filter", () => {
-  const calls: { command: string; args: string[]; timeout?: number }[] = [];
+test("the default reader uses a trusted system directory, disables autoloading and sanitizes its environment", () => {
+  const calls: { command: string; args: string[]; timeout?: number; env?: NodeJS.ProcessEnv }[] = [];
   const output = JSON.stringify({
     child: { pid: "100", parent: "200", exe: PROXY, session: "1", created: "638950000000000002" },
     parent: { pid: "200", parent: "4", exe: APP, session: "1", created: "638950000000000001" },
   });
-  const run = (command: string, args: string[], timeout?: number) => { calls.push({ command, args, timeout }); return output; };
-  expect(windowsProcessPair(100, run, { env: { SystemRoot: "D:\\Win" }, timeoutMs: 1_234 })).toEqual({
+  const run = (command: string, args: string[], timeout?: number, env?: NodeJS.ProcessEnv) => {
+    calls.push({ command, args, timeout, env }); return output;
+  };
+  expect(windowsProcessPair(100, run, { resolveSystemDirectory: () => "D:\\Win\\System32", timeoutMs: 1_234 })).toEqual({
     child: { pid: 100, parent: 200, exe: PROXY, session: 1, created: "638950000000000002" },
     parent: { pid: 200, parent: 4, exe: APP, session: 1, created: "638950000000000001" },
   });
   expect(calls[0]!.command).toBe("D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   expect(calls[0]!.args.slice(0, 4)).toEqual(["-NoProfile", "-NoLogo", "-NonInteractive", "-Command"]);
   expect(calls[0]!.args[4]).toContain("-Filter 'ProcessId=100'");
+  expect(calls[0]!.args[4]).toContain("$PSModuleAutoLoadingPreference='None'");
+  expect(calls[0]!.args[4]).toContain("CimCmdlets\\Get-CimInstance");
+  expect(calls[0]!.env).toEqual({
+    SystemRoot: "D:\\Win", WINDIR: "D:\\Win", PATH: "D:\\Win\\System32", PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  });
   expect(calls[0]!.timeout).toBe(1_234);
-  for (const env of [{}, { SystemRoot: "Windows" }, { SystemRoot: "\\\\server\\share" }]) {
-    expect(windowsPowerShellPath(env)).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-  }
+  expect(windowsPowerShellPath(() => "C:\\Windows\\System32"))
+    .toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
   for (const pid of [0, -1, 1.5, Number.NaN]) expect(() => windowsProcessPair(pid, run)).toThrow("invalid pid");
   expect(calls).toHaveLength(1);
 });
 
 test("through the default reader, a Desktop image with malformed evidence keeps desktopSeen; unreadable output does not", () => {
-  const base = { platform: "win32" as const, readPid: () => 100, readRuntimePortPid: () => 100 };
+  const base = { platform: "win32" as const, readPid: () => 100, readRuntimePortPid: () => 100,
+    resolveWindowsSystemDirectory: () => "C:\\Windows\\System32" };
   const malformed = JSON.stringify({
     child: { pid: "100", parent: "200", exe: PROXY, session: "1", created: "638950000000000002" },
     parent: { pid: "200", parent: "4", exe: APP, session: "1", created: "not-ticks" },
