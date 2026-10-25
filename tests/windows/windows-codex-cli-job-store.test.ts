@@ -371,11 +371,12 @@ describe("Windows CLI update job store backend", () => {
   test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped",
     () => withOwnedFixture("ocx-winjob-restart-", async ({ outer, configDir }) => {
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-restart-001", planId: result.planId, confirmed: true, configDir });
-    let release: () => void = () => {};
+    // The gate resolve exists before the engine callback can be entered: whenever
+    // finally runs, release() settles the gate even if the engine starts late or never.
+    let release!: () => void;
+    const engineGate = new Promise<CodexCliApplyResult>(resolve => { release = () => resolve(result); });
     const releaseStore = holdFixture(outer);
-    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise<CodexCliApplyResult>(resolve => {
-      release = () => resolve(result);
-    }), configDir).finally(releaseStore);
+    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => engineGate, configDir).finally(releaseStore);
     // A status probe may see a transient unsafe_store (e.g. a killed ACL-read child
     // racing the running phase); the poll retries rather than asserting transport.
     const probe = async () => {
