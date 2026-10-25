@@ -347,6 +347,20 @@ native("actual CLI handler reaches production inspector and plan from the proof-
   expect(reached).toBe(true);
 });
 
+// An honest decision is coupled to its own evidence: a clean private prefix the
+// apply authority can pin yields an applicable plan, while a real session or
+// process-table blocker - or an apply path the lane cannot support - yields the
+// matching refusal. The pair is asserted together so neither side can drift.
+function expectPlanDecision(plan: { applicable: boolean; refusal: string | null;
+  session: { state: string; matches: number | null } }): void {
+  expect(plan.applicable).toBe(plan.refusal === null);
+  if (plan.refusal !== null)
+    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  if (plan.refusal === "blocked_active_session") expect(plan.session).toMatchObject({ state: "active" });
+  else if (plan.refusal === "blocked_process_state_unknown") expect(plan.session).toMatchObject({ state: "unknown", matches: null });
+  else expect(plan.session).toMatchObject({ state: "none", matches: 0 });
+}
+
 native("a fresh production Worker rebuilds private Windows plan evidence before reading fixture metadata", async () => {
   const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
   copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
@@ -379,11 +393,11 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
     expect(starts).toBe(1);
     expect(closed).toBe(true);
     expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
-      targetIntegrity: integrity, applicable: false });
+      targetIntegrity: integrity });
     expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
-    // Real process observation may find active/unreadable sessions. Either refusal
-    // is after private-evidence admission and successful fixture metadata resolution.
-    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    // The decision is evaluated after private-evidence admission and successful
+    // fixture metadata resolution; refusal stays allowed only for real blockers.
+    expectPlanDecision(plan);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   } finally {
     // afterEach retains this fixture even if the test times out before this
@@ -435,9 +449,9 @@ async function separateWorkerPlan(f: ReturnType<typeof separateWorkerFixture>, a
 native("a fresh production Worker binds a separate Node/npm metadata vehicle with the launcher arch", async () => {
   const f = separateWorkerFixture(), plan = await separateWorkerPlan(f, "x64");
   expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
-    targetIntegrity: f.integrity, applicable: false });
+    targetIntegrity: f.integrity });
   expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
-  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expectPlanDecision(plan);
   expect(readFileSync(f.marker, "utf8")).toContain("metadata");
   expect(JSON.stringify(plan)).not.toContain(f.root);
 }, 60_000);
@@ -489,8 +503,7 @@ function checkPublishedNodeCliPlan(separateNodeToolchain: boolean) {
   const plan = JSON.parse(run.stdout);
   expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
   expect(plan.targetIntegrity).toBe(integrity);
-  expect(plan.applicable).toBe(false);
-  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expectPlanDecision(plan);
   expect(JSON.stringify(plan)).not.toContain(f.root);
 }
 
