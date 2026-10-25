@@ -15,6 +15,7 @@ type Kernel = WindowsChildNative["k"];
 declare const self: Worker;
 const own: {
   ids?: Ids; root?: string; gate?: string; native?: WindowsChildNative; child?: WindowsCliChild; pipe?: WindowsChildPipe;
+  nativeOwnerId?: string;
   realQuery?: Kernel["QueryInformationJobObject"]; realOverlapped?: Kernel["GetOverlappedResult"]; realClose?: Kernel["CloseHandle"];
   token?: { release(): void }; tokenCount: number; tokenReleases: number;
   sequence: number; stage: string; runSettled: boolean; runInFlight: boolean; recovering: boolean;
@@ -52,15 +53,29 @@ function realJobObservation() {
   if (![0, 258].includes(wait) || !queried) return null;
   return { primarySignaled: wait === 0, activeProcesses: accounting.readUInt32LE(WIN64_CHILD_ABI.activeProcesses) };
 }
+function realPendingRead(): boolean | null {
+  if (own.ids?.caseId === "A4" && own.native && own.pipe && own.realOverlapped && !own.nativeDisposed
+    && own.native.handles.has(own.pipe.handle) && own.native.handles.has(own.pipe.event)) {
+    const ok = own.realOverlapped(own.pipe.handle, ptr(own.pipe.overlapped), ptr(own.pipe.count), 0);
+    const error = ok ? 0 : Number(own.native.k.GetLastError());
+    return !ok && error === 996 && own.pipe.overlapped.readBigUInt64LE(0) === 0x103n;
+  }
+  return null;
+}
 function state() {
   own.stateNonce = crypto.randomUUID();
   return { stateNonce: own.stateNonce, stage: own.stage, runSettled: own.runSettled, runInFlight: own.runInFlight,
+    nativeOwnerId: own.nativeOwnerId, settledUnknown: own.unknownResult?.terminal === false && own.unknownResult.cleanupComplete === false,
+    fixtureElapsedMs: own.fixtureStartedAt === undefined ? null : performance.now() - own.fixtureStartedAt,
     recovering: own.recovering, caseFailed: own.failed, nativeConstruction: own.nativeConstruction,
     nativeDisposed: own.nativeDisposed, knownNativeOwner: !!own.native,
     handles: own.native?.handles.size ?? null, borrowedBuffers: own.native?.borrowedMemory.size ?? null,
     tokenCount: own.tokenCount, tokenReleases: own.tokenReleases, job: realJobObservation(),
     queryFaultInstalled: own.queryFaultInstalled, gateWriteAttempted: own.gateWriteAttempted, gateReleased: own.gateReleased,
     pipePending: own.pipe?.pending ?? null, pipeEOF: own.pipe?.eof ?? null,
+    ioNativePending: realPendingRead(), pendingReadObserved: own.pendingReadObserved,
+    pipeEndsOwned: !!own.native && !!own.pipe && own.native.handles.has(own.pipe.handle)
+      && own.native.handles.has(own.pipe.event) && own.native.handles.has(own.pipe.child),
     buffersStillRooted: !!own.pipe && own.buffer === own.pipe.buffer && own.overlapped === own.pipe.overlapped,
     cancellationAttempted: own.cancellationAttempted, cancellationReturned: own.cancellationReturned ?? null,
     overlappedCompletion: own.overlappedCompletion ?? null };
@@ -79,6 +94,7 @@ async function run(ids: Ids) {
   own.gate = join(own.root, "descendant-release");
   emit("started", { fixtureRoot: own.root, caseName: ids.caseId === "A3" ? "native Job unknown observation" : "overlapped cancellation settlement" });
   const token = lifetime.retain(own); own.tokenCount++;
+  own.nativeOwnerId = crypto.randomUUID();
   let released = false;
   own.token = { release() { if (released) return; released = true; own.tokenCount--; own.tokenReleases++; token.release(); } };
   own.nativeConstruction = "IN_FLIGHT";
@@ -112,7 +128,7 @@ async function run(ids: Ids) {
     own.stage = "UNKNOWN_JOB_RETAINED";
     own.originalResult = Object.freeze({ outcome: "EXPECTED_UNKNOWN", terminal: unknown.terminal,
       cleanupComplete: unknown.cleanupComplete, reason: unknown.reason });
-    emit("native-observation", { faultKind: "SYNTHETIC_QUERY_RETURN_ON_REAL_JOB", primarySignaled: beforeFault.primarySignaled,
+    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, faultKind: "SYNTHETIC_QUERY_RETURN_ON_REAL_JOB", primarySignaled: beforeFault.primarySignaled,
       activeProcesses: beforeFault.activeProcesses, primaryPid: own.child.pid, primaryCreationTime: own.child.creationTime,
       syntheticQueryCalls: own.syntheticQueryCalls, handles: n.handles.size, tokenCount: own.tokenCount });
   } else {
@@ -141,7 +157,7 @@ async function run(ids: Ids) {
       && n.handles.has(pipe.child) && pipe.overlapped.readBigUInt64LE(0) === 0x103n, "REAL_PENDING_READ_NOT_OBSERVED");
     own.pendingReadObserved = true; own.stage = "PENDING_IO_RETAINED";
     own.originalResult = Object.freeze({ outcome: "PENDING_IO", pending: true, cleanupComplete: false });
-    emit("native-observation", { faultKind: "NONE_REAL_PENDING_OVERLAPPED_READ", pending: true,
+    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, faultKind: "NONE_REAL_PENDING_OVERLAPPED_READ", pending: true,
       internalPending: true, bufferBytes: pipe.buffer.length, handles: n.handles.size, tokenCount: own.tokenCount });
   }
   emit("case-result", { result: own.originalResult });
@@ -151,15 +167,19 @@ function restoreQuery() {
   if (own.native && own.realQuery) own.native.k.QueryInformationJobObject = own.realQuery;
   own.queryFaultInstalled = false;
 }
-async function recoverA3() {
+async function recoverA3(expectedOnly: boolean) {
   const n = own.native, child = own.child;
   need(n && child && own.gate, "JOB_OWNER_NOT_AVAILABLE"); restoreQuery();
   if (!child.process) {
+    need(!expectedOnly, "AUTOMATIC_UNSTARTED_CHILD_HOLD");
     need(await cleanupUnstartedWindowsChild(child), "UNSTARTED_CLEANUP_UNVERIFIED");
     own.nativeDisposed = n.dispose();
     return { primarySignaled: false, jobEmpty: false, freshWait: false, pipeEOF: child.pipe.eof, noProcessCreated: true };
   }
   const before = realJobObservation(); need(before, "REAL_JOB_QUERY_UNAVAILABLE");
+  if (expectedOnly) need(!own.failed && own.unknownResult?.terminal === false && own.unknownResult.cleanupComplete === false
+    && before.primarySignaled && before.activeProcesses > 0 && !own.gateWriteAttempted && own.fixtureStartedAt !== undefined
+    && performance.now() - own.fixtureStartedAt < 10_000, "AUTOMATIC_JOB_STATE_CHANGED_HOLD");
   if (!own.gateWriteAttempted) {
     if (before.activeProcesses === 0) fail("DESCENDANT_EXITED_BEFORE_COOPERATIVE_RELEASE");
     else {
@@ -196,23 +216,32 @@ async function recoverA3() {
   return { primarySignaled: true, jobEmpty: true, freshWait, realRequeries, pipeEOF: true, noProcessCreated: false,
     cooperativeReleaseObserved: own.cooperativeReleaseObserved, originalUnknownPreserved: own.unknownResult?.terminal === false };
 }
-async function recoverA4() {
+async function recoverA4(expectedOnly: boolean) {
   const n = own.native, pipe = own.pipe;
   need(n && pipe, "PIPE_OWNER_NOT_AVAILABLE");
   need(own.buffer === pipe.buffer && own.overlapped === pipe.overlapped, "IO_BUFFER_OWNER_CHANGED");
+  if (expectedOnly) need(!own.failed && own.pendingReadObserved && pipe.pending && !own.cancellationAttempted
+    && n.handles.has(pipe.child) && realPendingRead() === true, "AUTOMATIC_PIPE_STATE_CHANGED_HOLD");
   if (pipe.pending && !own.cancellationAttempted) {
     own.cancellationAttempted = true; // Exact pending operation; never automatically issue another request.
     own.cancellationReturned = Boolean(n.k.CancelIoEx(pipe.handle, ptr(pipe.overlapped)));
     own.cancellationError = own.cancellationReturned ? 0 : Number(n.k.GetLastError());
     emit("cancellation-request", { returned: own.cancellationReturned, error: own.cancellationError,
       pendingAfterRequest: pipe.pending, buffersStillRooted: own.buffer === pipe.buffer && own.overlapped === pipe.overlapped });
-    if (!own.cancellationReturned) { fail("CANCEL_REQUEST_NOT_ACCEPTED"); pipe.closeChild(); }
+    if (!own.cancellationReturned) {
+      fail("CANCEL_REQUEST_NOT_ACCEPTED");
+      if (expectedOnly) throw new FixtureError("AUTOMATIC_CANCEL_FAILURE_HOLD");
+    }
   }
+  if (!expectedOnly && pipe.pending && own.cancellationAttempted && own.cancellationReturned === false) pipe.closeChild();
   await until(() => { pipe.pump(() => fail("UNEXPECTED_PIPE_DATA")); return !pipe.pending; }, "IO_COMPLETION_NOT_OBSERVED");
   const completion = own.overlappedCompletion;
   const cancelled = own.cancellationReturned === true && completion?.ok === false
     && completion.error === 995 && !completion.internalPending;
-  if (!cancelled) fail("EXPECTED_ABORTED_IO_COMPLETION_NOT_PROVEN");
+  if (!cancelled) {
+    fail("EXPECTED_ABORTED_IO_COMPLETION_NOT_PROVEN");
+    if (expectedOnly) throw new FixtureError("AUTOMATIC_IO_COMPLETION_CHANGED_HOLD");
+  }
   need(!pipe.pending && pipe.eof && own.buffer === pipe.buffer && own.overlapped === pipe.overlapped, "PIPE_NOT_SETTLED");
   // dispose sees no pending operation, so it cannot issue a second CancelIoEx request.
   await pipe.dispose();
@@ -225,12 +254,12 @@ async function recoverA4() {
     pending: pipe.pending, pipeEOF: pipe.eof, closeWhilePending: own.closeWhilePending,
     nativePipeCloseAfterSettlement: true, buffersUnborrowedAfterSettlement: true, bufferRootsHeldThroughCompletion: true };
 }
-async function recover(nonce: unknown) {
+async function recover(nonce: unknown, expectedOnly = false) {
   need(own.runSettled && !own.runInFlight && !own.recovering && typeof nonce === "string" && nonce === own.stateNonce, "FRESH_STATE_REQUIRED");
   own.stateNonce = undefined; own.recovering = true;
   try {
     own.stage = "EXACT_RECOVERY";
-    if (own.nativeConstruction === "CREATED" && own.native && !own.child && !own.pipe
+    if (!expectedOnly && own.nativeConstruction === "CREATED" && own.native && !own.child && !own.pipe
       && own.native.handles.size === 0 && own.native.borrowedMemory.size === 0) {
       own.nativeDisposed = own.native.dispose();
       need(own.nativeDisposed && own.token, "EMPTY_NATIVE_OWNER_NOT_DISPOSED");
@@ -240,7 +269,7 @@ async function recover(nonce: unknown) {
         caseFailed: true, fixtureRootRetained: true });
       lifetime.finish(); return;
     }
-    const proof = own.ids!.caseId === "A3" ? await recoverA3() : await recoverA4();
+    const proof = own.ids!.caseId === "A3" ? await recoverA3(expectedOnly) : await recoverA4(expectedOnly);
     need(own.nativeDisposed && own.native?.handles.size === 0 && own.native.borrowedMemory.size === 0 && own.token, "OWNED_RESOURCES_NOT_DISPOSED");
     own.token.release(); need(own.tokenCount === 0 && own.tokenReleases === 1, "TOKEN_RELEASE_UNVERIFIED");
     own.stage = "CLEANUP_PROVEN";
@@ -267,7 +296,7 @@ if (Bun.isMainThread === false) {
         else if (input.type === "probe") {
           need(own.runSettled && own.tokenCount === 1, "PROBE_NOT_RETAINED");
           emit("lifetime-probe-ack", { probeNonce: input.probeNonce, tokenCount: own.tokenCount, runSettled: true });
-        } else if (input.type === "recover") await recover(input.stateNonce);
+        } else if (input.type === "recover") await recover(input.stateNonce, input.expectedOnly === true);
         else throw new FixtureError("UNKNOWN_COMMAND");
       }
     } catch (error) { fail(error instanceof FixtureError ? error.message : "UNEXPECTED_FIXTURE_ERROR"); }
