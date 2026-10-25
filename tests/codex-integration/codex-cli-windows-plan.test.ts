@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
@@ -112,8 +112,12 @@ native("a production plan is deterministic while Windows apply stays explicitly 
   expect((await createCodexCliUpdatePlan(deps)).planId).not.toBe(first.planId);
 });
 
-native("a Windows plan id with applicable=false cannot enter a management apply job", async () => {
+native("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const f = fixture();
+  // A TEMP ancestry can be safe on hosted Windows. Create an actual unsupported
+  // config-root reparse point instead of inferring unsafe ACLs from the host path.
+  const ledgerTarget = join(f.root, "ledger-target"); mkdirSync(ledgerTarget);
+  symlinkSync(ledgerTarget, f.deps.configDir, "junction");
   const deps = { inspectionDeps: f.deps,
     resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
     scanProcesses: () => ({ kind: "observed" as const, processes: [] }) };
@@ -134,11 +138,13 @@ native("a Windows plan id with applicable=false cannot enter a management apply 
       syncClaudeAgentDefsBestEffort: async () => {} };
     const response = await handleCodexCliUpdateRoutes(ctx);
     expect(response?.status).toBe(503);
-    expect(await response?.json()).toEqual({ error: "unsupported_store" });
+    expect(await response?.json()).toEqual({ error: "unsafe_store" });
+    expect(existsSync(join(ledgerTarget, "codex-cli-update-jobs"))).toBe(false);
 
     let leaseAttempts = 0, installAttempts = 0;
     const apply = await applyCodexCliUpdate(plan.planId!, { platform: "win32", inspectionDeps: f.deps,
       acquireLease: () => { leaseAttempts += 1; return null; },
+      resolveTarget: deps.resolveTarget, scanProcesses: deps.scanProcesses,
       install: async () => { installAttempts += 1; return { terminal: true, exitCode: 0 }; } });
     expect(apply).toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
     expect(leaseAttempts).toBe(0);
