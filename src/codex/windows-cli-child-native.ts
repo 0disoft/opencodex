@@ -47,10 +47,12 @@ export function securityAttributes(inherit: boolean, descriptor = 0n): Buffer {
   return bytes;
 }
 
+type OwnedDispatch<SymbolsTable> = { -readonly [Key in keyof SymbolsTable]: SymbolsTable[Key] };
+
 /** Owns only handles returned by this invocation, never PID-reopened handles. */
 export class WindowsChildNative {
-  readonly k: Library<typeof KERNEL>["symbols"];
-  readonly a: Library<typeof ADVAPI>["symbols"];
+  readonly k: OwnedDispatch<Library<typeof KERNEL>["symbols"]>;
+  readonly a: OwnedDispatch<Library<typeof ADVAPI>["symbols"]>;
   readonly handles = new Set<bigint>();
   /** Explicit GC roots for pointers stored inside native attribute lists. */
   readonly borrowedMemory = new Set<Buffer>();

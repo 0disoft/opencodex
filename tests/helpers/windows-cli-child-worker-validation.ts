@@ -16,6 +16,7 @@ declare const self: Worker;
 const own: {
   ids?: Ids; root?: string; gate?: string; native?: WindowsChildNative; child?: WindowsCliChild; pipe?: WindowsChildPipe;
   nativeOwnerId?: string;
+  dispatchBoundaryVerified: boolean;
   realQuery?: Kernel["QueryInformationJobObject"]; realOverlapped?: Kernel["GetOverlappedResult"]; realClose?: Kernel["CloseHandle"];
   token?: { release(): void }; tokenCount: number; tokenReleases: number;
   sequence: number; stage: string; runSettled: boolean; runInFlight: boolean; recovering: boolean;
@@ -30,11 +31,49 @@ const own: {
   runInFlight: false, recovering: false, failed: false, nativeConstruction: "NOT_STARTED", nativeDisposed: false,
   queryFaultInstalled: false, syntheticQueryCalls: 0, primaryAndDescendantObserved: false,
   gateWriteAttempted: false, gateReleased: false, cooperativeReleaseObserved: false,
-  cancellationAttempted: false, pendingReadObserved: false, closeWhilePending: false, settledPipeCloses: 0 };
+  cancellationAttempted: false, pendingReadObserved: false, closeWhilePending: false, settledPipeCloses: 0,
+  dispatchBoundaryVerified: false };
 const commands = new Set<string>();
 const lifetime = createCodexCliWorkerLifetime(() => { self.onmessage = null; });
 class FixtureError extends Error {}
 function need(value: unknown, phase: string): asserts value { if (!value) throw new FixtureError(phase); }
+/** Fixture-only runtime check of the repository-owned spread copies; never writes DLL symbols. */
+function verifyOwnedDispatch(n: WindowsChildNative) {
+  const librarySymbols = (name: "kernel" | "advapi"): object => {
+    const library: unknown = Object.getOwnPropertyDescriptor(n, name)?.value;
+    need(library !== null && typeof library === "object", "LIBRARY_BOUNDARY_UNAVAILABLE");
+    const symbols: unknown = Reflect.get(library, "symbols");
+    need(symbols !== null && typeof symbols === "object" && !Array.isArray(symbols), "SYMBOL_BOUNDARY_UNAVAILABLE");
+    return symbols;
+  };
+  const kernelSymbols = librarySymbols("kernel"), advapiSymbols = librarySymbols("advapi");
+  need(n.k !== kernelSymbols && n.a !== advapiSymbols && !Object.is(n.k, n.a)
+    && Object.getOwnPropertyDescriptor(n, "k")?.value === n.k
+    && Object.getOwnPropertyDescriptor(n, "a")?.value === n.a
+    && Object.getPrototypeOf(n.k) === Object.prototype && Object.getPrototypeOf(n.a) === Object.prototype,
+  "DISPATCH_IS_NOT_AN_OWNED_COPY");
+  for (const name of ["QueryInformationJobObject", "GetOverlappedResult", "CloseHandle"] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(n.k, name);
+    need(descriptor && "value" in descriptor && descriptor.writable === true
+      && typeof descriptor.value === "function" && descriptor.value === Reflect.get(kernelSymbols, name), "DISPATCH_SLOT_NOT_WRITABLE_COPY");
+  }
+  const tokenDescriptor = Object.getOwnPropertyDescriptor(n.a, "OpenProcessToken");
+  need(tokenDescriptor && "value" in tokenDescriptor && tokenDescriptor.writable === true
+    && tokenDescriptor.value === Reflect.get(advapiSymbols, "OpenProcessToken"), "ADVAPI_SLOT_NOT_OWNED_COPY");
+  const original = n.k.QueryInformationJobObject;
+  const probe: Kernel["QueryInformationJobObject"] = (...args: Parameters<Kernel["QueryInformationJobObject"]>) => original(...args);
+  let installed = false;
+  try {
+    n.k.QueryInformationJobObject = probe; installed = true; // No call: verify only this copy's write boundary.
+    need(n.k.QueryInformationJobObject === probe && Reflect.get(kernelSymbols, "QueryInformationJobObject") === original,
+      "DISPATCH_PROBE_CHANGED_LIBRARY_SYMBOLS");
+  } finally {
+    if (installed) n.k.QueryInformationJobObject = original;
+  }
+  need(n.k.QueryInformationJobObject === original && Reflect.get(kernelSymbols, "QueryInformationJobObject") === original,
+    "DISPATCH_PROBE_RESTORE_UNVERIFIED");
+  own.dispatchBoundaryVerified = true;
+}
 function emit(type: string, fields: Record<string, unknown> = {}) {
   self.postMessage({ ...own.ids, sequence: ++own.sequence, type, ...fields });
 }
@@ -65,7 +104,8 @@ function realPendingRead(): boolean | null {
 function state() {
   own.stateNonce = crypto.randomUUID();
   return { stateNonce: own.stateNonce, stage: own.stage, runSettled: own.runSettled, runInFlight: own.runInFlight,
-    nativeOwnerId: own.nativeOwnerId, settledUnknown: own.unknownResult?.terminal === false && own.unknownResult.cleanupComplete === false,
+    nativeOwnerId: own.nativeOwnerId, dispatchBoundaryVerified: own.dispatchBoundaryVerified,
+    settledUnknown: own.unknownResult?.terminal === false && own.unknownResult.cleanupComplete === false,
     fixtureElapsedMs: own.fixtureStartedAt === undefined ? null : performance.now() - own.fixtureStartedAt,
     recovering: own.recovering, caseFailed: own.failed, nativeConstruction: own.nativeConstruction,
     nativeDisposed: own.nativeDisposed, knownNativeOwner: !!own.native,
@@ -101,6 +141,7 @@ async function run(ids: Ids) {
   try { own.native = new WindowsChildNative(); own.nativeConstruction = "CREATED"; }
   catch (error) { own.nativeConstruction = "UNKNOWN_FAILURE"; throw error; }
   const n = own.native;
+  verifyOwnedDispatch(n); // A failed descriptor/copy contract stops before any fixture process or pipe opens.
   if (ids.caseId === "A3") {
     own.stage = "STARTING_OWNED_FIXTURE"; own.realQuery = n.k.QueryInformationJobObject;
     own.fixtureStartedAt = performance.now();
@@ -128,7 +169,8 @@ async function run(ids: Ids) {
     own.stage = "UNKNOWN_JOB_RETAINED";
     own.originalResult = Object.freeze({ outcome: "EXPECTED_UNKNOWN", terminal: unknown.terminal,
       cleanupComplete: unknown.cleanupComplete, reason: unknown.reason });
-    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, faultKind: "SYNTHETIC_QUERY_RETURN_ON_REAL_JOB", primarySignaled: beforeFault.primarySignaled,
+    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, dispatchBoundaryVerified: own.dispatchBoundaryVerified,
+      faultKind: "SYNTHETIC_QUERY_RETURN_ON_REAL_JOB", primarySignaled: beforeFault.primarySignaled,
       activeProcesses: beforeFault.activeProcesses, primaryPid: own.child.pid, primaryCreationTime: own.child.creationTime,
       syntheticQueryCalls: own.syntheticQueryCalls, handles: n.handles.size, tokenCount: own.tokenCount });
   } else {
@@ -157,7 +199,8 @@ async function run(ids: Ids) {
       && n.handles.has(pipe.child) && pipe.overlapped.readBigUInt64LE(0) === 0x103n, "REAL_PENDING_READ_NOT_OBSERVED");
     own.pendingReadObserved = true; own.stage = "PENDING_IO_RETAINED";
     own.originalResult = Object.freeze({ outcome: "PENDING_IO", pending: true, cleanupComplete: false });
-    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, faultKind: "NONE_REAL_PENDING_OVERLAPPED_READ", pending: true,
+    emit("native-observation", { nativeOwnerId: own.nativeOwnerId, dispatchBoundaryVerified: own.dispatchBoundaryVerified,
+      faultKind: "NONE_REAL_PENDING_OVERLAPPED_READ", pending: true,
       internalPending: true, bufferBytes: pipe.buffer.length, handles: n.handles.size, tokenCount: own.tokenCount });
   }
   emit("case-result", { result: own.originalResult });
