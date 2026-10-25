@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useT } from "../../i18n/shared";
+import { useI18n } from "../../i18n/shared";
 import { Notice } from "../../ui";
 
 export interface RoleSetting {
@@ -32,7 +32,7 @@ function earliestBefore(group: RoleChange[]): Map<string, RoleSetting> {
 }
 
 export default function LazyCodexRoleHistory({ history, unavailable, busy, restore }: { history: RoleChange[]; unavailable: boolean; busy: boolean; restore: Restore }) {
-  const t = useT();
+  const { locale, t } = useI18n();
   const [restoring, setRestoring] = useState<string | null>(null);
   const [summary, setSummary] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   if (unavailable) return <Notice tone="warn">{t("integrations.lazycodexRoles.history.unavailable")}</Notice>;
@@ -55,7 +55,7 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
       if (!(await restore(role, setting.model ?? undefined, setting.effort, batch))) break;
       count += 1;
     }
-    const time = new Date(group[0]!.at).toLocaleString();
+    const time = new Date(group[0]!.at).toLocaleString(locale);
     setSummary(count === roles.length
       ? { tone: "ok", text: t("integrations.lazycodexRoles.history.restored", { count: String(count), time }) }
       : { tone: "warn", text: t("integrations.lazycodexRoles.history.partial", { count: String(count), total: String(roles.length), role: roles[count]![0] }) });
@@ -70,7 +70,7 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
       <ul>
         {groupByBatch(history).map(group => (
           <li key={group[0]!.batch}>
-            <span className="integration-meta">{new Date(group[0]!.at).toLocaleString()}</span>
+            <span className="integration-meta">{new Date(group[0]!.at).toLocaleString(locale)}</span>
             <ul>
               {group.map(change => (
                 <li key={`${change.at}-${change.role}`}>

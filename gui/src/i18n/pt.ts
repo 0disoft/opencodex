@@ -2508,7 +2508,7 @@ export const pt: Record<TKey, string> = {
   "integrations.lazycodexRoles.omoFailed": "{role} agora usa {model}, mas não foi possível gravar o omo.jsonc.",
   "integrations.lazycodexRoles.retryMirror": "Tentar omo.jsonc novamente",
   "integrations.lazycodexRoles.history.title": "Histórico de alterações",
-  "integrations.lazycodexRoles.history.hint": "Cada gravação e atribuição automática desta seção aparece aqui. Restaurar grava de volta o modelo e o esforço anteriores como uma gravação comum, que também aparece aqui. Um papel que não tinha modelo fixado mantém o atual; só o esforço volta.",
+  "integrations.lazycodexRoles.history.hint": "As 50 gravações e atribuições automáticas mais recentes desta seção aparecem aqui, agrupadas por ação inteira. Restaurar grava de volta o modelo e o esforço anteriores como uma gravação comum, que também aparece aqui. Um papel que não tinha modelo fixado mantém o atual; só o esforço volta.",
   "integrations.lazycodexRoles.history.unavailable": "Não foi possível ler o histórico de alterações, por isso Restaurar não está disponível. A edição de papéis continua funcionando.",
   "integrations.lazycodexRoles.history.restore": "Restaurar",
   "integrations.lazycodexRoles.history.restored": "{count} papel(is) restaurado(s) ao estado anterior a {time}.",

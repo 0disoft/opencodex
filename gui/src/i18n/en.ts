@@ -2537,7 +2537,7 @@ export const en = {
   "integrations.lazycodexRoles.omoFailed": "{role} now runs on {model}, but omo.jsonc could not be written.",
   "integrations.lazycodexRoles.retryMirror": "Retry omo.jsonc",
   "integrations.lazycodexRoles.history.title": "Change history",
-  "integrations.lazycodexRoles.history.hint": "Each save and auto-assign in this section is listed here. Restore writes the earlier model and effort back as an ordinary save, so it is listed too. A role that had no model pin keeps its current one; only its effort goes back.",
+  "integrations.lazycodexRoles.history.hint": "The newest 50 saves and auto-assigns in this section are listed here, kept in whole batches. Restore writes the earlier model and effort back as an ordinary save, so it is listed too. A role that had no model pin keeps its current one; only its effort goes back.",
   "integrations.lazycodexRoles.history.unavailable": "The change history could not be read, so Restore is unavailable. Role editing still works.",
   "integrations.lazycodexRoles.history.restore": "Restore",
   "integrations.lazycodexRoles.history.restored": "Restored {count} role(s) to how they were before {time}.",

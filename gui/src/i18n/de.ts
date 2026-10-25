@@ -1906,7 +1906,7 @@ export const de: Record<TKey, string> = {
   "integrations.lazycodexRoles.omoFailed": "{role} läuft jetzt mit {model}, aber omo.jsonc konnte nicht geschrieben werden.",
   "integrations.lazycodexRoles.retryMirror": "omo.jsonc erneut versuchen",
   "integrations.lazycodexRoles.history.title": "Änderungsverlauf",
-  "integrations.lazycodexRoles.history.hint": "Jedes Speichern und jede automatische Zuweisung in diesem Abschnitt wird hier aufgeführt. Wiederherstellen schreibt das frühere Modell und den früheren Aufwand wie ein normales Speichern zurück und wird ebenfalls aufgeführt. Eine Rolle ohne frühere Modellbindung behält ihr aktuelles Modell; nur der Aufwand wird zurückgesetzt.",
+  "integrations.lazycodexRoles.history.hint": "Hier stehen die letzten 50 Speichervorgänge und automatischen Zuweisungen dieses Abschnitts, jeweils als ganze Aktion. Wiederherstellen schreibt das frühere Modell und den früheren Aufwand wie ein normales Speichern zurück und wird ebenfalls aufgeführt. Eine Rolle ohne frühere Modellbindung behält ihr aktuelles Modell; nur der Aufwand wird zurückgesetzt.",
   "integrations.lazycodexRoles.history.unavailable": "Der Änderungsverlauf konnte nicht gelesen werden, daher ist Wiederherstellen nicht verfügbar. Rollen lassen sich weiterhin bearbeiten.",
   "integrations.lazycodexRoles.history.restore": "Wiederherstellen",
   "integrations.lazycodexRoles.history.restored": "{count} Rolle(n) auf den Stand vor {time} zurückgesetzt.",

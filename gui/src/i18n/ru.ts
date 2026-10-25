@@ -2450,7 +2450,7 @@ export const ru: Record<TKey, string> = {
   "integrations.lazycodexRoles.omoFailed": "{role} теперь работает на {model}, но записать omo.jsonc не удалось.",
   "integrations.lazycodexRoles.retryMirror": "Повторить запись omo.jsonc",
   "integrations.lazycodexRoles.history.title": "История изменений",
-  "integrations.lazycodexRoles.history.hint": "Здесь перечислены все сохранения и автоназначения в этом разделе. Восстановление записывает прежние модель и усилие как обычное сохранение и тоже попадает сюда. Роль, у которой раньше не было закреплённой модели, сохраняет текущую; возвращается только усилие.",
+  "integrations.lazycodexRoles.history.hint": "Здесь перечислены последние 50 сохранений и автоназначений в этом разделе, целыми действиями. Восстановление записывает прежние модель и усилие как обычное сохранение и тоже попадает сюда. Роль, у которой раньше не было закреплённой модели, сохраняет текущую; возвращается только усилие.",
   "integrations.lazycodexRoles.history.unavailable": "Не удалось прочитать историю изменений, поэтому восстановление недоступно. Редактирование ролей по-прежнему работает.",
   "integrations.lazycodexRoles.history.restore": "Восстановить",
   "integrations.lazycodexRoles.history.restored": "Восстановлено ролей: {count}, состояние до {time}.",
