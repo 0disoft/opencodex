@@ -371,31 +371,35 @@ describe("Windows CLI update job store backend", () => {
   test.skipIf(!winOnly)("a restarted reader reports an unfinished owner unknown without claiming it stopped",
     () => withOwnedFixture("ocx-winjob-restart-", async ({ outer, configDir }) => {
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-restart-001", planId: result.planId, confirmed: true, configDir });
-    // The gate resolve exists before the engine callback can be entered: whenever
-    // finally runs, release() settles the gate even if the engine starts late or never.
+    // Both resolves exist before the engine callback can be entered: entered marks
+    // that begin committed the running revision, and whenever finally runs release()
+    // settles the engine even if the engine starts late or never.
+    let entered!: () => void;
     let release!: () => void;
+    const engineEntered = new Promise<void>(resolve => { entered = resolve; });
     const engineGate = new Promise<CodexCliApplyResult>(resolve => { release = () => resolve(result); });
     const releaseStore = holdFixture(outer);
-    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => engineGate, configDir).finally(releaseStore);
-    // A status probe may see a transient unsafe_store (e.g. a killed ACL-read child
-    // racing the running phase); the poll retries rather than asserting transport.
-    const probe = async () => {
-      try { return await readCodexCliUpdateJob(accepted.job.jobId, configDir); }
-      catch { return null; }
-    };
+    const pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation,
+      () => { entered(); return engineGate; }, configDir).finally(releaseStore);
     try {
-      // Bounded wall-time poll that also watches pending's own settlement: a failed
-      // begin resolves early with the queued DTO, so the job never reads "running".
-      let settled: Awaited<typeof pending> | undefined;
-      void pending.then(value => { settled = value; }, () => { settled = null; });
-      const deadline = Date.now() + 120_000;
-      let seen: Awaited<ReturnType<typeof probe>> = null;
-      while (settled === undefined && Date.now() < deadline) {
-        seen = await probe();
-        if (seen?.status === "running") break;
-        await Bun.sleep(10);
-      }
-      expect(settled !== undefined ? settled : seen).toMatchObject({ status: "running", ownerState: "active" });
+      // Wait on the causal precondition instead of polling the store for its
+      // projection: engine entry means begin committed "running" with live+started
+      // registered, so a single read at that point is stable evidence. A failed
+      // begin settles pending early with its read-back DTO (production swallows the
+      // begin error), so that DTO or error is asserted as-is; the 120s deadline
+      // still bounds a begin that neither settles nor commits.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const observation = await Promise.race([
+        engineEntered.then(() => "entered" as const),
+        pending.then(() => "settled" as const, () => "settled" as const),
+        new Promise<"timeout">(resolve => { deadline = setTimeout(() => resolve("timeout"), 120_000); }),
+      ]);
+      if (deadline) clearTimeout(deadline);
+      const observed = observation === "entered"
+        ? await readCodexCliUpdateJob(accepted.job.jobId, configDir)
+        : observation === "settled" ? await pending
+        : null;
+      expect(observed).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)};
         console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
