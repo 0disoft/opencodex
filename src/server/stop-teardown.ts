@@ -87,7 +87,9 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   // A connection owns its integrations across stop/start, even for a successful API stop.
   // This is persisted authority, not a caller's request to skip an obligation it owns.
   const connection = (await import("../client/state")).readClientConnectionState();
-  if (connection.kind === "connected") {
+  // A Link Child's route is an unauthenticated loopback listener. Once this process exits,
+  // preserving that route would let another local process claim the released port.
+  if (connection.kind === "connected" && connection.value.transport !== "link") {
     return {
       success: true,
       message: "Proxy stopping; connection-owned Codex routing, catalog and Grok config preserved. Run `ocx disconnect` to release them.",

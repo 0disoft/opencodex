@@ -516,6 +516,8 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+Ordinary signal shutdown passes the CLI's idempotent exit cleanup to `drainAndShutdown` in `src/server/lifecycle.ts`: its drain-finally block calls the synchronous-only `() => undefined` hook before listener stop. Promise-returning hooks are outside this contract; there is no asynchronous cleanup wait. Listener stop and startup-lifecycle release still run if cleanup throws. Restart callers omit that hook and retain their existing routing-preservation decisions; receipt-backed stop deferral remains owned by the stopping client. `tests/service/shutdown-drain.test.ts` covers the hook with a real loopback listener and the CLI signal handler.
+
 During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and `src/service/linux-linger.ts` observes boot lingering without changing it; enabled, disabled and unknown states receive distinct install advice. Desktop startup distinguishes enabled next-login registration from current loaded state, preserving identity/disabled/supervisor checks. `src/cli/hub-disable.ts` changes persisted hub settings only, prints Desktop/service/manual restart guidance and reminds the operator to review external publishing to old ports.
 an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."

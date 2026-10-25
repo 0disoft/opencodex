@@ -93,10 +93,10 @@ async function runParentStop(options: {
 
 describe("parent CLI shared teardown completion", () => {
   test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
-    const first = await runParentStop({ receipt: true, clientTransport: "link", serverTeardown: true, json: true,
+    const first = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
     const before = readFileSync(join(home, "config.json"), "utf8");
-    const second = await runParentStop({ receipt: true, clientTransport: "link", alreadyStopped: true, json: true,
+    const second = await runParentStop({ receipt: true, clientTransport: "hub", alreadyStopped: true, json: true,
       response: null, restore: restoreResult(true) });
     expect(first.exitCode).toBe(0);
     expect(second.exitCode, second.stderr).toBe(0);
@@ -170,7 +170,7 @@ describe("parent CLI shared teardown completion", () => {
   });
   for (const clientServer of ["legacy", "unknown", "wrong-pid", "malformed", "oversized", "unauthorized", "redirect", "body-timeout"] as const) {
     test(`connected stop refuses ${clientServer} preservation before service or POST`, async () => {
-      const outcome = await runParentStop({ receipt: true, clientTransport: "link", clientServer, json: true,
+      const outcome = await runParentStop({ receipt: true, clientTransport: "hub", clientServer, json: true,
         response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
       expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
       expect(outcome.nonce).toBeUndefined();
@@ -189,10 +189,10 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode).toBe(1);
     });
   }
-  test("actual startup exit cleanup preserves freshly connected routing after a signal or API exit", async () => {
+  test("actual Link Child exit cleanup attempts native and Grok restoration", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
       response: null, restore: restoreResult(true) });
-    expect(outcome.calls).toMatchObject({ native: 0, grok: 0, service: 0, cleared: 0, killed: 0 });
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, service: 0, cleared: 0, killed: 0 });
     expect(outcome.exitCode).toBe(0);
   });
   test("ordinary startup exit cleanup retains native and Grok restoration", async () => {
@@ -200,8 +200,8 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.calls).toMatchObject({ native: 1, grok: 1, service: 0 });
     expect(outcome.exitCode).toBe(0);
   });
-  test("PID-identified native client keeps the 404 to signal path", async () => {
-    const outcome = await runParentStop({ receipt: true, clientTransport: "link", nativeSignal: true, json: true,
+  test("PID-identified hub client keeps the 404 to signal path", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", nativeSignal: true, json: true,
       status: 404, response: { error: "not found" }, restore: restoreResult(true) });
     expect(outcome.calls).toMatchObject({ service: 1, killed: 1, native: 0, grok: 0 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
@@ -214,29 +214,34 @@ describe("parent CLI shared teardown completion", () => {
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
     expect(outcome.exitCode).toBe(0);
   });
-  // #7563: nothing on a connected client writes its Codex routing, catalog or Grok block back
-  // on start, so a stop that tore them down left them torn down.
-  for (const clientTransport of ["link", "hub"] as const) {
-    test(`a successful ${clientTransport} API stop preserves integrations and reports skipped JSON`, async () => {
-      const outcome = await runParentStop({ receipt: true, clientTransport, serverTeardown: true, json: true,
-        response: null, restore: restoreResult(true) });
-      expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
-      expect(outcome.nonce).toBeUndefined();
-      expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
-      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
-      expect(outcome.exitCode, outcome.stderr).toBe(0);
-    });
+  // #7563: hub clients route to an authenticated remote origin and preserve that routing on stop.
+  test("a successful hub API stop preserves integrations and reports skipped JSON", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
+      response: null, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+  });
 
-    test(`a ${clientTransport} native client stop leaves the connection's integrations and claims no receipt`, async () => {
-      const outcome = await runParentStop({ receipt: true, clientTransport,
-        response: { error: "not found" }, status: 404, restore: restoreResult(true) });
-      expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
-      expect(outcome.nonce).toBeUndefined();
-      expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
-      expect(outcome.stdout).toContain("this " + (clientTransport === "link" ? "Remote Link Child" : "hub client") + "'s connection owns them");
-      expect(outcome.exitCode, outcome.stderr).toBe(0);
-    });
-  }
+  test("a hub native client stop leaves the connection's integrations and claims no receipt", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub",
+      response: { error: "not found" }, status: 404, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
+    expect(outcome.stdout).toContain("this hub client's connection owns them");
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+  });
+
+  test("a successful Link Child stop completes the parent's receipt-backed restoration", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", serverTeardown: true, json: true,
+      response: null, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, cleared: 1 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "restored" });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+  });
 
   test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
@@ -439,26 +444,36 @@ describe("performStopTeardown", () => {
     expect(await response!.json()).toEqual({ schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid });
     expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
   });
-  for (const transport of ["hub", "link"] as const) {
-    test(`persisted ${transport} ownership precedes receipt deferral and leaves its receipt intact`, async () => {
-      connectClient(transport);
-      const { claimPendingTeardown, readPendingTeardown } = await import("../../src/config/pending-teardown");
-      const receipt = claimPendingTeardown(ENDPOINT, "exact");
-      let restored = 0;
-      let stripped = 0;
-      for (const query of ["", `?deferSharedTeardown=1&teardownNonce=${receipt.nonce}`]) {
-        const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop${query}`), {
-          restoreNativeCodex: async () => { restored++; return restoreResult(true); },
-          stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
-        });
-        expect(body).toMatchObject({ success: true, sharedTeardown: "not-owned" });
-        expect(body.message).toContain("ocx disconnect");
-      }
-      expect(restored).toBe(0);
-      expect(stripped).toBe(0);
-      expect(readPendingTeardown(receipt.nonce).state).toBe("valid");
+  test("persisted hub ownership precedes receipt deferral and leaves its receipt intact", async () => {
+    connectClient("hub");
+    const { claimPendingTeardown, readPendingTeardown } = await import("../../src/config/pending-teardown");
+    const receipt = claimPendingTeardown(ENDPOINT, "exact");
+    let restored = 0;
+    let stripped = 0;
+    for (const query of ["", `?deferSharedTeardown=1&teardownNonce=${receipt.nonce}`]) {
+      const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop${query}`), {
+        restoreNativeCodex: async () => { restored++; return restoreResult(true); },
+        stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
+      });
+      expect(body).toMatchObject({ success: true, sharedTeardown: "not-owned" });
+      expect(body.message).toContain("ocx disconnect");
+    }
+    expect(restored).toBe(0);
+    expect(stripped).toBe(0);
+    expect(readPendingTeardown(receipt.nonce).state).toBe("valid");
+  });
+
+  test("persisted Link ownership does not preserve an unauthenticated loopback route", async () => {
+    connectClient("link");
+    let restored = 0;
+    let stripped = 0;
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      restoreNativeCodex: async () => { restored++; return restoreResult(true); },
+      stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
     });
-  }
+    expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
+    expect([restored, stripped]).toEqual([1, 1]);
+  });
 
   test("a hub server without a client connection still restores its own integrations", async () => {
     writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "hub" }));
