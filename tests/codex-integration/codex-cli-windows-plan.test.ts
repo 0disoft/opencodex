@@ -356,7 +356,11 @@ function expectPlanDecision(plan: { applicable: boolean; refusal: string | null;
   expect(plan.applicable).toBe(plan.refusal === null);
   if (plan.refusal !== null)
     expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
-  if (plan.refusal === "blocked_active_session") expect(plan.session).toMatchObject({ state: "active" });
+  if (plan.refusal === "blocked_active_session") {
+    expect(plan.session).toMatchObject({ state: "active" });
+    expect(Number.isInteger(plan.session.matches)).toBe(true);
+    expect(plan.session.matches).toBeGreaterThan(0);
+  }
   else if (plan.refusal === "blocked_process_state_unknown") expect(plan.session).toMatchObject({ state: "unknown", matches: null });
   else expect(plan.session).toMatchObject({ state: "none", matches: 0 });
 }
