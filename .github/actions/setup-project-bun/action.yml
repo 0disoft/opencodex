@@ -8,7 +8,7 @@ description: >-
 # (#6713 run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9). It moved from 1.4.0 to
 # 1.4.3 for oven-sh/bun#44581: 1.4.0's Bun.spawnSync could lose a child's exit after
 # finalizers ran inside an earlier call and spin past its own timeout (#4956).
-# Both package pins are 1.4.4; runtime and test-runner roles remain independently validated.
+# Both roles now default to the package's 1.4.4 security transition, retaining role validation.
 # Promotion requires a green full cross-platform lane=all run on the exact candidate head.
 inputs:
   role:
