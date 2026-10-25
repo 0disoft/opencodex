@@ -37,9 +37,11 @@ const owned: {
   protectionVerified?: boolean;
   stage: string; runSettled: boolean; runInFlight: boolean; caseFailed: boolean; stateNonce?: string;
   originalResult?: CodexCliApplyResult; faultError?: string;
+  preparation: string; planning: string; flagsLifecycle: string; applyInvoked: boolean; retentionAdopted: boolean;
   applyFinished: boolean; recoveryStarted: boolean; sequence: number;
 } = { tokenCount: 0, releaseCount: 0, closeAttempts: 0, applyFinished: false, recoveryStarted: false, sequence: 0,
-  stage: "BEFORE_RUN", runSettled: false, runInFlight: false, caseFailed: false };
+  stage: "BEFORE_RUN", runSettled: false, runInFlight: false, caseFailed: false,
+  preparation: "NOT_STARTED", planning: "NOT_STARTED", flagsLifecycle: "NOT_LOADED", applyInvoked: false, retentionAdopted: false };
 const commandIds = new Set<string>();
 function emit(type: string, fields: Record<string, unknown> = {}) {
   self.postMessage({ ...owned.ids, sequence: ++owned.sequence, type, ...fields });
@@ -55,6 +57,13 @@ function handleFlags(): number {
   return value.readUInt32LE(0);
 }
 const lifetime = createCodexCliWorkerLifetime(() => { self.onmessage = null; });
+function closeFlagsLibrary() {
+  need(owned.flags && owned.flagsLifecycle === "OPEN", "auxiliary_library_not_proven_open");
+  owned.flagsLifecycle = "CLOSING";
+  try { owned.flags.close(); }
+  catch (error) { owned.flagsLifecycle = "UNKNOWN_CLOSE_FAILURE"; throw error; }
+  owned.flags = undefined; owned.flagsLifecycle = "CLOSED";
+}
 function cleanupReceipt() {
   need(owned.context && owned.prefix, "missing_context");
   return {
@@ -141,13 +150,25 @@ async function run(ids: Ids) {
   owned.ids = ids;
   owned.stage = "PREPARING_FIXTURE";
   need(process.platform === "win32" && process.arch === "x64", "native_platform_unavailable");
-  const deps = await prepareFixture();
-  const plan = await createCodexCliUpdatePlan(deps);
+  owned.preparation = "IN_FLIGHT";
+  let deps: Awaited<ReturnType<typeof prepareFixture>>;
+  try { deps = await prepareFixture(); owned.preparation = "COMPLETED"; }
+  catch (error) { owned.preparation = "FAILED"; throw error; }
+  owned.planning = "IN_FLIGHT";
+  owned.stage = "PLANNING";
+  let plan: Awaited<ReturnType<typeof createCodexCliUpdatePlan>>;
+  try { plan = await createCodexCliUpdatePlan(deps); owned.planning = "RETURNED"; }
+  catch (error) { owned.planning = "THREW"; throw error; }
   need(plan.applicable && plan.planId, "fixture_plan_not_applicable");
-  owned.flags = dlopen("kernel32.dll", FLAGS);
+  owned.flagsLifecycle = "LOADING";
+  owned.stage = "AUXILIARY_NATIVE_LOAD";
+  try { owned.flags = dlopen("kernel32.dll", FLAGS); owned.flagsLifecycle = "OPEN"; }
+  catch (error) { owned.flagsLifecycle = "UNKNOWN_LOAD_FAILURE"; throw error; }
   owned.stage = "APPLY_ACQUISITION";
+  owned.applyInvoked = true;
   const result = await applyCodexCliUpdate(plan.planId, { ...deps,
     retainExecution: anchor => {
+      owned.retentionAdopted = true;
       const token = lifetime.retain(anchor); owned.tokenCount++;
       let released = false;
       owned.token = { release() { if (released) return; released = true; owned.tokenCount--; owned.releaseCount++; token.release(); } };
@@ -169,7 +190,7 @@ async function run(ids: Ids) {
   emit("apply-result", { result }); // Immutable first outcome; recovery never republishes it.
   if (ids.caseId === "A2") {
     need(owned.context.pins.remaining === 0 && owned.tokenCount === 0 && owned.releaseCount === 1, "counterarm_cleanup_unverified");
-    owned.flags.close(); owned.flags = undefined;
+    closeFlagsLibrary();
     emit("cleanup-receipt", cleanupReceipt());
   }
   lifetime.finish();
@@ -184,11 +205,34 @@ function inspectOwnedState() {
     runInFlight: owned.runInFlight,
     stateNonce: owned.stateNonce, knownOwnedPin: !!owned.context && owned.handle !== undefined,
     remainingPins: owned.context?.pins.remaining ?? 0, protection, tokenCount: owned.tokenCount,
-    hasAcquisition: !!owned.acquisition, flagsLibraryOpen: !!owned.flags };
+    hasAcquisition: !!owned.acquisition, flagsLibraryOpen: !!owned.flags,
+    preparation: owned.preparation, planning: owned.planning, flagsLifecycle: owned.flagsLifecycle,
+    applyInvoked: owned.applyInvoked, retentionAdopted: owned.retentionAdopted };
+}
+function recoverNoAcquisition() {
+  // This is evidence of fixture/apply acquisition scope only, not an audit of
+  // every internal native handle used by the already-returned production planner.
+  need(owned.preparation === "COMPLETED" && owned.planning === "RETURNED"
+    && !owned.applyInvoked && !owned.retentionAdopted && !owned.acquisition && !owned.context
+    && !owned.token && owned.handle === undefined && owned.tokenCount === 0
+    && owned.releaseCount === 0 && owned.closeAttempts === 0 && owned.prefix, "no_acquisition_not_proven");
+  need((owned.flagsLifecycle === "NOT_LOADED" && !owned.flags) || (owned.flagsLifecycle === "OPEN" && owned.flags), "auxiliary_load_state_unknown");
+  if (owned.flags) closeFlagsLibrary();
+  need(!existsSync(join(owned.prefix, ".ocx-codex-cli-apply.lock")), "unexpected_pre_acquisition_lock");
+  emit("cleanup-receipt", {
+    cleanupBranch: "NO_ACQUISITION_PREPARATION_SETTLED", preparation: owned.preparation, planning: owned.planning,
+    flagsLifecycle: owned.flagsLifecycle, applyInvoked: false, retentionAdopted: false,
+    childCount: 0, lockCreated: false, stagingCreated: false, nativeHandleCount: 0,
+    authorityPinCount: 0, retentionTokenCount: 0, tokenReleaseCount: 0, protectionCleared: true,
+    leaseDisposition: "NOT_CREATED", stagingDisposition: "NOT_CREATED", toolchainReleased: "NOT_ACQUIRED",
+    nativeHandleScope: "FIXTURE_APPLY_ACQUISITION_ONLY", planningNativeInternals: "RETURNED_NOT_EXHAUSTIVELY_AUDITED",
+  });
+  lifetime.finish();
 }
 function recover(stateNonce: unknown) {
   need(owned.runSettled && !owned.runInFlight && typeof stateNonce === "string" && stateNonce === owned.stateNonce, "fresh_inspect_required");
   owned.stateNonce = undefined; // Consumed before action; uncertain actions are never auto-replayed.
+  if (!owned.acquisition && !owned.context && !owned.token) { recoverNoAcquisition(); return; }
   need(owned.context && owned.acquisition && owned.token, "recovery_owner_missing");
   restoreInstrumentation();
   owned.stage = "EXACT_RECOVERY";
@@ -203,7 +247,7 @@ function recover(stateNonce: unknown) {
     need(owned.context.pins.release(owned.handle, owned.context.kernel), "explicit_exact_pin_release_failed");
   }
   need(owned.context.pins.remaining === 0, "pins_not_empty_after_recovery");
-  if (owned.flags) { owned.flags.close(); owned.flags = undefined; }
+  if (owned.flags) closeFlagsLibrary();
   owned.protected = false;
   need(owned.acquisition.releaseIfClean(owned.token), "token_release_not_clean");
   need(owned.tokenCount === 0 && owned.releaseCount === 1, "token_release_count_mismatch");
