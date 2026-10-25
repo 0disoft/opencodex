@@ -175,8 +175,7 @@ describe("process-wide selection commit gate and cancellation fence", () => {
   test("a rejected authority acquisition roots failed pins before any returned authority exists", () => {
     const pins = new WindowsApplyAuthorityPins();
     let fault = true, closes = 0, detached = 0;
-    const kernel = { symbols: { CloseHandle: () => { closes++; return fault ? 0 : 1; } } }
-      as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
+    const kernel = { symbols: { CloseHandle: () => { closes++; return fault ? 0 : 1; } } } as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
     const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
     const anchor: { acquisition?: WindowsApplyAcquisition } = {};
     const token = lifetime.retain(anchor);
@@ -203,8 +202,7 @@ describe("process-wide selection commit gate and cancellation fence", () => {
   test("a failed pin close keeps its lifetime token without an automatic close retry", () => {
     const pins = new WindowsApplyAuthorityPins(), handle = pins.keep(123n);
     let attempts = 0, fault = true, detached = 0;
-    const kernel = { symbols: { CloseHandle: () => { attempts++; return fault ? 0 : 1; } } }
-      as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
+    const kernel = { symbols: { CloseHandle: () => { attempts++; return fault ? 0 : 1; } } } as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
     const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
     const token = lifetime.retain(pins);
     expect(pins.release(handle, kernel)).toBe(false);
