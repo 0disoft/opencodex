@@ -11,23 +11,24 @@ import { withWindowsCodexCliPlanToolchain } from "../../src/codex/cli-windows-pl
 import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import { setWindowsInstallationFilesOpenedForTests, setWindowsInstallationFilesReadForTests } from "../../src/codex/windows-installation-files";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
+import { trackBackgroundWork } from "../../src/lib/background-work";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
 const liveWorkerRoots = new Set<string>();
-afterEach(() => {
+afterEach(async () => {
   initializeNodeLauncherContext(["bun", "cli"], {});
   setWindowsInstallationFilesOpenedForTests();
   setWindowsInstallationFilesReadForTests();
   for (const root of roots.splice(0)) {
-    // A test timeout does not cancel its async body. Keep even that body's
-    // fixture owned until a real Worker close, never remove beneath native I/O.
+    // A test timeout does not cancel its async body. Retain fixtures until a real
+    // Worker close, or external reconciliation of an unsettled CLI process tree.
     if (liveWorkerRoots.has(root)) { roots.push(root); continue; }
-    removeTreeWithRetry(root);
+    await removeTreeAfterBackgroundWork(root);
   }
 });
 // npm's independent cmd-shim fixture; no candidate is ever executed.
@@ -329,7 +330,11 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
         // Pin this integration to current source, not a leftover generated bundle.
         worker = new Worker(url, { type: "module" });
         liveWorkerRoots.add(f.root);
-        worker.addEventListener("close", () => { closed = true; liveWorkerRoots.delete(f.root); }, { once: true });
+        const actualClose = Promise.withResolvers<void>();
+        void trackBackgroundWork("windows-plan-fixture-worker-close", actualClose.promise);
+        worker.addEventListener("close", () => {
+          closed = true; liveWorkerRoots.delete(f.root); actualClose.resolve();
+        }, { once: true });
         return worker;
       },
     });
@@ -350,6 +355,7 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
 }, 60_000);
 
 native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", () => {
+  const started = performance.now();
   const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
   const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
   const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
@@ -365,6 +371,15 @@ native("published Node CLI uses the production inspector and observed toolchain 
     env: { ...process.env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
       OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
   });
+  if (run.error || run.status !== 0 || run.signal) {
+    // A failed synchronous result does not prove Node/Bun descendants have exited.
+    liveWorkerRoots.add(f.root);
+    // Keep the preload's ancestor sandbox too; only external ownership checks can release it.
+    void trackBackgroundWork("windows-plan-fixture-cli-unsettled", new Promise<void>(() => {}));
+    console.error(JSON.stringify({ layout: "prefix-local",
+      elapsedMs: Math.round(performance.now() - started), status: run.status, signal: run.signal,
+      errorCode: (run.error as NodeJS.ErrnoException | undefined)?.code ?? null }));
+  }
   expect({ error: run.error ?? null, status: run.status, signal: run.signal,
     stdout: run.stdout?.trim() ?? null, stderr: run.stderr?.trim() ?? null })
     .toMatchObject({ error: null, status: 0 });
