@@ -15,6 +15,11 @@ import type { ManagementPrincipal } from "./management-auth";
 
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
+// A verified receipt transfers shared restoration to the parent until this process exits.
+// Keep this separate from recycling and connected-client capability/ownership decisions.
+let sharedTeardownDeferredOnExit = false;
+export function isSharedTeardownDeferredOnExit(): boolean { return sharedTeardownDeferredOnExit; }
+
 /** Read-only promise covering API teardown and the CLI runtime's signal/manager exit cleanup. */
 export function stopCapabilities() {
   return { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid };
@@ -98,6 +103,7 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   }
   const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
   if (deferralHonored(url, ownsReceipt)) {
+    sharedTeardownDeferredOnExit = true;
     // Not "native Codex restored": nothing was restored here, and claiming otherwise
     // would be a success message the operator cannot verify.
     return {

@@ -91,6 +91,46 @@ async function runParentStop(options: {
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
+describe("API stop through process exit cleanup", () => {
+  for (const query of ["valid", "foreign", "missing", "none"] as const) {
+    test(`${query} receipt request keeps the exit cleanup obligation accurate`, () => {
+      connectClient("link");
+      const codexHome = join(home, "codex");
+      mkdirSync(codexHome);
+      const child = spawnSync(process.execPath, [fixturePath("api-stop-exit-runner.ts"), query], {
+        cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome },
+        encoding: "utf8", timeout: 20_000, windowsHide: true,
+      });
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.signal, child.stderr).toBeNull();
+      expect(child.status, child.stderr).toBe(0);
+      // spawnSync returned only after the child exited. The parent's receipt survives;
+      // existing parent CLI tests below cover restoration after proven-down observation.
+      const report = JSON.parse(readFileSync(join(home, "api-stop-exit-result.json"), "utf8"));
+      expect(report.responseStatus).toBe(200);
+      expect(report.body).toMatchObject({ success: true, sharedTeardown: query === "valid" ? "deferred" : "performed" });
+      expect(report.receiptState).toBe("valid");
+      expect(report.deferredOnExit).toBe(query === "valid");
+      expect(report.calls).toMatchObject({ env: 1, pid: 1, runtime: 1 });
+      const stopped = report.events.indexOf("listener-stop");
+      const released = report.events.indexOf("startup-release");
+      const exited = report.events.indexOf("exit-cleanup");
+      expect(stopped).toBeGreaterThanOrEqual(0);
+      expect(released).toBeGreaterThan(stopped);
+      expect(exited).toBeGreaterThan(released);
+      if (query === "valid") {
+        expect(report.calls).toMatchObject({ apiNative: 0, apiGrok: 0, exitNative: 0, exitGrok: 0 });
+      } else {
+        // Unbacked query values cannot suppress the child's existing restoration policy.
+        expect(report.calls).toMatchObject({ apiNative: 1, apiGrok: 1, exitNative: 1, exitGrok: 1 });
+        expect(report.events.indexOf("native-api")).toBeLessThan(stopped);
+        expect(report.events.indexOf("grok-api")).toBeLessThan(stopped);
+        expect(report.events.indexOf("native-exit")).toBeGreaterThan(exited);
+      }
+    });
+  }
+});
+
 describe("parent CLI shared teardown completion", () => {
   test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
     const first = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,

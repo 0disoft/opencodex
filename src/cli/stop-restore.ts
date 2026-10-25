@@ -8,13 +8,17 @@ import { configuredAdminToken } from "../lib/admin-secrets";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
 import { directLocalHttpFetch } from "../server/direct-local-http";
+import { isSharedTeardownDeferredOnExit } from "../server/stop-teardown";
 import { findLiveProxy, probeEndpointLiveness, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
 import { observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
 
-/** Re-read ownership when an ordinary runtime actually exits, including after API drain. */
+/** Honor accepted API deferral, otherwise re-read connection ownership on ordinary exit. */
 export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown): StartExitTeardown {
+  if (isSharedTeardownDeferredOnExit()) {
+    return { ...teardown, restoreNativeCodex: false, stripGrokConfig: false };
+  }
   const connection = readClientConnectionState();
   return connection.kind === "connected" && connection.value.transport !== "link"
     ? { ...teardown, restoreNativeCodex: false, stripGrokConfig: false }

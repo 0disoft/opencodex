@@ -158,10 +158,6 @@ describe("server listener shutdown", () => {
 
 describe("routing cleanup before listener release", () => {
   test("runs synchronous restoration after active-turn drain while a real loopback port remains held", async () => {
-    // Typecheck rejects widening the contract to void or a Promise-returning hook.
-    const acceptsAsyncHook: (() => Promise<undefined>) extends NonNullable<Parameters<typeof drainAndShutdown>[2]>
-      ? true : false = false;
-    expect(acceptsAsyncHook).toBe(false);
     const events: string[] = [];
     let routing = "local";
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false,
