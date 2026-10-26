@@ -113,6 +113,7 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
     const files = readdirSync(dir);
     if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
+    const active = new Map<string, RecoveryRecord>();
     for (const file of files.filter(file => file.endsWith(".terminal"))) {
       const record = read(dir, file.slice(0, -9), ".terminal");
       if (record.phase !== "terminal") return true;
@@ -122,13 +123,34 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
       if (terminal.has(file.slice(0, -5))) continue;
       const record = read(dir, file.slice(0, -5));
       if (record.phase === "terminal") { terminal.add(record.token); continue; }
+      active.set(record.token, record);
+    }
+    const reconciled = new Map<string, RecoveryRecord>();
+    for (const file of files.filter(file => !file.endsWith(".json") && !file.endsWith(".terminal"))) {
+      const partial = /^([0-9a-f-]{36})(?:\.(?:terminal|[0-9a-f-]{36}))?\.pending$/.exec(file);
+      if (!partial) return true;
+      const token = partial[1]!;
+      if (terminal.has(token)) continue; // Published terminal authority shadows late writes.
+      const suffix = file.slice(token.length);
+      if (suffix !== ".pending" && suffix !== ".terminal.pending") return true;
+      const record = read(dir, token, suffix);
+      const previous = active.get(token) ?? reconciled.get(token);
+      // A complete cleanup write can survive a crash before rename. Recognize
+      // only this owner's terminal evidence, with fresh lifetime proofs. Never
+      // infer completion from an armed/potential verifier publication.
+      if (record.phase !== "terminal" || record.pgid !== null || !processGone(record.parentPid)
+        || (previous && previous.parentPid !== record.parentPid)) return true;
+      if (previous?.phase === "child"
+        && (previous.pgid === null || !codexCliUpdateGroupGone(previous.pgid))) return true;
+      reconciled.set(token, record);
+    }
+    for (const record of active.values()) {
+      if (reconciled.has(record.token)) continue;
+      // Re-probe on every admission attempt, including after a restart. A live
+      // or inaccessible group stays fenced until the whole group proves absent.
       if (record.phase === "child" && record.pgid !== null
         && processGone(record.parentPid) && codexCliUpdateGroupGone(record.pgid)) continue;
       return true;
-    }
-    for (const file of files.filter(file => !file.endsWith(".json") && !file.endsWith(".terminal"))) {
-      const partial = /^([0-9a-f-]{36})(?:\.(?:terminal|[0-9a-f-]{36}))?\.pending$/.exec(file);
-      if (!partial || !terminal.has(partial[1]!)) return true;
     }
     return false;
   } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.

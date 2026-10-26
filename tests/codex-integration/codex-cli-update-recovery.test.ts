@@ -10,8 +10,29 @@ import { recoverClosedCodexCliUpdateWorker } from "../../src/codex/cli-update-wo
 import * as gate from "../../src/codex/cli-update-selection-gate";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 afterEach(() => gate.resetCodexCliSelectionGatesForTests());
+
+test.each([
+  "child-terminal", "parent-terminal", "parent-no-record", "worker-no-record",
+  "child-malformed", "parent-malformed", "child-foreign", "parent-foreign",
+  "child-armed", "parent-armed", "child-unsafe", "parent-unsafe",
+  "child-live-group", "parent-live-group", "child-live-parent", "parent-live-parent",
+  "child-denied", "parent-denied", "child-wrong-parent", "parent-wrong-parent",
+  "child-nonnull-group", "parent-nonnull-group", "child-other-owner", "parent-other-owner",
+  "child-reprobe", "parent-reprobe",
+  "child-competing-armed", "parent-competing-armed", "child-competing-malformed", "parent-competing-malformed",
+  "child-competing-terminal", "parent-competing-terminal", "worker-armed-terminal",
+])("fresh-process interrupted terminal publication: %s", async scenario => {
+  const child = childProcess.spawn(process.execPath, [helperPath("codex-cli-recovery-restart.ts"), scenario], {
+    cwd: repoRoot(), env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", bytes => { output += bytes; }); child.stderr.on("data", bytes => { output += bytes; });
+  const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  expect({ code, output }).toMatchObject({ code: 0 });
+}, SPAWN_BUDGET_MS);
 
 test.each([
   "close-absent", "close-existing", "sync-failure", "late-arm", "alias-absent", "ancestor-alias-absent",

@@ -208,6 +208,13 @@ absence. Parent recovery creates a missing store under the same trusted ancestry
 policy and durably publishes its exact token's terminal marker before releasing admission, including
 the config parent's new directory entry. A late arm for a token with a verified marker is a no-op;
 markers also shadow an already interrupted publication and resolve that owner's partial precommit record.
+After restart, a complete terminal pending write from either publication path is recognized without
+renaming or changing the job receipt. It must pass the same private/no-follow file checks, name the exact
+token, carry a null child group, and match the published record's parent identity when present. Fresh
+parent absence and any published child's whole-group absence are required. Every unshadowed pending
+file must independently satisfy these checks; malformed, armed, foreign or unsafe evidence stays fenced.
+Admission re-probes non-terminal lifetime evidence on every attempt, so later group exit is observed
+without retaining a pre-restart observer or caching a stale refusal.
 Absent recovery history admits ordinary callers, including a symlinked config home or ancestor.
 Existing evidence is read through the canonical home target with its trusted ancestry; a linked recovery
 store, unsafe target, or evidence that becomes unreadable stays fenced. Updater mutation eligibility

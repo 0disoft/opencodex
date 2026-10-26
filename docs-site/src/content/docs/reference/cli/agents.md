@@ -1215,7 +1215,10 @@ and readback run. An unconfirmed installer or verification child keeps admission
 recovers when the owned process group is proven gone, including a verification child that closes after
 its reap deadline. Worker loss before commit also restores admission; worker close after commit alone
 does not. Durable recovery records preserve this exclusion across proxy restarts. Missing child identity,
-partial records or inaccessible liveness evidence require inspection. Recovery does not change an
+partial records or inaccessible liveness evidence require inspection. A complete terminal write left
+before its publication rename can restore admission after restart when its exact owner and current
+parent/group absence are verified; incomplete or armed pending writes still require inspection.
+Recovery does not change an
 ambiguous job result, retry installation or reclaim an abandoned installation lease.
 Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary
 operations. With history, admission reads the protected canonical home target; unsafe recovery
