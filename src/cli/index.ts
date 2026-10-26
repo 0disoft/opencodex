@@ -1086,10 +1086,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // the record; a record left behind by a hard-killed sibling still says so.
   const siblingOfPort = readRuntimePort()?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
-  const stopConnection = readClientConnectionState();
-  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(stopConnection);
-  // Chosen before any await: a disconnect committed during the capability probe must not reroute the admin token.
-  const stopFetch = stopRequestFetch(stopConnection, stoppingSibling);
+  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(readClientConnectionState());
   let connectedClientAlreadyStopped = false;
   if (connectedClientSkip) {
     const preflight = await preflightConnectedClientStop(snapshot?.approval);
@@ -1154,7 +1151,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (connectedClientSkip) await assertConnectedClientStopSupported(exact ? { ...exact, pid } : null);
     claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
     const graceful = await stopProxy(pid, {
-      fetchFn: stopFetch,
+      fetchFn: stopRequestFetch(),
       deferSharedTeardownNonce: teardownNonce,
       // "not-owned" is a final answer only for a caller with nothing left to restore: a
       // sibling stop, or a connected hub client whose connection keeps the integrations.
