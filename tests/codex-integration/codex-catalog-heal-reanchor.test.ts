@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CATALOG_HEAL_MAX_PATH_READS, compareCatalogHealPaths } from "../../src/codex/catalog/heal-observation";
+import { CATALOG_HEAL_MAX_PATH_READS, compareCatalogHealPaths, observeCatalogHealFile } from "../../src/codex/catalog/heal-observation";
 import { startCodexCatalogSelfHeal } from "../../src/codex/catalog-self-heal";
 import type { CatalogPublicationEvent } from "../../src/codex/catalog/publication-observer";
 import type { OcxConfig } from "../../src/types";
@@ -163,6 +163,35 @@ test.each([false, true])("an unreadable selected publication preserves uncertain
     fs.writeFileSync(newPath, full);
     listener({ kind: "published", path: newPath, intent: "refresh" });
     fs.writeFileSync(newPath, JSON.stringify({ models: [] }));
+    await handle.tickForTests();
+    expect(converges).toBe(1);
+  } finally { handle.stop(); }
+});
+
+test.each(["corrupt", "unreadable"] as const)("a %s same-target publication preserves the previous loss baseline", async failure => {
+  const path = join(fixture(), "catalog.json");
+  fs.writeFileSync(path, JSON.stringify({ models: [{ slug: "ark/a", description: "Routed via opencodex → ark/a (owner)." }] }));
+  let listener: (event: CatalogPublicationEvent) => void = () => {};
+  let unreadable = false, converges = 0;
+  const config = { port: 10100, defaultProvider: "ark", providers: {
+    ark: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+  } } as OcxConfig;
+  const handle = startCodexCatalogSelfHeal({ deps: {
+    scheduleFn: () => ({ cancel() {} }), catalogPath: () => path,
+    observe: (selected, content) => unreadable ? null : observeCatalogHealFile(selected, content),
+    subscribe: fn => { listener = fn; return () => {}; },
+    converge: async () => { converges++; return { committed: false }; },
+    gates: { siblingOfLivePort: () => null, exiting: () => false, idle: () => true,
+      runtimeOwned: () => true, loadConfig: () => config,
+      ownsCodexHome: () => true, clientConnected: () => false, clientJournalOwner: () => false },
+    log: { warn() {} },
+  } });
+  try {
+    if (failure === "corrupt") fs.writeFileSync(path, "invalid catalog");
+    else unreadable = true;
+    listener({ kind: "published", path, intent: "refresh" });
+    unreadable = false;
+    fs.writeFileSync(path, JSON.stringify({ models: [] }));
     await handle.tickForTests();
     expect(converges).toBe(1);
   } finally { handle.stop(); }

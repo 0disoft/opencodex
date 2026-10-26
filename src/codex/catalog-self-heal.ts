@@ -276,7 +276,7 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
     // Read independently of obsolete evidence, but retire it only after current selection proof.
     const seen = read(path, true);
     const current = catalogPath();
-    if (seen?.namespaces == null || current === null || compareCatalogHealPaths(current, path) !== "same") { clear(); return; }
+    if (seen?.namespaces == null || current === null || compareCatalogHealPaths(current, path) !== "same") return;
     clear();
     target = path;
     baseline = observed = seen;
