@@ -281,7 +281,7 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
     if (seen?.namespaces == null || current === null
       || compareCatalogHealPaths(event.path, current) !== "same" || !stillPublished(seen.signature)) return;
     clear();
-    target = path;
+    target = current;
     baseline = observed = seen;
     released = false;
   });

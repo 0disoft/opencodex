@@ -368,3 +368,50 @@ test("publication entry drift preserves a pending retry and its five-minute back
     expect(converges).toBe(2);
   } finally { handle.stop(); }
 });
+
+test.each([false, true])("an accepted publication retains the validated post-read selection (released=%s)", async released => {
+  const root = fixture(), a = join(root, "a"), b = join(root, "b"), alias = join(root, "alias");
+  fs.mkdirSync(a); fs.mkdirSync(b); fs.symlinkSync(a, alias, "junction");
+  const published = join(a, "catalog.json"), initialSelection = join(alias, "catalog.json");
+  const full = JSON.stringify({ models: [{ slug: "ark/a", description: "Routed via opencodex → ark/a (owner)." }] });
+  fs.writeFileSync(published, full);
+  fs.writeFileSync(join(b, "catalog.json"), full);
+  let selected = initialSelection, armed = false, swapped = false, converges = 0;
+  let listener: (event: CatalogPublicationEvent) => void = () => {};
+  const config = { port: 10100, defaultProvider: "ark", providers: {
+    ark: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+  } } as OcxConfig;
+  const handle = startCodexCatalogSelfHeal({ deps: {
+    scheduleFn: () => ({ cancel() {} }), catalogPath: () => selected,
+    subscribe: fn => { listener = fn; return () => {}; },
+    observe: (path, content) => {
+      if (armed && !swapped) {
+        swapped = true;
+        fs.renameSync(alias, join(root, "saved-alias"));
+        fs.symlinkSync(b, alias, "junction");
+        selected = published;
+      }
+      return observeCatalogHealFile(path, content);
+    },
+    converge: async (_config, lifecycle) => {
+      converges++;
+      expect(lifecycle.expectedCatalogPath).toBe(published);
+      expect(lifecycle.beforeCommit()).toBe(true);
+      return { committed: false };
+    },
+    gates: { siblingOfLivePort: () => null, exiting: () => false, idle: () => true,
+      runtimeOwned: () => true, loadConfig: () => config,
+      ownsCodexHome: () => true, clientConnected: () => false, clientJournalOwner: () => false },
+    log: { warn() {} },
+  } });
+  try {
+    if (released) listener({ kind: "native-released", path: published });
+    armed = true;
+    listener({ kind: "published", path: published, intent: "refresh" });
+    expect(swapped).toBe(true);
+    expect(compareCatalogHealPaths(initialSelection, selected)).toBe("different");
+    fs.writeFileSync(published, JSON.stringify({ models: [] }));
+    await handle.tickForTests();
+    expect(converges).toBe(1);
+  } finally { handle.stop(); }
+});
