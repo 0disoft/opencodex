@@ -1767,8 +1767,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        // Cancellation retires the turn until the dial; then the transport owns it until close/CLOSED.
-        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal); // detached at the dial; then close/CLOSED owns release
         const releaseAcquisition = () => {
           detachClientAbort();
           acquisition?.clear();
