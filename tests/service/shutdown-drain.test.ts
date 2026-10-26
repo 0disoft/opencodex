@@ -165,10 +165,13 @@ describe("routing cleanup before listener release", () => {
     const port = server.port!;
     let replacement: ReturnType<typeof Bun.serve> | undefined;
     const turn = new AbortController();
-    registerTurn(turn);
+    const lease = tryAdmitTurn();
     setServerStartupLifecycleReleaseForTests(async () => { events.push("startup-release"); });
     let draining: Promise<boolean> | undefined;
     try {
+      expect(lease).not.toBeNull();
+      registerTurn(turn, lease!);
+      expect(getActiveTurnCount()).toBe(1);
       expect(await (await fetch(server.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("local");
       draining = drainAndShutdown(server, 0, (): undefined => {
         expect(turn.signal.aborted).toBe(true);
@@ -188,7 +191,10 @@ describe("routing cleanup before listener release", () => {
         fetch: () => new Response(routing) });
       expect(await (await fetch(replacement.url, { signal: AbortSignal.timeout(1_000) })).text()).toBe("native");
     } finally {
-      unregisterTurn(turn);
+      if (lease) {
+        unregisterTurn(turn);
+        lease.release();
+      }
       await draining?.catch(() => {});
       await server.stop(true);
       await replacement?.stop(true);
