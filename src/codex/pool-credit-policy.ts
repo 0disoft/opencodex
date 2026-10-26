@@ -4,6 +4,8 @@ import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { getAccountQuota } from "./quota";
 import { hasSpendableCodexCredits } from "./quota-types";
+import { getCodexAccountCooldownUntil, scopedHealthFor, type CodexQuotaScope } from "./routing/health-store";
+import { nextQuotaQueryDelay } from "./quota-query-backoff";
 
 export type PoolCreditPolicyConfig = Readonly<Pick<OcxConfig, "creditCodexAccountIds" | "codexAccounts">>;
 type PoolContext = { kind: "pool"; accountId: string };
@@ -85,4 +87,15 @@ export function poolCreditRecoveryNeeded(policy: PoolCreditPolicyConfig, account
 export function poolContextCreditRecoveryNeeded(context: PoolContext, override?: PoolCreditPolicyConfig): boolean {
   const policy = override ?? policies.get(context)?.policy;
   return !!policy && poolCreditRecoveryNeeded(policy, context.accountId);
+}
+
+/** Retry advice observes both applicable holds without changing routing's health precedence. */
+export function poolCreditRecoveryRetryAt(
+  accountId: string, resetAt: number, quotaScope?: CodexQuotaScope, now = Date.now(),
+): number {
+  const scopedUntil = quotaScope ? scopedHealthFor(accountId, quotaScope)?.cooldownUntil : undefined;
+  const liveScopedUntil = typeof scopedUntil === "number" && Number.isFinite(scopedUntil) && scopedUntil > now
+    ? scopedUntil : 0;
+  return Math.max(Math.min(resetAt, now + nextQuotaQueryDelay()),
+    getCodexAccountCooldownUntil(accountId, now) ?? 0, liveScopedUntil);
 }

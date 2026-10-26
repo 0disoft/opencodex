@@ -54,7 +54,8 @@ An explicitly selected stored account can reach its included usage limit while i
 credit balance observation is older than five minutes. If credit spending is enabled for
 that account and the evidence is stale, missing or incomplete, its local 429 advises retrying
 after the 300-second base metadata cadence (or at the included reset if sooner). A later known upstream
-cooldown for the selected quota scope, including account-wide holds, still takes precedence. Unrelated
+cooldown for the selected quota scope, including account-wide holds, still takes precedence; when
+both apply, the later deadline wins. Unrelated
 model-group holds are not imported. The original included-window reset remains attached to the
 internal refusal as `resetAt`; the shorter hint is a metadata recheck opportunity, not a new quota reset.
 
@@ -65,7 +66,8 @@ credit opt-out, an older cached null without provenance, a known spending veto o
 balance without unlimited entitlement retain the included-reset advice. A newly observed missing
 or malformed credit summary retracts spending authority but permits the short metadata retry;
 an explicit spending veto still wins. Unlimited credits with a zero balance require fresh evidence
-just like other credits. Ordinary upstream 429 delays are not capped by this policy.
+just like other credits. Ordinary upstream 429 delays keep the existing parser ceiling of 24 hours
+for numeric and HTTP-date Retry-After values.
 
 ## Triage: `idle timeout waiting for SSE`
 

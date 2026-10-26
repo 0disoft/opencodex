@@ -1,4 +1,4 @@
-import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded } from "./pool-credit-policy";
+import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
@@ -550,8 +550,7 @@ export class CodexPoolAccountCreditsOffError extends CodexAccountCooldownError {
 
   constructor(accountId: string, resetAt: number, creditRecovery = false, quotaScope?: CodexQuotaScope) {
     // Keep the included reset; a metadata hint neither admits nor clears an upstream hold.
-    super(accountId, creditRecovery ? Math.max(Math.min(resetAt, Date.now() + nextQuotaQueryDelay()),
-      getCodexQuotaHealthSnapshot(accountId, quotaScope)?.cooldownUntil ?? 0) : resetAt);
+    super(accountId, creditRecovery ? poolCreditRecoveryRetryAt(accountId, resetAt, quotaScope) : resetAt);
     this.name = "CodexPoolAccountCreditsOffError";
     this.resetAt = resetAt;
     this.message = creditRecovery

@@ -80,6 +80,10 @@ const cases = [
   { name: "independent Reserve hold", modelId: "gpt-reserve", retry: 300 },
   { name: "account-wide Retry-After", modelId: "gpt-reserve", retryAfter: "3600", retry: 3600 },
   { name: "expired shared hold", modelId: MODEL, age: 901_000, retry: 300 },
+  { name: "shared hold recorded before a shorter account hold", modelId: MODEL, retryAfter: "600", combined: "before", retry: 900 },
+  { name: "shared hold recorded after a shorter account hold", modelId: MODEL, retryAfter: "600", combined: "after", retry: 900 },
+  { name: "oversized numeric Retry-After", modelId: MODEL, retryAfter: "99999999999999999999", retry: 86_400 },
+  { name: "far-future Retry-After date", modelId: MODEL, retryAfter: "Fri, 31 Dec 9999 23:59:59 GMT", retry: 86_400 },
 ] as const;
 for (const boundary of ["resolve", "materialize", "materialize-async", "dispatch", "provider", "cooldown", "sidecar"] as const) {
   for (const scenario of cases) test(`${boundary} credit refusal respects ${scenario.name}`, async () => {
@@ -89,9 +93,14 @@ for (const boundary of ["resolve", "materialize", "materialize-async", "dispatch
     if (context) expect(context).toMatchObject({ kind: "pool", accountId: ID, quotaScope: "shared" });
     observe(360_000);
     const recordedAt = NOW - ("age" in scenario ? scenario.age : 0);
+    const recordSharedHold = () => recordCodexUpstreamOutcome(config, ID, 429, {
+      modelId: MODEL, resetAt: NOW + 3_600_000, fixedAccount: true, now: NOW,
+    });
+    if ("combined" in scenario && scenario.combined === "before") recordSharedHold();
     recordCodexUpstreamOutcome(config, ID, 429, { modelId: scenario.modelId,
       resetAt: recordedAt + 3_600_000, fixedAccount: true, now: recordedAt,
       ...("retryAfter" in scenario ? { retryAfter: scenario.retryAfter } : {}) });
+    if ("combined" in scenario && scenario.combined === "after") recordSharedHold();
     const before = state();
     let error: unknown;
     try {
