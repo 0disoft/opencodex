@@ -589,6 +589,7 @@
   "codex-launcher.test.ts": "codex-integration",
   "codex-launcher-process.test.ts": "codex-integration",
   "codex-launcher-security.test.ts": "codex-integration",
+  "codex-launcher-env.test.ts": "codex-integration",
   "codex-shim-autorestore.test.ts": "codex-integration", "codex-shim-destroyed-probe.test.ts": "codex-integration",
   "codex-shim-bypass-token.test.ts": "codex-integration",
   "codex-shim-windows-revision.test.ts": "codex-integration",

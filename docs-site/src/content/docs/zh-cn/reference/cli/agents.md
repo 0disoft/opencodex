@@ -136,6 +136,8 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx codex [codex args...]`
 
+自动凭证读取会将 `CODEX_HOME` 中的 `~` 与空白视为字面路径，验证后将同一个规范绝对路径传给子进程。无法读取主目录时不读取令牌。只要存在非空的 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`（不区分大小写），就会跳过自动读取，不受 `NO_PROXY` 影响；拒绝的启动和用户导出的凭证保持不变。传递新令牌时，子进程的 `NO_PROXY` 与 `no_proxy` 会保留已有排除项并加入 `127.0.0.1` 和 `::1`。启用 `features.respect_system_proxy` 或传入 `--enable`/`--disable` 会跳过自动读取。
+
 使用原始参数启动 Codex 前尝试启动代理。路由仍归 Codex 配置所有，启动器不会改写。本机原生及其他网关路由跳过代理启动；未知路由会警告并尝试启动，失败后仍警告并继续。帮助、版本及 `login`、`doctor`、`help` 等内部命令跳过代理启动和自动令牌读取。
 
 只有所选 provider 的完整传输配置与本次安装的回环监听器或已保存的本地客户端连接对应的管理块一致时，才从本次安装的 `service-api-token` 读取缺失的 `OPENCODEX_API_AUTH_TOKEN`。名称或注入注释本身不构成授权。未知或远程目标、默认 profile、项目配置、`OPENAI_BASE_URL` 以及传入的 `-c`/`--config`、`-p`/`--profile`、`-C`/`--cd`、`--remote` 都会跳过自动读取。保留用户导出的凭据和参数，拒绝令牌文件覆盖和管理令牌冲突。

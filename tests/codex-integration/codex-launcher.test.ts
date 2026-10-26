@@ -34,10 +34,11 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoRoot } from "../helpers/repo-root";
 
 // These env-assembly tests supply destination authority explicitly; real config authority
 // (including the positive managed block) is covered in codex-launcher-security.test.ts.
-const buildCodexLaunchEnv: typeof buildEnv = (base, deps) => buildEnv(base, {
+const buildCodexLaunchEnv: typeof buildEnv = (base, deps) => buildEnv({ CODEX_HOME: repoRoot(), ...base }, {
   credentialDestination: () => true, ...deps,
 });
 
@@ -153,9 +154,9 @@ describe("codex launch env assembly", () => {
       expect(buildCodexLaunchEnv({}, {
         routingKind: "opencodex-local", args,
         serviceToken: () => { consulted = true; return "ocx_fixture_service_token"; },
-      })).toEqual({});
+      })).toEqual({ CODEX_HOME: repoRoot() });
       expect(consulted).toBe(false);
-      const inherited = { OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_user_export" };
+      const inherited = { CODEX_HOME: repoRoot(), OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_user_export" };
       expect(buildCodexLaunchEnv(inherited, { routingKind: "opencodex-local", args })).toEqual(inherited);
     }
   });
@@ -183,7 +184,7 @@ describe("codex launch env assembly", () => {
   test("unknown and foreign routing never read or inject the service token", () => {
     for (const routingKind of ["unknown", "custom-local", "custom-remote", "native"] as const) {
       let consulted = false;
-      const base = { PATH: "/usr/bin" };
+      const base = { CODEX_HOME: repoRoot(), PATH: "/usr/bin" };
       const env = buildCodexLaunchEnv(base, {
         routingKind,
         serviceToken: () => { consulted = true; return "ocx_fixture_service_token"; },

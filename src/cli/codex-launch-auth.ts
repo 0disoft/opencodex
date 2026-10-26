@@ -1,15 +1,31 @@
-import { lstatSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { readConfigDiagnostics, websocketsEnabled } from "../config";
-import { getCodexHome } from "../codex/paths";
 import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { buildProviderTableBlockForTarget } from "../codex/inject/config-toml";
 import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../codex/inject/routing-target";
 import { readClientConnectionState } from "../client/state";
 
+/** Resolve once; the credential verifier and child must use this exact directory. */
+export function resolveCodexLaunchHome(env: Record<string, string | undefined>): string | null {
+  try {
+    // Object spread loses Windows process.env's case-insensitive lookup. Refuse
+    // noncanonical aliases rather than pass conflicting names to CreateProcess.
+    if (process.platform === "win32" && Object.keys(env).some(key => key !== "CODEX_HOME" && key.toUpperCase() === "CODEX_HOME")) return null;
+    // Explicit values are native literal paths: no tilde expansion or whitespace trim.
+    // An implicit managed home is safe only when also made explicit for the child.
+    const userHome = (process.platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+    const raw = env.CODEX_HOME === undefined ? join(userHome, ".codex") : env.CODEX_HOME;
+    if (!raw.trim()) return null;
+    const home = realpathSync(resolve(raw));
+    return statSync(home).isDirectory() ? home : null;
+  } catch { return null; }
+}
+
 /** Config classification is a startup hint; credentials need an independently bound destination. */
-export function codexCredentialDestinationIsTrusted(): boolean {
+export function codexCredentialDestinationIsTrusted(home: string): boolean {
   try {
     const diagnostics = readConfigDiagnostics();
     if (diagnostics.error || diagnostics.source === "fallback") return false;
@@ -24,10 +40,12 @@ export function codexCredentialDestinationIsTrusted(): boolean {
     const url = new URL(target.baseUrl);
     if (!target.requiresAdmissionToken) return false;
     if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) return false;
-    const home = getCodexHome();
     const content = readBoundedCodexConfig(join(home, "config.toml"));
     if (content === null) return false;
     const config = Bun.TOML.parse(content) as Record<string, unknown>;
+    // This native feature resolves OS/PAC routes without honoring NO_PROXY.
+    const features = config.features as Record<string, unknown> | undefined;
+    if (features?.respect_system_proxy !== undefined && features.respect_system_proxy !== false) return false;
     // Codex layers project configs and profiles after the home. Without proving those layers,
     // conservatively leave authentication to the user's environment.
     if (config.profile !== undefined || config.model_provider !== "opencodex") return false;
