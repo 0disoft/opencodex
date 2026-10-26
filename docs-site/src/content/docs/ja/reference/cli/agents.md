@@ -134,13 +134,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 キーは設定とその名前空間が他の主体による変更から保護されている場合にのみ渡します。現在の利用者と特権 OS 主体を信頼します。同じ利用者のプロセスは信頼対象です。その利用者の書き込み権限を持つ主体は、既にその利用者の OpenCodex キーファイルも読めます。検証からネイティブ起動までの同一利用者による設定置換はこの脅威モデルの対象外で、引き渡し時に設定を固定しません。
 
-通常の Windows の既定 ProgramData 権限では他の利用者がディレクトリを作成できます。そのため `ProgramData\OpenAI\Codex` がなくても自動認証情報を保留します。判定を緩めず、以下のコマンドを含む具体的な stderr 診断を一行表示します。管理者は両専用ディレクトリを保護 ACL（SYSTEM/Administrators は書き込み、Users は読み取り/実行）で準備できます。既存のポリシーを確認してから **管理者権限の Windows PowerShell 5.1** で実行してください。既存ディレクトリの ACL を置き換え、reparse point は拒否します：
+通常の Windows の既定 ProgramData 権限では他の利用者がディレクトリを作成できます。そのため `ProgramData\OpenAI\Codex` がなくても自動認証情報を保留します。ProgramData 配下のシステム Codex 設定フォルダーは存在し、Administrators/SYSTEM だけが書き込める必要があり、他の利用者による祖先ディレクトリの置換も防ぐ必要があります。管理者にディレクトリポリシーの確認を依頼してください。opencodex 自身は ACL を変更せず、準備用のコマンドも提供しません。
 
-```powershell
-& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
-```
-
-ランチャー自身はこのコマンドや ACL 変更を実行しません。準備後に `ocx codex` を再試行してください。既存のシステム設定ファイルは引き続き自動注入を阻止し、別途確認が必要です。他の保留理由も、未監査の引数/環境、ホーム/設定の所有権や検査、設定層/消費者/転送、サービス認証情報の欠落、管理認証情報との衝突を区別して stderr 一行で表示します。キー値、キーファイルの内容やパスは表示せず、明示した認証情報は保持します。
+代わりに利用者が自分でキーを指定できます。例えば `OPENCODEX_API_AUTH_TOKEN` を環境変数としてエクスポートすると、`ocx codex` はその値を変更しません。既存のシステム設定ファイルがあれば引き続き自動認証情報を保留し、別途確認が必要です。各保留理由はキー値、キーファイルの内容やパスを含まない短い具体的な stderr 診断一行で示されます。
 
 単語一つのプロンプトの前に `--` を置き、未知の Codex サブコマンド選択を防いでください。
 

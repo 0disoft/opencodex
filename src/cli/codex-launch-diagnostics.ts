@@ -29,14 +29,9 @@ export const CODEX_TOKEN_REFUSALS = {
 export type CodexTokenRefusal = keyof typeof CODEX_TOKEN_REFUSALS;
 export type CodexTokenRefusalReporter = (reason: CodexTokenRefusal) => void;
 
-// Run only by an administrator in Windows PowerShell 5.1. Create missing
-// directories with the protected DACL already installed; also protect existing
-// dedicated directories. SYSTEM/Administrators write; Users only read/traverse.
-export const CODEX_WINDOWS_NAMESPACE_COMMAND = String.raw`& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }`;
-
 export function codexTokenWithheldDiagnostic(reason: CodexTokenRefusal): string {
   const remedy = process.platform === "win32" && reason === "systemNamespaceWritable"
-    ? `; default ProgramData creation rights are insufficient even when OpenAI\\Codex is absent. Ask an administrator to review existing directory policy and run in elevated Windows PowerShell 5.1: ${CODEX_WINDOWS_NAMESPACE_COMMAND}`
+    ? ". Default ProgramData creation rights are insufficient. The system Codex configuration folder under ProgramData must exist and be writable only by Administrators/SYSTEM, with its ancestors protected against replacement by other users. Ask an administrator to review the directory policy. opencodex never changes ACLs itself. Alternatively, supply your own key by exporting OPENCODEX_API_AUTH_TOKEN, which ocx codex leaves untouched. Launching without a fresh token."
     : ". Launching without a fresh token.";
   return `OpenCodex: automatic service token withheld; ${CODEX_TOKEN_REFUSALS[reason]}${remedy}`;
 }

@@ -138,13 +138,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 仅当配置及其命名空间受到保护、其他主体无法修改时才提供密钥；当前用户和特权 OS 主体被信任。同一用户的进程被信任：拥有该用户写入权限的主体已经能读取该用户的 OpenCodex 密钥文件。验证与原生启动之间由同一用户替换配置不在此威胁模型内，启动器不会在交接时冻结配置。
 
-正常 Windows 安装的默认 ProgramData 权限允许其他用户创建目录。因此即使 `ProgramData\OpenAI\Codex` 不存在，也会暂缓自动凭据。检查保持拒绝，并向 stderr 输出一条包含以下命令的具体诊断。管理员可为两个专用目录配置受保护 ACL（SYSTEM/Administrators 可写，Users 只读/执行）。请先审核现有目录策略，再在 **提升权限的 Windows PowerShell 5.1** 中运行；命令会替换现有目录的 ACL，并拒绝 reparse point：
+正常 Windows 安装的默认 ProgramData 权限允许其他用户创建目录。因此即使 `ProgramData\OpenAI\Codex` 不存在，也会暂缓自动凭据。ProgramData 下的系统 Codex 配置文件夹必须存在，且仅 Administrators/SYSTEM 可写；其祖先目录也必须防止其他用户替换。请管理员审核目录策略。opencodex 从不自行修改 ACL，也不提供配置目录的命令。
 
-```powershell
-& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
-```
-
-启动器不会自行运行命令或修改 ACL。配置后重试 `ocx codex`。已有系统配置文件仍会阻止自动注入，需另行审核。其他暂缓原因也各有一条简短明确的 stderr 提示，区分未审核的参数/环境、主目录/配置所有权或检查、配置层/消费者/传输、服务凭据缺失以及管理凭据冲突。不会打印密钥值、密钥文件内容或路径；明确导出的用户凭据保持不变。
+也可以自行提供密钥，例如导出 `OPENCODEX_API_AUTH_TOKEN` 环境变量；`ocx codex` 会保留其值不变。已有系统配置文件仍会阻止自动凭据，需另行审核。每种暂缓原因都会输出一条简短明确的 stderr 诊断，不包含密钥值、密钥文件内容或路径。
 
 单词提示前请加 `--`，以免选择未知的 Codex 子命令。
 

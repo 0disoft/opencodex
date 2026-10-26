@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCodexLaunchEnv, type CodexLaunchEnvDeps } from "../../src/cli/codex-launcher";
 import { codexCredentialDestinationIsTrusted } from "../../src/cli/codex-launch-auth";
-import { CODEX_WINDOWS_NAMESPACE_COMMAND } from "../../src/cli/codex-launch-diagnostics";
+import { CODEX_TOKEN_REFUSALS, codexTokenWithheldDiagnostic } from "../../src/cli/codex-launch-diagnostics";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
@@ -24,10 +24,17 @@ function diagnostic(notes: string[], reason: string) {
   expect(notes).toHaveLength(1);
   expect(notes[0]).toContain("automatic service token withheld; " + reason);
   expect(notes[0]).not.toMatch(/[\r\n]/);
+  expect(notes[0]).not.toMatch(/powershell|icacls|SetAccessControl|CreateDirectory|Set-Acl|New-Item|\$[a-z]|&\s*\{|[{}]/i);
   for (const forbidden of [secret, contents, "service-api-token", "admin-api-token"]) expect(notes[0]).not.toContain(forbidden);
 }
 
 describe("Codex credential withholding diagnostics", () => {
+  test("every refusal emits only a value-free explanation without a shell command", () => {
+    for (const reason of Object.keys(CODEX_TOKEN_REFUSALS) as (keyof typeof CODEX_TOKEN_REFUSALS)[]) {
+      diagnostic([codexTokenWithheldDiagnostic(reason)], CODEX_TOKEN_REFUSALS[reason]);
+    }
+  });
+
   for (const [base, deps, reason] of [
     [{}, { args: ["--oss"] }, "arguments are outside the audited allowlist"],
     [{ HTTPS_PROXY: contents }, {}, "environment contains a proxy or unaudited credential control"],
@@ -59,7 +66,7 @@ describe("Codex credential withholding diagnostics", () => {
     ]) expect(result.notes).toEqual([]);
   });
 
-  test.skipIf(process.platform !== "win32")("missing or writable Windows namespace explains admin provisioning, which restores admission", () => {
+  test.skipIf(process.platform !== "win32")("missing or writable Windows namespace explains the requirement and explicit credential alternative", () => {
     const root = mkdtempSync(join(process.env.SystemRoot ?? "C:/Windows", "Temp", "ocx-namespace-diagnostic-"));
     makeCodexLaunchFixturePrivate(root);
     const home = join(root, "codex"), ocx = join(root, "ocx"), machine = join(root, "machine");
@@ -88,11 +95,6 @@ $acl.AddAccessRule($rule)
     });
     try {
       ps(grantCreation);
-      // Exercise the documented command in scratch only. The fixture user stands
-      // in for Administrators so this test also runs without an elevated token.
-      const provision = CODEX_WINDOWS_NAMESPACE_COMMAND
-        .replace("[Environment]::GetFolderPath('CommonApplicationData')", "$env:OCX_TEST_MACHINE_ROOT")
-        .replace("if ([System.IO.Directory]::Exists", String.raw`$user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl.SetOwner($user); $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($user,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit',[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Allow)); if ([System.IO.Directory]::Exists`);
       for (const existing of [false, true]) {
         if (existing) ps(String.raw`[System.IO.Directory]::CreateDirectory($env:OCX_TEST_NAMESPACE) | Out-Null
 $p=$env:OCX_TEST_NAMESPACE
@@ -101,17 +103,22 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([Sy
 [System.IO.Directory]::SetAccessControl($p,$acl)`);
         const result = launch();
         diagnostic(result.notes, "machine Codex namespace allows other principals to create or replace configuration");
-        expect(result.notes[0]).toContain("default ProgramData creation rights");
-        expect(result.notes[0]).toContain("elevated Windows PowerShell 5.1: " + CODEX_WINDOWS_NAMESPACE_COMMAND);
+        expect(result.notes[0]).toContain("Default ProgramData creation rights");
+        expect(result.notes[0]).toContain("must exist");
+        expect(result.notes[0]).toContain("writable only by Administrators/SYSTEM");
+        expect(result.notes[0]).toContain("opencodex never changes ACLs itself");
+        expect(result.notes[0]).toContain("OPENCODEX_API_AUTH_TOKEN");
+        expect(result.notes[0]).toContain("leaves untouched");
         expect(result.notes[0]).not.toContain(root);
         expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
-        expect(reads).toBe(existing ? 1 : 0);
-        ps(provision);
-        const protectedResult = launch();
-        expect(protectedResult.notes).toEqual([]);
-        expect(protectedResult.env.OPENCODEX_API_AUTH_TOKEN).toBe(secret);
+        expect(reads).toBe(0);
+        const explicit = capture({ CODEX_HOME: home, OPENCODEX_API_AUTH_TOKEN: secret }, {
+          serviceToken: () => { throw new Error("must not read"); },
+        });
+        expect(explicit.notes).toEqual([]);
+        expect(explicit.env.OPENCODEX_API_AUTH_TOKEN).toBe(secret);
       }
-      expect(reads).toBe(2);
+      expect(reads).toBe(0);
     } finally {
       process.chdir(cwd);
       if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior;

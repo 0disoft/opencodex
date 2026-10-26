@@ -166,13 +166,9 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 키는 설정과 해당 경로가 다른 보안 주체의 변경으로부터 보호될 때만 전달합니다. 현재 사용자와 권한 있는 OS 주체는 신뢰합니다. 같은 사용자로 실행되는 프로세스는 신뢰 대상입니다. 사용자의 쓰기 권한을 가진 행위자는 사용자의 OpenCodex 키 파일도 이미 읽을 수 있습니다. 검증과 네이티브 시작 사이에 같은 사용자가 설정을 교체하는 시나리오는 이 위협 모델의 범위 밖이며, 런처는 인계 시 설정을 고정하지 않습니다.
 
-일반적인 Windows 설치의 기본 ProgramData 권한은 다른 사용자에게 디렉터리 생성 권한을 줍니다. 따라서 `ProgramData\OpenAI\Codex`가 없어도 자동 자격 증명을 보류합니다. 검사를 완화하지 않고 아래 명령을 포함한 구체적인 stderr 진단 한 줄을 출력합니다. 관리자는 두 전용 디렉터리를 보호된 ACL(SYSTEM/Administrators 쓰기, Users 읽기/실행)로 준비할 수 있습니다. 기존 디렉터리 정책을 먼저 검토하고 **관리자 권한 Windows PowerShell 5.1**에서 실행하세요. 기존 디렉터리 ACL은 교체하며 reparse point는 거부합니다:
+일반적인 Windows 설치의 기본 ProgramData 권한은 다른 사용자에게 디렉터리 생성 권한을 줍니다. 따라서 `ProgramData\OpenAI\Codex`가 없어도 자동 자격 증명을 보류합니다. ProgramData 아래의 시스템 Codex 설정 폴더는 존재해야 하고 Administrators/SYSTEM만 쓸 수 있어야 하며, 다른 사용자가 상위 디렉터리를 교체할 수 없어야 합니다. 관리자에게 디렉터리 정책 검토를 요청하세요. opencodex는 직접 ACL을 변경하지 않으며 프로비저닝 명령을 제공하지 않습니다.
 
-```powershell
-& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
-```
-
-런처가 이 명령을 실행하거나 ACL을 직접 변경하지는 않습니다. 준비 후 `ocx codex`를 다시 실행하세요. 기존 시스템 설정 파일은 여전히 자동 주입을 막으며 별도 검토가 필요합니다. 다른 모든 보류 사유도 짧고 구체적인 stderr 한 줄로 안내합니다. 검증되지 않은 인자·환경, 홈/설정 소유권·검사, 설정층·소비자·전송, 서비스 자격 증명 부재, 관리 자격 증명 충돌을 구분합니다. 키 값·키 파일 내용·키 파일 경로는 출력하지 않으며 명시적인 사용자 자격 증명은 유지합니다.
+대신 사용자가 직접 키를 제공할 수 있습니다. 예를 들어 `OPENCODEX_API_AUTH_TOKEN` 환경 변수를 내보내면 `ocx codex`는 그 값을 그대로 유지합니다. 기존 시스템 설정 파일은 여전히 자동 자격 증명을 보류하며 별도 검토가 필요합니다. 각 보류 사유는 키 값, 키 파일 내용이나 경로 없이 짧고 구체적인 stderr 진단 한 줄로 표시됩니다.
 
 한 단어 프롬프트 앞에는 `--`를 넣어 알 수 없는 Codex 하위 명령 선택을 막으세요.
 
