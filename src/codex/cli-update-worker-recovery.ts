@@ -5,11 +5,11 @@ import { CODEX_CLI_UPDATE_FENCE_COMMITTED, CODEX_CLI_UPDATE_FENCE_RECOVERING,
 /** Close is authority only before commit. After commit require exact group absence. */
 export function recoverClosedCodexCliUpdateWorker(gate: SharedArrayBuffer, fence: SharedArrayBuffer, owner: number,
   token: string, configDir?: string): void {
-  if (Atomics.load(new Int32Array(gate), 0) !== owner) return;
   const view = new Int32Array(fence);
   // Bun close can precede full thread exit. Prevent a late commit before
   // treating PREPARING as proof that no installer can ever start.
   cancelCodexCliUpdateFence(fence);
+  if (Atomics.load(new Int32Array(gate), 0) !== owner) return;
   Atomics.compareExchange(view, 0, CODEX_CLI_UPDATE_FENCE_COMMITTED, CODEX_CLI_UPDATE_FENCE_RECOVERING);
   const recover = () => {
     if (Atomics.load(new Int32Array(gate), 0) !== owner) return true;

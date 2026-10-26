@@ -36,6 +36,35 @@ test("worker-close recovery seals out a subsequent verifier spawn", () => {
   expect(gate.beginCodexCliSelectionParentWrite().entered).toBe(false);
 });
 
+test("close before gate acquisition prevents that worker's later commit", () => {
+  const buffer = gate.codexCliUpdateSelectionGate(), fence = gate.createCodexCliUpdateFence();
+  const owner = gate.allocateCodexCliUpdateGateOwner(buffer);
+  const window = gate.createWorkerCommitWindow({ gate: buffer, fence, owner });
+  recoverClosedCodexCliUpdateWorker(buffer, fence, owner, "c".repeat(36));
+  try { window.tryEnter(); expect(window.commit()).toBe(false); } finally { window.exit(); }
+});
+
+test("terminal admission cleanup retries after a transient durable publication failure", () => {
+  const timers: (() => void)[] = [];
+  const interval = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+    timers.push(callback); return { unref() {} };
+  }) as never);
+  const buffer = gate.codexCliUpdateSelectionGate(), fence = gate.createCodexCliUpdateFence();
+  let unavailable = true;
+  const window = gate.createWorkerCommitWindow({ gate: buffer, fence, recovery: {
+    arm() {}, child() {}, terminal() { if (unavailable) throw new Error("fixture_storage_unavailable"); },
+  } });
+  expect(window.tryEnter()).toBe(true);
+  try {
+    expect(() => window.exit()).not.toThrow();
+    expect(gate.beginCodexCliSelectionParentWrite().entered).toBe(false);
+    unavailable = false;
+    timers[0]!();
+    const writer = gate.beginCodexCliSelectionParentWrite();
+    try { expect(writer.entered).toBe(true); } finally { writer.exit(); }
+  } finally { interval.mockRestore(); }
+});
+
 test("restart recovery uses durable group evidence and retains armed or inaccessible owners", async () => {
   const child = childProcess.spawn(process.execPath, [helperPath("codex-cli-recovery-store.ts")], {
     cwd: repoRoot(), env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],

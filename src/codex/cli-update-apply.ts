@@ -356,8 +356,8 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
       const layout = codexCliPlatformBacking(artifacts.platform, artifacts.arch)!;
       accessSync(afterEvidence.launcher, constants.X_OK);
       accessSync(join(backingRoot, "vendor", layout.triple, "bin", "codex"), constants.X_OK);
-      keepLease = true;
       deps.commitWindow?.childStarting?.();
+      keepLease = true;
       const version = await (deps.verifyVersion ?? verifyInstalledCodexVersion)(afterEvidence.launcher, targetVersion!, staging, isolation.env,
         recover, pid => deps.commitWindow?.childStarted?.(pid));
       verificationPid = version.pid;

@@ -63,6 +63,17 @@ try {
   expect(codexCliUpdateRecoveryBlocksAdmission(interrupted)).toBe(false);
   interruptedOwner.arm(); // late publication cannot overwrite terminal recovery
   expect(codexCliUpdateRecoveryBlocksAdmission(interrupted)).toBe(false);
+  const { finishClosedCodexCliUpdateRecovery } = await import("../../src/codex/cli-update-recovery");
+  const retryRoot = join(root, "retries"); fs.mkdirSync(retryRoot);
+  const retryToken = randomUUID(); createCodexCliUpdateRecovery(retryToken, retryRoot).arm();
+  const retryRename = spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("fixture_disk_failure"); });
+  try {
+    for (let attempt = 0; attempt < 270; attempt++) {
+      expect(() => finishClosedCodexCliUpdateRecovery(retryToken, retryRoot)).toThrow("fixture_disk_failure");
+    }
+  } finally { retryRename.mockRestore(); }
+  finishClosedCodexCliUpdateRecovery(retryToken, retryRoot);
+  expect(codexCliUpdateRecoveryBlocksAdmission(retryRoot)).toBe(false);
   fs.writeFileSync(join(root, "codex-cli-update-recovery", "partial.pending"), "");
   expect(codexCliUpdateRecoveryBlocksAdmission(root)).toBe(true);
   console.log("durable recovery verified");

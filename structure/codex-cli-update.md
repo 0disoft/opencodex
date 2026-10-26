@@ -194,6 +194,10 @@ commit after Bun's close notification. A committed fence is sealed against a sub
 worker close alone does not release admission: the published detached POSIX process group must be absent,
 or the worker must have published terminal cleanup. Missing child publication stays uncertain. Recovery
 continues probing a known group after dispatch settlement. Preparation refusal and terminal readback release it.
+Cancellation precedes the holder check, including a close before gate acquisition. Verifier arming
+failure before invocation preserves no-child proof; terminal durable writes retry while admission
+stays closed. Publication uses a bounded pair of owner-specific temporary names, so transient storage
+failures cannot consume admission capacity with one new partial file per retry.
 
 `src/codex/cli-update-recovery.ts` persists a private, token-scoped recovery record under the config root
 before commit/spawn, publishes each child group after spawn, and records terminal cleanup before gate

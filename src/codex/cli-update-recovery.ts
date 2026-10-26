@@ -1,7 +1,6 @@
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync,
+import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync,
   readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import { getConfigDir } from "../config/paths";
 import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
 
@@ -48,9 +47,18 @@ function read(dir: string, token: string, suffix = ".json"): RecoveryRecord {
     return record;
   } finally { closeSync(fd); }
 }
+function pending(path: string): number {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+  try {
+    const stat = fstatSync(fd), lexical = lstatSync(path);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.geteuid?.() || (stat.mode & 0o077) !== 0
+      || lexical.isSymbolicLink() || lexical.dev !== stat.dev || lexical.ino !== stat.ino) throw new Error("unsafe_recovery_store");
+    ftruncateSync(fd, 0); return fd;
+  } catch (error) { closeSync(fd); throw error; }
+}
 function write(dir: string, record: RecoveryRecord): void {
-  const temp = join(dir, record.token + "." + randomUUID() + ".pending");
-  const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const temp = join(dir, record.token + ".pending");
+  const fd = pending(temp);
   try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(temp, join(dir, record.token + ".json"));
   const directoryFd = openSync(dir, constants.O_RDONLY);
@@ -74,8 +82,8 @@ export function finishClosedCodexCliUpdateRecovery(token: string, configDir = ge
   // An independent terminal marker cannot be overwritten by an interrupted
   // worker finishing its old armed-record rename after the close notification.
   const marker = join(dir, token + ".terminal");
-  const temp = join(dir, token + "." + randomUUID() + ".pending");
-  const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const temp = join(dir, token + ".terminal.pending");
+  const fd = pending(temp);
   try { writeFileSync(fd, JSON.stringify({ version: 1, token, parentPid: process.pid, phase: "terminal", pgid: null })); fsyncSync(fd); }
   finally { closeSync(fd); }
   renameSync(temp, marker);
@@ -88,7 +96,7 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
   try {
     const dir = directory(configDir, false);
     const files = readdirSync(dir);
-    if (files.length > 256) return true;
+    if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
     for (const file of files.filter(file => file.endsWith(".terminal"))) {
       const record = read(dir, file.slice(0, -9), ".terminal");
@@ -104,7 +112,7 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
       return true;
     }
     for (const file of files.filter(file => !file.endsWith(".json") && !file.endsWith(".terminal"))) {
-      const partial = /^([0-9a-f-]{36})(?:\.[0-9a-f-]{36})?\.pending$/.exec(file);
+      const partial = /^([0-9a-f-]{36})(?:\.(?:terminal|[0-9a-f-]{36}))?\.pending$/.exec(file);
       if (!partial || !terminal.has(partial[1]!)) return true;
     }
     return false;

@@ -161,13 +161,23 @@ export function createWorkerCommitWindow(options: {
   const sleep = options.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const cancelled = () => Atomics.load(fence, 0) === CODEX_CLI_UPDATE_FENCE_CANCELLED;
   let held = false;
+  let cleanupRetry: ReturnType<typeof setInterval> | undefined;
+  const release = () => {
+    try { options.recovery?.terminal(); }
+    catch { return false; }
+    held = false;
+    releaseCodexCliUpdateGateOwner(options.gate, owner);
+    return true;
+  };
   return Object.freeze({
     tryEnter() {
+      if (cancelled()) return false;
       if (!held
         && Atomics.compareExchange(gate, 0, CODEX_CLI_UPDATE_GATE_FREE, owner)
           === CODEX_CLI_UPDATE_GATE_FREE) {
         held = true;
       }
+      if (held && cancelled()) { held = false; releaseCodexCliUpdateGateOwner(options.gate, owner); }
       return held;
     },
     async waitEnter() {
@@ -176,6 +186,7 @@ export function createWorkerCommitWindow(options: {
         if (Atomics.compareExchange(gate, 0, CODEX_CLI_UPDATE_GATE_FREE, owner)
           === CODEX_CLI_UPDATE_GATE_FREE) {
           held = true;
+          if (cancelled()) { held = false; releaseCodexCliUpdateGateOwner(options.gate, owner); }
           break;
         }
         if (Date.now() >= deadline) break;
@@ -205,10 +216,13 @@ export function createWorkerCommitWindow(options: {
     },
     exit() {
       if (!held) return;
-      held = false;
-      options.recovery?.terminal();
+      // Caller has proven no child remains. Publish that proof even if the
+      // durable receipt temporarily cannot be written; parent close can retry.
       Atomics.store(fence, 2, 1);
-      releaseCodexCliUpdateGateOwner(options.gate, owner);
+      if (release() || cleanupRetry) return;
+      cleanupRetry = setInterval(() => {
+        if (release()) clearInterval(cleanupRetry);
+      }, 250);
     },
   });
 }
