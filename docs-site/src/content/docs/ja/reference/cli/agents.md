@@ -137,7 +137,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 ファイルを書き換えません。環境に `OPENCODEX_API_AUTH_TOKEN` がない場合は、Codex オートスタート
 シムと同じ注入で `~/.opencodex/service-api-token` から補完します。
 
-`--help`/`-h`、`--version`/`-V`、および Codex 内部のサブコマンド (`login`、`doctor`、`exec` な
+`--help`/`-h`、`--version`/`-V`、および Codex 内部のサブコマンド (`login`、`doctor`、`help` な
 ど) はプロキシの ensure をスキップし、環境をそのまま渡します (シムの引数文法と一致)。
 
 実行前にルーティングを判定します。注入されたルーティングがない場合は情報メッセージを出し、ensure
@@ -149,6 +149,7 @@ ensure を繰り返さないよう、その背後にある Codex を直接起動
 
 実行ファイルの検索やシムの検査に失敗しても、`OCX_SHIM_BYPASS=1` を設定して `codex` を起動し、シムによるプロキシの再起動やサービストークンの読み込みを防ぎます。
 サービストークンの補完は検証済みのローカルルーティングに限り、不明なルーティングには追加しません。クライアントへの注入ではトークンファイルの環境変数による上書きを無視し、管理用認証情報を拒否します。ランチャーのヘルプは `ocx help codex`、Codex 自体のヘルプは `ocx codex --help` で表示します。
+`-c`/`--config` または `-p`/`--profile` は接続先を変更できるため、自動トークン注入を省略します。ユーザーがエクスポートした認証情報と元の引数は保持します。
 
 ### `ocx opencode [opencode args...]`
 

@@ -136,6 +136,24 @@ describe("codex launcher plan", () => {
 });
 
 describe("codex launch env assembly", () => {
+  test("forwarded config and profile overrides never authorize a newly loaded token", () => {
+    for (const args of [
+      ["-c", 'model_providers.opencodex.base_url="https://foreign.example/v1"', "hello"],
+      ['-cmodel_provider="foreign"', "hello"], ["--config", 'model_provider="foreign"'],
+      ['--config=model_provider="foreign"'], ["-p", "foreign"], ["-pforeign"],
+      ["--profile", "foreign"], ["--profile=foreign"],
+    ]) {
+      let consulted = false;
+      expect(buildCodexLaunchEnv({}, {
+        routingKind: "opencodex-local", args,
+        serviceToken: () => { consulted = true; return "ocx_fixture_service_token"; },
+      })).toEqual({});
+      expect(consulted).toBe(false);
+      const inherited = { OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_user_export" };
+      expect(buildCodexLaunchEnv(inherited, { routingKind: "opencodex-local", args })).toEqual(inherited);
+    }
+  });
+
   test("an inherited token-file override cannot select the admin credential", () => {
     withTokenFiles(home => {
       const admin = `ocx_admin_${"a".repeat(43)}`;

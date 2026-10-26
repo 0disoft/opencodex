@@ -24,6 +24,7 @@ Pi link/shared-home remedy; this adds a client identity, not a new command or fl
 `src/cli/codex-launcher.ts` implements `ocx codex` without rewriting Codex routing. Native and foreign routes pass through; local and unknown routes attempt proxy startup and still launch with a diagnostic if it fails. Fast-path arguments skip startup and token loading. A recorded wrapper launches its backing Codex directly. Unknown shim state, including PATH lookup or inspection errors, launches `codex` with `OCX_SHIM_BYPASS=1`, skipping both shim startup and token loading without printing the inspection error. A missing executable retains the normal spawn error path. Only verified OpenCodex routing fills a missing admission token from the installation's service-token file, ignoring an inherited token-file override and refusing management-token collisions. Unknown routing adds no credential. No token is added to argv or diagnostics.
 
 The `codex` namespace forwards all help arguments unchanged; `ocx help codex` retains wrapper help. It skips root shim repair so the routing-aware launcher owns the handoff.
+Forwarded `-c`/`--config` and `-p`/`--profile` overrides make effective routing unverified for automatic service-token injection. They retain original argv and user-exported credentials but never load a new token from disk.
 
 `src/cli/root.ts`, `src/cli/help.ts`, `src/cli/help-navigation.ts`
 

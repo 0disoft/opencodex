@@ -195,7 +195,7 @@ başlatma hiçbir zaman yapılandırma dosyalarını değiştirmez. Eksik `OPENC
 `~/.opencodex/service-api-token` üzerinden doldurulur — Codex otomatik başlatma shim'inin yaptığı
 injection ile aynı.
 
-`--help`/`-h`, `--version`/`-V` ve Codex'in iç alt komutları (`login`, `doctor`, `exec`, ...) proxy
+`--help`/`-h`, `--version`/`-V` ve Codex'in iç alt komutları (`login`, `doctor`, `help`, ...) proxy
 garantisini atlar ve ortamı değiştirmeden geçirir — shim'in argv dilbilgisiyle aynı.
 
 Başlatmadan önce yönlendirme değerlendirilir. Yazılmış yönlendirme yoksa bilgilendirme yazılır ve
@@ -207,6 +207,7 @@ olarak eskisi gibi davranır.
 
 Çalıştırılabilir dosya araması veya shim incelemesi başarısız olursa başlatıcı yine de `codex`'i `OCX_SHIM_BYPASS=1` ile çalıştırır; böylece shim proxy'yi yeniden başlatmaz ve hizmet belirtecini yüklemez.
 Hizmet belirteci yalnızca doğrulanmış yerel yönlendirmede eklenir; bilinmeyen yönlendirmede eklenmez. İstemciye aktarımda belirteç dosyasının ortam değişkeniyle değiştirilmesi yok sayılır ve yönetim kimlik bilgileri reddedilir. Başlatıcı yardımı için `ocx help codex`, Codex yardımı için `ocx codex --help` kullanın.
+`-c`/`--config` veya `-p`/`--profile` hedefi değiştirebildiğinden otomatik belirteç aktarımını da atlar. Kullanıcının dışa aktardığı kimlik bilgileri ve özgün argümanlar korunur.
 
 ### `ocx opencode [opencode argumanlari...]`
 

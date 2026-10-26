@@ -151,6 +151,7 @@ export async function ensureProxyForCodex(deps: CodexProxyEnsureDeps = {}): Prom
 
 export type CodexLaunchEnvDeps = {
   routingKind?: CodexRoutingKind;
+  args?: readonly string[];
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
 };
@@ -172,6 +173,8 @@ export function buildCodexLaunchEnv(
 ): CodexLaunchEnv {
   const env = { ...base };
   if (deps.routingKind !== undefined && deps.routingKind !== "opencodex-local") return env;
+  // Config/profile overrides can replace the destination after the home was classified.
+  if (deps.args?.some(arg => /^(?:-c|-p|--config(?:=|$)|--profile(?:=|$))/.test(arg))) return env;
   if (!env.OPENCODEX_API_AUTH_TOKEN?.trim()) {
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
     if (token && !tokenCollidesWithAdmin(token, env)) env.OPENCODEX_API_AUTH_TOKEN = token;
@@ -263,5 +266,5 @@ export async function cmdCodex(args: string[]): Promise<number> {
     // what the session does next; `ocx doctor` names the autostart failure.
     console.error(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC);
   }
-  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind }));
+  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind, args }));
 }

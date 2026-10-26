@@ -140,7 +140,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 `openai_base_url`），因此启动不会改写任何配置文件。环境缺少 `OPENCODEX_API_AUTH_TOKEN` 时，会从
 `~/.opencodex/service-api-token` 补上，与 Codex 自动启动 shim 采用相同的注入方式。
 
-`--help`/`-h`、`--version`/`-V` 以及 Codex 内部子命令（`login`、`doctor`、`exec` 等）会跳过代理
+`--help`/`-h`、`--version`/`-V` 以及 Codex 内部子命令（`login`、`doctor`、`help` 等）会跳过代理
 ensure 并原样传递环境，与 shim 的 argv 语法保持一致。
 
 执行前会先判定路由：没有注入路由时输出提示信息，并不做 ensure 直接启动 `codex`；外部网关（custom-local/custom-remote）
@@ -148,6 +148,7 @@ ensure 并原样传递环境，与 shim 的 argv 语法保持一致。
 当 `codex` 指向自动启动 shim 时，启动器会直接运行其背后的 Codex，避免 shim 重复 ensure。
 如果查找可执行文件或检查 shim 失败，启动器仍会以 `OCX_SHIM_BYPASS=1` 运行 `codex`，跳过 shim 的代理启动和服务令牌加载。
 只有已验证的本地路由才会补充服务令牌，未知路由不会添加。客户端注入会忽略令牌文件路径的环境变量覆盖，并拒绝管理凭据。启动器帮助使用 `ocx help codex`，Codex 自身帮助使用 `ocx codex --help`。
+`-c`/`--config` 或 `-p`/`--profile` 可能改变目标，因此也会跳过自动令牌注入。用户导出的凭据和原始参数会保留。
 稍后再启动普通 `codex` 时，行为与之前完全一致。
 
 ### `ocx opencode [opencode args...]`

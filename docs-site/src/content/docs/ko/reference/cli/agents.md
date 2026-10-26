@@ -168,7 +168,7 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 `openai_base_url`)가 소유하므로, 이 실행은 config 파일을 재작성하지 않습니다. 환경에 `OPENCODEX_API_AUTH_TOKEN`이
 없으면 `~/.opencodex/service-api-token`에서 채웁니다. 이는 Codex 자동 시작 shim과 동일한 주입입니다.
 
-`--help`/`-h`, `--version`/`-V` 및 Codex 내부 하위 명령(`login`, `doctor`, `exec` 등)은 프록시 ensure를
+`--help`/`-h`, `--version`/`-V` 및 Codex 내부 하위 명령(`login`, `doctor`, `help` 등)은 프록시 ensure를
 건너뛰고 환경을 그대로 전달합니다(shim의 argv 문법과 일치).
 
 실행 전에 라우팅을 확인합니다. 주입된 라우팅이 없으면 안내 메시지를 출력하고 ensure 없이 `codex`를 실행하고,
@@ -180,6 +180,7 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 실행 파일 검색이나 shim 검사가 실패해도 `OCX_SHIM_BYPASS=1`로 `codex`를 실행하여 shim의 프록시 재시작과 서비스 토큰 읽기를 건너뜁니다.
 서비스 토큰 보충은 확인된 로컬 라우팅에만 적용되며, 알 수 없는 라우팅에는 추가하지 않습니다. 클라이언트 주입 시 토큰 파일 환경 변수의 경로 재정의를 무시하고 관리자 자격 증명을 거부합니다. 런처 도움말은 `ocx help codex`, Codex 자체 도움말은 `ocx codex --help`를 사용합니다.
+`-c`/`--config` 또는 `-p`/`--profile`은 목적지를 바꿀 수 있으므로 자동 토큰 주입을 생략합니다. 사용자가 export한 자격 증명과 원래 인자는 보존합니다.
 
 ### `ocx opencode [opencode args...]`
 

@@ -177,7 +177,7 @@ aucun lancement ne réécrit donc de fichier de configuration. Pour un routage l
 est renseigné depuis `~/.opencodex/service-api-token`, la même injection que celle du shim de
 démarrage automatique Codex.
 
-`--help`/`-h`, `--version`/`-V` et les sous-commandes internes de Codex (`login`, `doctor`, `exec`,
+`--help`/`-h`, `--version`/`-V` et les sous-commandes internes de Codex (`login`, `doctor`, `help`,
 ...) sautent l'assurance du proxy et traversent l'environnement inchangé, en reprenant la
 grammaire d'arguments du shim.
 
@@ -192,6 +192,7 @@ exactement comme auparavant.
 
 Si la recherche de l’exécutable ou l’inspection du shim échoue, le lanceur exécute quand même `codex` avec `OCX_SHIM_BYPASS=1`, empêchant le shim de relancer le proxy ou de charger un jeton de service.
 Un routage inconnu n’ajoute jamais de jeton de service. La variable de remplacement du fichier de jeton est ignorée pour le client et les identifiants d’administration sont refusés. `ocx help codex` affiche l’aide du lanceur ; `ocx codex --help` atteint Codex.
+Les options `-c`/`--config` ou `-p`/`--profile` désactivent aussi l’injection automatique, car elles peuvent changer la destination. Les identifiants exportés par l’utilisateur et les arguments restent inchangés.
 
 ### `ocx opencode [opencode args...]`
 
