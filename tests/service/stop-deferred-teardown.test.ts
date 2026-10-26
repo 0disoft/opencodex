@@ -313,6 +313,17 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
+  test("a connection committed during orphan discovery keeps its hub-owned not-owned answer", async () => {
+    // Disconnected at entry, hub-connected by the time the POST lands: the stopped runtime
+    // re-reads the fresh config and truthfully answers not-owned for the connection that
+    // now owns those integrations. Refusing it would restore over the brand-new connection.
+    const outcome = await runParentStop({ receipt: false, orphan: true, connectDuringDiscovery: true,
+      serverTeardown: true, json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "performed-by-proxy" });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+  });
+
   test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });

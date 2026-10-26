@@ -131,6 +131,20 @@ export function stopRequestFetch(): typeof fetch {
 }
 
 /**
+ * Whether the stop caller may accept `sharedTeardown: "not-owned"` as teardown confirmation.
+ *
+ * Refused only for a positively identified Link connection: its unauthenticated loopback
+ * route is unsafe once the listener exits, only an old build answers `not-owned` for one,
+ * and it says so while preserving the route this stop must restore. Everything else — a
+ * sibling, a hub connection, or no connection at all — has nothing that answer skipped.
+ * Callers pass the state read at the POST, not at stop entry: a connect or disconnect
+ * committed while the stop is still awaiting decides the ownership the answer describes.
+ */
+export function notOwnedTeardownIsAcceptable(state: ClientConnectionState, stoppingSibling: boolean): boolean {
+  return stoppingSibling || state.kind !== "connected" || state.value.transport !== "link";
+}
+
+/**
  * Restore shared client state after a stop.
  *
  * Returns the two failure kinds separately. `historyOnly` means teardown succeeded and

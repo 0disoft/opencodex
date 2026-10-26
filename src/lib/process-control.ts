@@ -46,8 +46,10 @@ export interface GracefulStopIo {
    * A sibling's `not-owned` is a truthful final answer: it owns no shared teardown, so
    * nothing is left for this caller either. `ocx stop` of a connected Link Child sets this
    * false — only an old build answers `not-owned` for a link connection, and it says so
-   * while preserving the loopback route this caller must restore itself. Defaults to true;
-   * the option only narrows a stop that sent no deferral nonce.
+   * while preserving the loopback route this caller must restore itself. The caller decides
+   * from the connection state read at the POST: a connect or disconnect committed mid-stop
+   * changes what the answer means for it. Defaults to true; the option only narrows a stop
+   * that sent no deferral nonce.
    */
   acceptNotOwnedTeardown?: boolean;
   /**
