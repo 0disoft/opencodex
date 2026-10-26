@@ -111,6 +111,49 @@ describe("/api/codex-agent-roles", () => {
     expect((await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "xai/grok-4.5", batch: "next" }) })).status).toBe(200);
   });
 
+  // explorer pinned gpt-5.5 with no effort; librarian inherited its model and held effort high.
+  async function seedRestorable(dir: string, batch: string, explorerAfter: string, librarianAfter: string): Promise<void> {
+    const { recordRoleModelChange } = await import("../../src/codex/role-model-history");
+    const home = join(root, "codex");
+    recordRoleModelChange(home, { ...historyRow(batch, "explorer", explorerAfter), before: { model: "gpt-5.5", effort: null } }, dir);
+    recordRoleModelChange(home, { ...historyRow(batch, "librarian", librarianAfter), before: { model: null, effort: "high" } }, dir);
+  }
+
+  test("a Restore of a full 50-row batch writes every role, though its own rows push that batch out of the listing", async () => {
+    const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_LIMIT } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "ocx", "integrations");
+    inheritingRole(`model_reasoning_effort = "low"\n${INHERITING}`);
+    writeFileSync(join(root, "codex", "agents", "explorer.toml"), ROLE.replace('model = "gpt-5.5"', 'model = "a/now"'));
+    for (let index = 0; index < ROLE_HISTORY_LIMIT - 2; index++) recordRoleModelChange(join(root, "codex"), historyRow("full", `gone-${index}`), dir);
+    await seedRestorable(dir, "full", "a/now", "a/now");
+    expect(listRoleModelChanges(join(root, "codex"), ROLE_HISTORY_LIMIT, dir)).toHaveLength(ROLE_HISTORY_LIMIT);
+    const restore = (role: string, body: Record<string, unknown>) => roleCall(role, { ...body, restores: "full" });
+    expect((await restore("explorer", { model: "gpt-5.5", effort: null })).status).toBe(200);
+    expect((await restore("librarian", { effort: "high" })).status).toBe(200);
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+    expect(readFileSync(join(root, "codex", "agents", "librarian.toml"), "utf8")).toBe(`model_reasoning_effort = "high"\n${INHERITING}`);
+  });
+
+  test("a compaction in the middle of a Restore keeps the batch being restored until every role is back", async () => {
+    const { recordRoleModelChange, ROLE_HISTORY_MAX_BYTES } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "ocx", "integrations");
+    inheritingRole(`model_reasoning_effort = "low"\n${INHERITING}`);
+    // Older batches fill most of the byte budget, and the batch to restore holds two wide rows.
+    for (let index = 0; index < 10; index++) recordRoleModelChange(join(root, "codex"), historyRow(`old-${index}`, "explorer", "o".repeat(10_000)), dir);
+    await seedRestorable(dir, "wide", "s".repeat(60_000), "t".repeat(60_000));
+    // The first restored row records a wide current model, so its append takes the file past the budget.
+    const current = "c".repeat(50_000);
+    writeFileSync(join(root, "codex", "agents", "explorer.toml"), ROLE.replace('model = "gpt-5.5"', `model = "${current}"`));
+    const path = join(dir, "codex-agent-roles.jsonl");
+    const before = fs.statSync(path).size;
+    expect(before + current.length).toBeGreaterThan(ROLE_HISTORY_MAX_BYTES);
+    const restore = (role: string, body: Record<string, unknown>) => roleCall(role, { ...body, restores: "wide" });
+    expect((await restore("explorer", { model: "gpt-5.5", effort: null })).status).toBe(200);
+    expect(fs.statSync(path).size).toBeLessThan(before);
+    expect((await restore("librarian", { effort: "high" })).status).toBe(200);
+    expect(readFileSync(join(root, "codex", "agents", "librarian.toml"), "utf8")).toBe(`model_reasoning_effort = "high"\n${INHERITING}`);
+  });
+
   test("keeps the history file within its byte budget by dropping the oldest whole batches", async () => {
     const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_MAX_BYTES } = await import("../../src/codex/role-model-history");
     const dir = join(root, "history");

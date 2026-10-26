@@ -30,6 +30,8 @@ export interface RoleModelChange {
 
 interface StoredRoleModelChange extends RoleModelChange {
   readonly codexHome: string;
+  /** The batch this row's write restored, so compaction keeps that batch while the Restore is kept. */
+  readonly restores?: string;
 }
 
 /** Rows one listing returns, and rows one batch may hold, so a whole batch always fits a listing. */
@@ -47,7 +49,7 @@ export function isRoleHistoryBatch(value: unknown): value is string {
 }
 
 /** `codexHome` is the canonical path `getCodexHome()` returns, so two spellings of one home match. */
-export function recordRoleModelChange(codexHome: string, change: RoleModelChange, dir: string = integrationsDir()): void {
+export function recordRoleModelChange(codexHome: string, change: RoleModelChange & { readonly restores?: string }, dir: string = integrationsDir()): void {
   ensureDir(historyPath(dir));
   const stored: StoredRoleModelChange = { ...change, codexHome };
   appendFileSync(historyPath(dir), `${JSON.stringify(stored)}\n`, { encoding: "utf8", mode: 0o600 });
@@ -63,23 +65,27 @@ export function recordRoleModelChange(codexHome: string, change: RoleModelChange
 /**
  * Rewrite the file to its newest rows within half the byte budget and the row budget, so the next
  * compaction is many saves away. A batch the cut falls inside is dropped whole, for every Codex home,
- * so no home is left with part of an Apply all to restore.
+ * so no home is left with part of an Apply all to restore. A kept Restore keeps the batch it restores
+ * whole, so a Restore still writing its roles never loses the batch that vouches for them.
  */
 function compact(dir: string): void {
   const rows = tailRows(historyPath(dir));
-  const kept: StoredRoleModelChange[] = [];
+  let newest = 0;
   let bytes = 0;
   for (const row of rows) {
     bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
-    if (bytes > ROLE_HISTORY_MAX_BYTES / 2 || kept.length >= ROLE_HISTORY_MAX_ROWS) break;
-    kept.push(row);
+    if (bytes > ROLE_HISTORY_MAX_BYTES / 2 || newest >= ROLE_HISTORY_MAX_ROWS) break;
+    newest += 1;
   }
-  const cut = new Set(rows.slice(kept.length).map(batchKey));
-  const whole = kept.filter(row => !cut.has(batchKey(row))).reverse();
+  const cut = new Set(rows.slice(newest).map(batchKey));
+  const keep = new Set(rows.slice(0, newest).map(batchKey).filter(key => !cut.has(key)));
+  const sources = rows.flatMap(row => keep.has(batchKey(row)) && row.restores ? [batchKey({ ...row, batch: row.restores })] : []);
+  for (const source of sources) keep.add(source);
+  const whole = rows.filter(row => keep.has(batchKey(row))).reverse();
   atomicWriteFile(historyPath(dir), whole.map(row => `${JSON.stringify(row)}\n`).join(""));
 }
 
-function batchKey(row: StoredRoleModelChange): string {
+function batchKey(row: Pick<StoredRoleModelChange, "codexHome" | "batch">): string {
   return `${row.codexHome}\n${row.batch}`;
 }
 
@@ -101,6 +107,7 @@ function parseRow(line: string): StoredRoleModelChange | null {
   return typeof change === "object" && change !== null && typeof change.codexHome === "string"
     && typeof change.at === "string" && typeof change.role === "string"
     && isRoleHistoryBatch(change.batch) && isSetting(change.before) && isSetting(change.after)
+    && (change.restores === undefined || isRoleHistoryBatch(change.restores))
     ? change
     : null;
 }
@@ -150,7 +157,7 @@ function tailRows(path: string): StoredRoleModelChange[] {
 }
 
 function forHome(rows: StoredRoleModelChange[], codexHome: string): RoleModelChange[] {
-  return rows.flatMap(({ codexHome: home, ...change }) => home === codexHome ? [change] : []);
+  return rows.flatMap(({ codexHome: home, restores: _restores, ...change }) => home === codexHome ? [change] : []);
 }
 
 /**
@@ -182,11 +189,12 @@ export function roleHistoryBatchSize(codexHome: string, batch: string, dir: stri
 
 /**
  * The setting a Restore of `batch` may put back on `role` in this Codex home: the role's earliest
- * `before` in that batch, or null when this home's listed history has no such change. The server
+ * `before` in that batch, or null when this home's retained history has no such change. The server
  * checks a restore against it, so a dashboard still showing another home's history cannot write
- * that home's earlier models here.
+ * that home's earlier models here. It reads every retained batch rather than the 50-row listing,
+ * because a Restore's own rows push the batch it restores out of that listing before it finishes.
  */
 export function restorableSetting(codexHome: string, batch: string, role: string, dir: string = integrationsDir()): RoleSetting | null {
-  const changes = listRoleModelChanges(codexHome, ROLE_HISTORY_LIMIT, dir).filter(change => change.batch === batch && change.role === role);
+  const changes = forHome(tailRows(historyPath(dir)), codexHome).filter(change => change.batch === batch && change.role === role);
   return changes.at(-1)?.before ?? null;
 }

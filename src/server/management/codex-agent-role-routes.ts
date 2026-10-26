@@ -180,6 +180,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
         role,
         before,
         after: { model: model ?? before.model, effort: effort === undefined ? before.effort : effort },
+        ...(typeof body.restores === "string" ? { restores: body.restores } : {}),
       });
     } catch (error) {
       // The write already stands; a lost history row only costs the Restore button for it.
