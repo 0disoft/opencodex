@@ -33,4 +33,6 @@ permitting cleanup after a bind change. `ocx export --client t3code` asks the li
 `/api/client-config` route, like Qoder, Raycast and Factory Droid. Owned-catalog refresh in
 `ocx sync`, `/api/sync` and catalog refresh includes T3 Code. The managed path template lives in
 `src/integrations/mutation-plan.ts`, and `tests/clients/t3code-client.test.ts` covers the
-contract.
+contract. `tests/clients/t3code-client-lifecycle.test.ts` also covers relocated-home
+detection, apply and Undo, shared `ClientPathError` refusal, and owned cleanup after
+the bind changes to require admission.

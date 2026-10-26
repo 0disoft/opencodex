@@ -1,4 +1,11 @@
 {
+  "t3code-client-lifecycle.test.ts": "clients",
+  "agent-clients.test.ts": "clients",
+  "workbuddy-selector-recovery.test.ts": "clients",
+  "server-live-close.test.ts": "server",
+  "link-diagnostics.test.ts": "clients",
+  "link-tunnel-history.test.ts": "clients",
+  "link-readiness.test.ts": "clients",
   "gentle-shell-path.test.ts": "clients",
   "gentle-shell-client.test.ts": "clients",
   "droid-managed-reasoning-defaults.test.ts": "clients",
@@ -135,5 +142,9 @@
   "link-codex-settings-digest.test.ts": "clients",
   "link-apply-record.test.ts": "clients",
   "client-runtime-restart.test.ts": "clients",
-  "link-parity-reporter.test.ts": "clients"
+  "link-parity-reporter.test.ts": "clients",
+  "hermes-profiles.test.ts": "clients",
+  "hermes-profile-routes.test.ts": "clients",
+  "cli-sync-expect-link.test.ts": "cli",
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
 }

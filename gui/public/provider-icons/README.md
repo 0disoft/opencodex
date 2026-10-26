@@ -403,6 +403,14 @@ committing it.
   is **masked**: as an image `currentColor` resolves to black and vanishes on the dark tile. The site
   favicon `https://opengateway.ai/icon.svg` was rejected: its "OG" is a `<text>` glyph.
 
+## WorkBuddy AI (2026-10-22)
+
+- `workbuddy-color.svg` — unchanged SVG from the international WorkBuddy site's
+  declared favicon (`https://www.workbuddy.ai/`):
+  `https://download.codebuddy.ai/web/workbuddy/2365138d79c29bb1cbce4644f5cbbffd2b561a5c/assets/logo.svg`.
+  The 40×40 artwork retains its green background, gradients and white mark;
+  render it as an image in either theme. Used to identify the `workbuddy-ai`
+  provider, with the same asset embedded by the native tray.
 ## T3 Code (2026-10-22)
 
 - `t3code.svg` — `assets/prod/logo.svg` from `pingdotgg/t3code` (MIT, © T3 Tools Inc.), the

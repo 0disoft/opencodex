@@ -138,7 +138,12 @@ the native passthrough there is no canonical Fast injection and no wire mapping:
 and `fastMode` injects nothing here. Resolved-Fast-policy injection applies only to routes that
 take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitted only for providers opted into
 parallel tools (or pinned false by the existing provider opt-out contract).
-The native passthrough still applies the existing model capability authority to reasoning: an
+A `reasoning_details` entry carrying Anthropic state — the `anthropic-claude-v1` marker, or an
+unmarked `reasoning.text` whose signature passes the inbound spelling check — makes the request
+ineligible for native passthrough so its signature or redacted ciphertext cannot cross into
+another provider; the bridge keeps only the plaintext projection. Other provider formats
+retain their native wire shape. The native
+passthrough still applies the existing model capability authority to reasoning: an
 explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
 unclassified. The two Chat builders share the explicit wire policy after provider resolution:
 `reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
@@ -238,6 +243,22 @@ outbound contract is covered by `tests/responses/chat-conversation-affinity.test
 caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
+The optional `x-hermes-conversation-id` header is accepted on `/v1/chat/completions` and `/v1/responses`
+strictly as a log-only correlation fallback (`logCtx.conversationId`), normalized to a 32-hex-character
+digest and stripped before upstream forwarding. It never modifies native session lane allocation
+(`sessionLaneIdFromRequest`), turn termination (`bindTurnTerminationScope`), or upstream prompt caching.
+Native header candidates (`x-codex-parent-thread-id`, `session_id`, `session-id`, `thread-id`) are each
+normalized independently in priority order before considering Hermes, ensuring that an empty or whitespace
+candidate does not mask a valid native identity. Configuring `session_affinity_header: x-hermes-conversation-id`
+on Hermes replaces the client's `session-id` header, trading away native session identity and lane scoping
+for log-only correlation; `session-id` remains the generated default.
+A Hermes-derived log id is marked `conversationIdIsHermesFallback` (in memory, never persisted). Chat sets
+it before routing so pre-dispatch refusals stay correlated; `assignNativeLogConversationId` lets any later
+native id replace it — `prepareResponsesRequest` resolution and the Cursor conversation backfills in
+`run-turn-execution.ts`, `sidecar-execution.ts` and `request-transport.ts` — while a caller-owned
+pre-populated id (routed Claude) is kept. Covered by `tests/usage/request-log-conversation.test.ts` and
+`tests/responses/chat-conversation-affinity.test.ts`.
+
 ## Chat streaming client with a JSON upstream result
 
 The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
@@ -248,7 +269,8 @@ Tool calls gain their array-order stream `index`; the stream retains one assista
 one terminal choice, and one `[DONE]`. Both native and translated JSON fallbacks share
 `jsonCompletionSse`; its temporary frame strings and final body ownership are charged to the
 existing translator budget. Known incomplete limits take precedence over tool finish reasons;
-unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
+"known" means the shared [incomplete-reason vocabulary](../transports/responses-wire-shapes.md#adapter-incomplete-reasons),
+and unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
 release on consumption or cancellation. Actual upstream SSE and native Chat bypass this fallback.
 
 > Decision record: [ADR-0062](../decisions/ADR-0062-chat-streaming-client-with-a-json-upstream-resul.md)
@@ -538,31 +560,9 @@ Managed native Messages retain a coherent observed CLI identity bundle only for 
 
 ### Native Chat thinking continuation
 
-`src/adapters/openai-chat/reasoning-replay.ts` repairs assistant tool-call history missing
-`reasoning_content` before native serialization. Caller-supplied nonempty text wins. The native
-lane honors the same preserve/placeholder policy as translated Chat; absent preserve declarations
-recognize DeepSeek Flash/Pro families across dotted versions, namespaces and gateway suffixes.
-Explicit preserve lists (including `[]`) remain authoritative, and an explicit placeholder list
-can disable fabricated placeholders while allowing original cached reasoning.
-For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
-answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
-Before copying replay into the request, native passthrough measures the exact escaped-JSON net
-change and checks the final request size (`baseBytes + serializedBytes`) against the fixed
-`maxSerializedBytes` cap. For a changed replay, it then reserves that full size as transient
-`request_copies` against the translator budget remaining after other retained copies, before
-applying replay and serializing the body. The transient reservation is released in `finally`.
-Exceeding either limit returns the standard 413 `translation_buffer_limit` response; history is
-never silently truncated. Key rotation and retry rebuild and charge the request after releasing
-the previous body, preserving the same scope and normal replay behavior within budget.
+`src/adapters/openai-chat/reasoning-replay.ts` repairs assistant history missing `reasoning_content` before native serialization. Caller-supplied nonempty text wins. The native lane honors the same preserve/placeholder policy as translated Chat; absent preserve declarations recognize DeepSeek Flash/Pro families and Reflection/Stealth families (`isReflectionThinkingModel`). Explicit preserve lists (including `[]`) remain authoritative, and an explicit placeholder list can disable fabricated placeholders while allowing original cached reasoning. While DeepSeek models require reasoning replay for tool-enabled requests, Reflection and Stealth families require continuous reasoning replay across all prior assistant turns even when tools are absent (`hasTools: false`), synthesizing the whitespace placeholder `[" "]` when placeholder is enabled. Upstream reasoning capture in `src/server/chat-native-reasoning.ts` extracts thinking from both `reasoning_content` and `reasoning` across SSE stream deltas and buffered choices. In `src/adapters/openai-chat/passthrough.ts`, passthrough body sizing measures `baseBytes` unconditionally against `maxSerializedBytes - replayPlan.serializedBytes` via `jsonUtf8Bytes(transformedBody(), ...)`. For changed replays, it reserves `baseBytes + replayPlan.serializedBytes` as transient `request_copies` against the remaining translator budget before serializing the body, releasing the reservation in `finally`. Exceeding either limit returns HTTP 413 `translation_buffer_limit` (`TranslatorBudgetExceededError("request_copies", maxSerializedBytes)`); history is never silently truncated. Key rotation and retry rebuild and charge the request after releasing the previous body, preserving scope and normal replay behavior within budget. Model-contract evidence and compatibility policy: Verification date: 2026-10-25. The Reflection/Stealth family default is a defensive compatibility fallback policy based on observed vendor behavior: live testing against Vercel AI Gateway (`reflection-beam`, 2026-10-23) observed rejection of tool-free multi-turn requests with HTTP 400. Because this destination-specific observation is not a vendor guarantee across all possible stealth or reflection hosts, OpenCodex applies this heuristic as a fallback policy while providing explicit operator overrides via `preserveReasoningContentModels` and `requiresReasoningPlaceholderModels`. Continuous CI verification exercises hermetic local fixtures in `tests/responses/chat-native-reasoning-scope.test.ts` (pinning multi-turn non-tool replay, `reasoning` delta capture, and passthrough size checks) without live network requests.
 
-`src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
-all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,
-`session_id` or `session-id` and the existing exact provider/destination/adapter/model/credential
-scope. The native send rebinds that scope before every request build, including key rotation.
-Missing identity, a restarted/expired/evicted cache, and another route receive only the configured
-placeholder; they never recover another conversation's raw text. SSE capture retains at most
-256 KiB and 64 calls within the translator budget and releases on terminal/error/cancellation.
-Unfinished tool streams cannot seed replay. This leaves the native wire and response fields intact.
+`src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`, `session_id` or `session-id` and the existing exact provider/destination/adapter/model/credential scope. The native send rebinds that scope before every request build, including key rotation. Missing identity, a restarted/expired/evicted cache, and another route receive only the configured placeholder; they never recover another conversation's raw text. SSE capture retains at most 256 KiB and 64 calls within the translator budget and releases on terminal/error/cancellation. Unfinished tool streams cannot seed replay. This leaves the native wire and response fields intact.
 
 ## Codex runtime agent assertions
 

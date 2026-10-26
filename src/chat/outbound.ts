@@ -19,9 +19,11 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  isTerminalRefusalCode,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { truncationReasonFor } from "../responses/truncated-stop-reason";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
 import { reasoningDetailEntriesForItem } from "./reasoning-details";
 
@@ -202,6 +204,10 @@ export function chatCompletionsStreamErrorPayload(
     // The guard's deterministic refusal keeps its wire identity past classifyError's
     // generic 5xx remap — same code the buffered Chat error and the SSE frame carry.
     classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
+  } else if (isTerminalRefusalCode(details?.code)) {
+    // A terminal refusal (e.g. `invalid_prompt` for a plan refusal on a later sidecar iteration)
+    // is a client error; its code survives so the client sees the refusal, not a server fault.
+    classified.code = details!.code!;
   } else if (details?.code !== undefined && details.code !== null && !classified.code) {
     classified.code = details.code;
   }
@@ -229,7 +235,9 @@ export function chatCompletionsFailedResponse(error: Rec): { message: string; de
       code,
       ...(code === "translation_buffer_limit"
         ? { status: 502, type: "upstream_error" }
-        : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
+        // A terminal refusal code is a 400-class verdict; inferring status from its wording
+        // turned a permanent refusal into a retryable 502.
+        : { type, ...(isTerminalRefusalCode(code) ? { status: 400 } : {}) }),
     },
   };
 }
@@ -243,8 +251,14 @@ export function chatCompletionsIncompleteOutcome(
   reason: unknown,
   message: unknown,
 ): { finishReason: "length" | "content_filter" } | { failMessage: string } {
-  if (reason === "max_output_tokens") return { finishReason: "length" };
-  if (reason === "content_filter") return { finishReason: "content_filter" };
+  // Upstream Responses endpoints do not all use OpenAI's `max_output_tokens`: Volcengine Ark
+  // (Coding Plan `/responses`) sends `incomplete_details.reason: "length"` for a hit output cap.
+  // Read the reason through the shared truncation vocabulary so such a turn ends with
+  // finish_reason "length" instead of a 502. Proxy reasons (adapter_eof, upstream_stall_timeout,
+  // missing_terminal_event) are not in that vocabulary and still fail.
+  const truncation = typeof reason === "string" ? truncationReasonFor(reason) : undefined;
+  if (truncation === "max_output_tokens") return { finishReason: "length" };
+  if (truncation === "content_filter") return { finishReason: "content_filter" };
   const why = typeof reason === "string" ? reason : "unknown";
   return {
     failMessage: typeof message === "string" && message.length > 0
@@ -871,8 +885,8 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   const incomplete = isRec(body.incomplete_details) ? body.incomplete_details : {};
   let incompleteFinish: "length" | "content_filter" | undefined;
   if (body.status === "incomplete") {
-    if (incomplete.reason === "max_output_tokens") incompleteFinish = "length";
-    else if (incomplete.reason === "content_filter") incompleteFinish = "content_filter";
+    const outcome = chatCompletionsIncompleteOutcome(incomplete.reason, undefined);
+    if ("finishReason" in outcome) incompleteFinish = outcome.finishReason;
     else throw new ChatCompletionsStreamError("upstream response ended without a supported completion boundary", {
       code: "upstream_incomplete", type: "upstream_error",
     });
@@ -1052,7 +1066,7 @@ export async function collectChatCompletion(
           const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
           const status = code === "translation_buffer_limit"
             ? 502
-            : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
+            : isTerminalRefusalCode(code) || isCyberPolicyMessage(message)
               ? 400
               : streamErrorStatus(message);
           const streamError = new ChatCompletionsStreamError(message, {

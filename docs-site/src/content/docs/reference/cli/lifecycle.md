@@ -82,8 +82,19 @@ ocx start --socks5-off
 
 ### `ocx stop [--json]`
 
-Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
+Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
+On a connected client (a Remote Link Child or a hub client), `ocx stop` leaves Codex routing, its
+model catalog and the Grok config as they are, including after a successful API stop: the connection
+owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
+client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
+A connected stop verifies the local runtime before changing its service: a client-role listener
+with the matching PID is supported, while an ordinary proxy must explicitly advertise preservation
+across API, signal and service shutdown. Older or unverified ordinary runtimes are refused before
+stop actions. Update/restart that runtime through its supervisor and retry; use `ocx disconnect`
+only when you intend to release the connection-owned integrations.
+Repeated stops of an already-stopped client confirm service-manager inactivity and absence at the
+known local endpoints before returning the normal not-running result.
 While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
 it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
 a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app
@@ -426,6 +437,12 @@ The CLI's own `--json` output is deliberately narrower than the HTTP body: it em
 `unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
 unreachable; and 64 for invalid arguments.
 
+On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
+`/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so
+`ocx ready --wait` keeps waiting until the link is back; a working link adds
+`link: {state: "available"}` to the `200` answer. `/healthz` on a Child keeps meaning only that the
+process runs. The reasons are listed in [Remote Link](/guides/remote-link/#link-status).
+
 ### `ocx resolve [--json]`
 
 Resolve the runtime facts a shell needs without re-implementing them: the config home, the
@@ -542,6 +559,46 @@ and a stale picker is not.
 
 When the command runs from inside the Codex app, the restart is handed off to a detached helper
 and this session ends with the app.
+
+#### Sync only from the expected Home: `--expect-link` and `--expect-hub-key`
+
+```bash
+ocx sync --expect-link <linkId> [--restart-codex]
+ocx sync --expect-hub-key <apiKeyId> [--restart-codex]
+```
+
+A script that reads `ocx connect status --json` and then runs `ocx sync` cannot tell whether the
+machine was disconnected or relinked to another Home in between; a plain `ocx sync` would then
+sync the local providers or the other Home's catalog. Passing the identity you read closes that
+gap. `--expect-link` takes the `link.linkId` of a Remote Link Child and `--expect-hub-key` the
+`apiKeyId` of a hub client. The check runs under the same lock that chooses the sync path, and
+every later write is bound to the connection that passed it.
+
+When the identity holds, the command is exactly the connected sync above. Otherwise it changes
+nothing (not even the automatic Codex shim repair other commands run first), never syncs the local
+providers, exits **5**, and prints a human line followed by one JSON line as the last line on stderr:
+
+```json
+{"phase":"child_link_mismatch","reason":"other_link"}
+```
+
+`phase` is `child_link_mismatch` for `--expect-link` and `hub_client_mismatch` for
+`--expect-hub-key`.
+
+| `reason` | Machine state |
+| --- | --- |
+| `disconnected` | Not connected to any Home or hub |
+| `invalid_state` | The client configuration or a connect marker cannot be read |
+| `disconnect_pending` | A disconnect has started and not finished |
+| `pending_operation` | A key rotation, a connect, or another sync is in progress (including one that holds the locks this check needs) |
+| `hub_client` | `--expect-link` on a hub client |
+| `link_client` | `--expect-hub-key` on a Remote Link Child |
+| `other_link` / `other_key` | Connected, but to a different link or with a different key |
+
+A missing or malformed value, a repeated flag, or both flags together exit 2 before any state is
+read. A connection that changes after the check, while the catalog is being fetched, still fails
+as a plain connected sync does (exit 1, nothing written). Versions without these flags ignore
+them, so check `ocx --version` first.
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
@@ -1152,6 +1209,14 @@ On the Home, every row of `ocx link status --json` carries what that Child last 
 starts and then once a minute; the Home keeps reports in memory only, so after a Home restart the
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
+
+For a link the Home added, each row also carries `tunnel`: `attempt` (ssh attempts since the link
+was last connected), `nextRetryAt` (ISO time of the next scheduled retry, `null` while one runs or
+none is due), `lastTransition` (`{from, to, at, cause}`) and `lastFailure` (`{cause, at}`). A cause
+is one of `auth`, `hostkey`, `forward`, `remote_forward_conflict`, `timeout`, `network`,
+`unknown`, `spawn_failed` and `listener_unavailable`. The Home keeps it in memory, so it starts
+empty after a Home restart. `GET /api/link/status` includes the field only when asked with
+`?diagnostics=1`, because an older `ocx link status` rejects fields it does not know.
 
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
