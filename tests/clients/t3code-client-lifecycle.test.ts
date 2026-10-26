@@ -65,3 +65,22 @@ test("a relative T3CODE_HOME throws the shared leaf error before touching a file
   expect(() => t3codeConfigPath({ T3CODE_HOME: "relative/t3" }, f.input.home)).toThrow(ClientPathError);
   expect(readFileSync(f.path, "utf8")).toBe(f.before);
 });
+
+test("a closed Messages surface refuses apply and refresh but keeps disable", () => {
+  const f = fixture();
+  const explicit = { ...f.input, config: { ...f.input.config, apiSurfaces: { messages: { enabled: false } } } as OcxConfig };
+  const inherited = { ...f.input, config: { ...f.input.config, claudeCode: { enabled: false } } as OcxConfig };
+  for (const closed of [explicit, inherited]) {
+    expect(applyIntegration(closed)).toMatchObject({ ok: false, reason: "unsafe", message: expect.stringContaining("Messages API") });
+    expect(readFileSync(f.path, "utf8")).toBe(f.before);
+  }
+  const reopened = { ...inherited, config: { ...inherited.config, apiSurfaces: { messages: { enabled: true } } } as OcxConfig };
+  expect(applyIntegration(reopened).ok).toBe(true);
+  const applied = readFileSync(f.path, "utf8");
+  for (const closed of [explicit, inherited]) {
+    expect(refreshIntegration(closed)).toMatchObject({ ok: false, reason: "unsafe" });
+    expect(readFileSync(f.path, "utf8")).toBe(applied);
+  }
+  expect(disableIntegration(inherited).ok).toBe(true);
+  expect(JSON.parse(readFileSync(f.path, "utf8"))).toEqual(f.original);
+});

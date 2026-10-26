@@ -88,7 +88,7 @@ export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeCon
 import { agentConfigPath, buildQoderCnClientConfig, buildQoderCnContribution, buildWorkbuddyClientConfig, buildWorkbuddyContribution, summarizeWorkbuddy, workbuddyApplyRefusal } from "./config-export/agent-clients";
 import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
 export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
-import { buildT3CodeClientConfig, summarizeT3Code, buildT3CodeContribution, t3codeConfigPath } from "./config-export/t3code";
+import { buildT3CodeClientConfig, summarizeT3Code, buildT3CodeContribution, t3codeApplyRefusal, t3codeConfigPath } from "./config-export/t3code";
 export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGeneratedConfig } from "./config-export/t3code";
 
 
@@ -1708,6 +1708,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     build: buildT3CodeClientConfig,
     format: "json",
     summarize: summarizeT3Code,
+    validateApply: t3codeApplyRefusal,
     buildContribution: buildT3CodeContribution,
     loopbackOnly: true,
   },

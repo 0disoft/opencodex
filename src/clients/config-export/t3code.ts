@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { PROXY_MARKER } from "../../claude/auth-detect";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
+import { resolveApiSurfaceSettings } from "../../protocols/settings";
 import { absoluteClientPath } from "../client-path";
 import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { OPENCODE_PROVIDER_ID } from "./constants";
@@ -109,6 +110,16 @@ export function summarizeT3Code(document: unknown): { modelCount: number; models
   const models = (document as T3CodeGeneratedConfig | undefined)
     ?.providerInstances?.[OPENCODE_PROVIDER_ID]?.config?.customModels ?? [];
   return { modelCount: models.length, modelsWithoutLimits: 0 };
+}
+
+/**
+ * Refuses apply and refresh while the Messages surface is closed, explicitly or through
+ * the inherited `claudeCode.enabled`: every turn the instance sends would get a 403.
+ * Disable and Undo stay available.
+ */
+export function t3codeApplyRefusal(ctx: ExportContext): string | null {
+  if (resolveApiSurfaceSettings(ctx.config ?? {}).messages.enabled) return null;
+  return "T3 Code needs the Messages API; turn on Messages on the API page (apiSurfaces.messages.enabled) first.";
 }
 
 export function buildT3CodeContribution(ctx: ExportContext): ManagedContribution {

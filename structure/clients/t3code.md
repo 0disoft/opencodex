@@ -22,7 +22,13 @@ normalized export model, Fast rows included. The slug is the proxy selector, whi
 verbatim as the Claude model id and the Messages surface resolves like any other selector.
 
 No Codex block is written. T3 Code lists Codex models through `codex app-server`, which reads the
-routed catalog opencodex already injects into `CODEX_HOME`.
+routed catalog the Codex integration injects into `CODEX_HOME`, so Codex threads route only while
+that integration is enabled and T3 Code runs Codex with the same home.
+
+Every Claude turn the instance sends hits the Messages surface. `t3codeApplyRefusal`, the spec's
+`validateApply`, refuses apply and refresh while `resolveApiSurfaceSettings` reports that surface
+closed, whether by an explicit `apiSurfaces.messages.enabled` or the inherited
+`claudeCode.enabled`. Disable and Undo stay available.
 
 The fragment declares no refreshable paths. T3 Code rewrites an instance whenever a user edits it
 in its settings UI, by marking a variable sensitive, adding a custom model or toggling the
@@ -34,5 +40,5 @@ permitting cleanup after a bind change. `ocx export --client t3code` asks the li
 `ocx sync`, `/api/sync` and catalog refresh includes T3 Code. The managed path template lives in
 `src/integrations/mutation-plan.ts`, and `tests/clients/t3code-client.test.ts` covers the
 contract. `tests/clients/t3code-client-lifecycle.test.ts` also covers relocated-home
-detection, apply and Undo, shared `ClientPathError` refusal, and owned cleanup after
-the bind changes to require admission.
+detection, apply and Undo, shared `ClientPathError` refusal, owned cleanup after
+the bind changes to require admission, and the Messages-surface refusal.

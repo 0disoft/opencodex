@@ -132,12 +132,16 @@ Model IDs containing `,` or `]` (for example `kimi/k3[1m]`) are exported like an
 ## T3 Code
 
 [T3 Code](https://github.com/pingdotgg/t3code) drives the Codex and Claude Code CLIs already
-installed on the machine. Its Codex threads route through opencodex as soon as the proxy runs,
-because T3 Code lists Codex models through `codex app-server`, which reads the same
-`~/.codex/config.toml` every Codex client does. Routed models therefore already appear under Codex
-with no switch at all.
+installed on the machine. Its Codex threads route through opencodex once the
+[Codex integration](/guides/codex-integration/) is enabled, because T3 Code lists Codex models
+through `codex app-server`, which reads `$CODEX_HOME/config.toml` like every Codex client. Routed
+models then appear under Codex with no T3 Code switch, as long as T3 Code runs Codex with the same
+Codex home opencodex manages (`CODEX_HOME`, default `~/.codex`). A T3 Code Codex instance pointed at
+another home does not see the routed catalog.
 
-The **T3 Code** switch adds the Claude side:
+The **T3 Code** switch adds the Claude side. It needs the Messages API, which every Claude turn
+uses: while Messages is off on the API page, enable and refresh are refused, and disable still
+works.
 
 ```bash
 ocx export --client t3code --json
