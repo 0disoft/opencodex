@@ -1766,10 +1766,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        // Client cancellation reaches acquisition through req.signal (relay resolution, the
-        // upstream dial). It must not release the lease: a pending join's upstream transport
-        // still owns the admission, and each exit below releases it on close/CLOSED.
+        // Cancellation retires the turn until the dial; then the transport owns it until close/CLOSED.
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
         const releaseAcquisition = () => {
+          detachClientAbort();
           acquisition?.clear();
           if (audioController) unregisterTurn(audioController);
           else turnAdmissionLease.release();
@@ -1820,6 +1820,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
+        detachClientAbort();
         const upstreamHandshake = await openLiveSidebandUpstream(
           resolved.upstreamWsUrl,
           resolved.headers,

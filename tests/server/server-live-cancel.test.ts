@@ -1,12 +1,14 @@
 /**
  * Client cancellation of a live-sideband join: the admission lease belongs to the upstream
  * transport, so a caller that disconnects while the upstream handshake is pending must not
- * release it before that transport has actually closed.
+ * release it before that transport has actually closed. Before any transport exists, the same
+ * cancellation must retire the turn at once.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
+import * as accountStore from "../../src/codex/account-store";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { activeRegistryMetrics } from "../../src/server/lifecycle";
@@ -144,5 +146,67 @@ test("a client that cancels a pending sideband join keeps admission until the up
     client.destroy();
     upstream.finishClose();
     await server.stop(true);
+  }
+}, { timeout: 15_000 });
+
+test("a client that cancels during credential resolution releases admission before any dial", async () => {
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    openaiProviderTierVersion: 2,
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    codexAccounts: [{ id: "pool-cancel", email: "cancel@example.test", isMain: false, chatgptAccountId: "acct-cancel" }],
+    activeCodexAccountId: "pool-cancel",
+    codexMainAccountHardLock: false,
+  } as OcxConfig);
+  accountStore.saveCodexAccountCredential("pool-cancel", {
+    accessToken: "fixture-expired-access", refreshToken: "fixture-refresh", expiresAt: 0, chatgptAccountId: "acct-cancel",
+  });
+  // Hold credential preparation open, as a slow token refresh would, without a caller signal.
+  const entered = Promise.withResolvers<void>();
+  const held = Promise.withResolvers<never>();
+  const tokenSpy = spyOn(accountStore, "getValidCodexToken").mockImplementation(async () => {
+    entered.resolve();
+    return held.promise;
+  });
+  let dials = 0;
+  const server = startServer(0, {
+    inspectNativeCodexOwnership: ownedServiceHomeInspection("server-live-cancel fixture"),
+    liveSidebandWebSocketFactory: () => { dials += 1; throw new Error("a cancelled join must not dial"); },
+  });
+  const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
+  const client = connect(Number(server.port), "127.0.0.1");
+  client.on("error", () => {});
+  try {
+    await withDeadline(new Promise<void>(resolve => client.once("connect", () => resolve())), "client never connected");
+    client.write([
+      "GET /v1/realtime?model=gpt-live HTTP/1.1",
+      `Host: 127.0.0.1:${server.port}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      "Sec-WebSocket-Version: 13",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "", "",
+    ].join("\r\n"));
+    await withDeadline(entered.promise, "credential resolution never started");
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore + 1);
+
+    client.destroy();
+    const deadline = Date.now() + 5_000;
+    while (activeRegistryMetrics().activeTurns.active !== activeTurnsBefore && Date.now() < deadline) await Bun.sleep(5);
+    expect(activeRegistryMetrics().activeTurns.active).toBe(activeTurnsBefore);
+    expect(dials).toBe(0);
+  } finally {
+    held.reject(new Error("fixture released"));
+    client.destroy();
+    await server.stop(true);
+    tokenSpy.mockRestore();
   }
 }, { timeout: 15_000 });
