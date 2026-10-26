@@ -1165,7 +1165,8 @@ and `selectionAttested`. Inspecting the configured candidate requires a trusted 
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows x64, a proof-captured absolute standard npm `codex.cmd`
 can be managed when held local handles bind its package, prefix-local Node/npm and the first in-prefix
-platform backing. Other Windows layouts remain deferred or unmanaged. Windows never consults persisted state, so a run
+platform backing. Plan paths and configured version-manager roots must use their canonical long DOS names;
+aliases, unavailable roots and reparse points leave the installation unmanaged. Other Windows layouts remain deferred or unmanaged. Windows never consults persisted state, so a run
 with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
 the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
 that no candidate exists. The command does not execute Codex or a package manager, repair a shim,

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
+import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../../src/update/codex-cli-update-launch-policy.mjs";
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots: string[] = [];
@@ -37,7 +38,7 @@ const cmd = ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b',
   'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*',
 ].join('\r\n');
 function fixture(separateNodeToolchain = false) {
-  const root = mkdtempSync(join(tmpdir(), "ocx-windows-plan-")); roots.push(root);
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-windows-plan-"))); roots.push(root);
   const prefix = join(root, "npm");
   const toolchainPrefix = separateNodeToolchain ? join(root, "nodejs") : prefix;
   const npmRoot = join(toolchainPrefix, "node_modules", "npm");
@@ -71,6 +72,88 @@ native("production Windows inspector binds selected npm shim, package, backing a
   expect((await inspectCodexCliInstall(f.deps)).installContentDigest).toBe(report.installContentDigest);
   expect(JSON.stringify(report)).not.toContain(f.root);
   expect([...f.files].map(([path]) => readFileSync(path))).toEqual(before);
+});
+
+test.skipIf(process.platform !== "win32")("native 8.3 spellings cannot promote version-manager ownership or query metadata", async () => {
+  const f = fixture();
+  const query = spawnSync(join(process.env.SystemRoot!, "System32", "fsutil.exe"),
+    ["8dot3name", "query", f.root.slice(0, 2)], { windowsHide: true, encoding: "utf8", timeout: 5_000 });
+  expect(query.error).toBeUndefined(); expect(query.status).toBe(0);
+  const { dlopen, ptr } = await import("bun:ffi");
+  const kernel = dlopen("kernel32.dll", { GetShortPathNameW: { args: ["ptr", "ptr", "u32"], returns: "u32" } });
+  let shortRoot: string;
+  try {
+    const input = Buffer.from(f.root + "\0", "utf16le"), output = Buffer.alloc(32768 * 2);
+    const length = kernel.symbols.GetShortPathNameW(ptr(input), ptr(output), 32768);
+    expect(length).toBeGreaterThan(0); expect(length).toBeLessThan(32768);
+    shortRoot = output.toString("utf16le", 0, length * 2);
+  } finally { kernel.close(); }
+  const different = shortRoot.toLowerCase() !== f.root.toLowerCase();
+  if (!different) {
+    // Disabled creation is a real negative lane, never an early successful return.
+    const settings = [...query.stdout.matchAll(/:\s*(\d)/g)].map(match => Number(match[1]));
+    expect(settings.length).toBeGreaterThanOrEqual(2);
+    expect(settings[1] === 1 || (settings[1]! >= 2 && settings[0] === 1)).toBe(true);
+  }
+  const environments = different ? [
+    { ...f.deps.env, NVM_HOME: f.root },
+    { ...f.deps.env, CODEX_CLI_PATH: join(shortRoot, "npm", "codex.cmd"), NVM_HOME: f.root },
+    { ...f.deps.env, NVM_HOME: shortRoot },
+    { ...f.deps.env, CODEX_CLI_PATH: join(shortRoot, "npm", "codex.cmd"), NVM_HOME: shortRoot },
+  ] : [
+    { ...f.deps.env, NVM_HOME: f.root },
+    // No alias can be created here: an unresolvable exclusion must refuse instead.
+    { ...f.deps.env, NVM_HOME: join(f.root, "missing-manager-root") },
+  ];
+  for (const env of environments) {
+    const inspectionDeps = { ...f.deps, env }; let queries = 0;
+    const plan = await createCodexCliUpdatePlan({ inspectionDeps,
+      scanProcesses: () => ({ kind: "observed", processes: [] }),
+      resolveTarget: () => { queries++; return { kind: "resolved", version: "1.2.4",
+        integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }; },
+    });
+    expect(queries).toBe(0);
+    expect(plan.managed).toBe(false); expect(plan.planId).toBeNull();
+    const report = await inspectCodexCliInstall(inspectionDeps);
+    expect(report.managed).toBe(false); expect(report.installContentDigest).toBeNull();
+  }
+}, 20_000);
+
+native("configured exclusions must be canonical directories held throughout inspection and metadata", async () => {
+  const f = fixture(), other = join(f.root, "unrelated-manager"); mkdirSync(other);
+  const junction = join(f.root, "manager-junction"); symlinkSync(other, junction, "junction");
+  for (const root of [join(f.root, "missing-manager"), junction, "relative-manager", "\\\\host\\share\\manager"]) {
+    const report = await inspectCodexCliInstall({ ...f.deps, env: { ...f.deps.env, NVM_HOME: root } });
+    expect(report.managed).toBe(false);
+  }
+  // More than twelve configured roots must cross the reader's request batch
+  // boundary without dropping the final exclusion or refusing valid siblings.
+  const managerRoots = Object.fromEntries(CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.map((slot, index) => {
+    const path = join(other, `manager-${index}`); mkdirSync(path); return [slot, path];
+  }));
+  expect((await inspectCodexCliInstall({ ...f.deps, env: { ...f.deps.env, ...managerRoots } })).managed).toBe(true);
+  managerRoots.VOLTA_HOME = join(f.root, "missing-final-root");
+  expect((await inspectCodexCliInstall({ ...f.deps, env: { ...f.deps.env, ...managerRoots } })).managed).toBe(false);
+  const inspectionDeps = { ...f.deps, env: { ...f.deps.env, NVM_HOME: other } };
+  const report = await inspectCodexCliInstall(inspectionDeps);
+  expect(report.managed).toBe(true);
+  let attempts = 0, blocked = 0;
+  setWindowsInstallationFilesReadForTests(path => {
+    if (!path.endsWith("package.json")) return;
+    attempts++;
+    try { renameSync(other, other + "-moved"); } catch { blocked++; }
+  });
+  expect((await inspectCodexCliInstall(inspectionDeps)).managed).toBe(true);
+  expect(attempts).toBeGreaterThan(0); expect(blocked).toBe(attempts);
+  expect(await withWindowsCodexCliPlanToolchain(report, async () => {
+    expect(() => renameSync(other, other + "-moved")).toThrow(); return "held";
+  })).toBe("held");
+  setWindowsInstallationFilesReadForTests();
+  renameSync(other, other + "-moved");
+  symlinkSync(f.prefix, other, "junction");
+  let queries = 0;
+  expect(await withWindowsCodexCliPlanToolchain(report, async () => { queries++; return "unsafe"; })).toBeNull();
+  expect(queries).toBe(0);
 });
 
 native("a bare Windows check honors the bounded content-observation opt-in", async () => {
@@ -352,9 +435,13 @@ native("published Node CLI uses the production inspector and observed toolchain 
   // Controlled registry protocol fixture; no real npm installation or network request.
   writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
     `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  // This independent npm fixture has no manager roots. Inheriting the host's
+  // NVM_SYMLINK junction would correctly refuse the plan before metadata.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    !CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.includes(name.toUpperCase() as typeof CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS[number])));
   const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
     cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
-    env: { ...process.env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
+    env: { ...env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
       OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
   });
   expect(run.error).toBeUndefined(); expect(run.status).toBe(0);

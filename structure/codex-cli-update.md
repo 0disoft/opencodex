@@ -78,15 +78,15 @@ the package manifest/bin, npm manifest/bin, Node and the first in-prefix platfor
 package plus native backing are observed together. Backing lookup follows the
 nearest-first Node lanes and is repeated while the files and ancestors remain held.
 Native handles refuse reparse points, writers and rename/delete sharing; initial
-manifest and Node identities must match the final observation. Text stays bounded
-to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
+manifest and Node identities must match the final observation. Plan paths and configured manager roots must match their held handles' normalized long DOS names; unresolvable or aliased roots refuse management.
+Manager roots remain held through inspection and metadata queries. Text stays bounded to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
 `MAX_NATIVE_BACKING_BYTES` as POSIX, defined in `src/codex/cli-installation-limits.ts`.
 The native reader bounds aggregate requests to that backing plus 128 MiB Node
 and twelve 1 MiB text requests; hash-only bytes are never buffered whole.
 Only the opt-in content observation streams the entrypoint, npm CLI, Node and native bytes. The
 plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare check holds the
-same files — Node and native included — open and identity-checked metadata-only, with zero content
-bytes read and a null `installContentDigest`.
+same files open and identity-checked, reading only bounded manifests, shim bytes and the Node PE header;
+entrypoint, npm CLI, native and full Node digest streams stay unread, with a null `installContentDigest`.
 
 PATH-only or separate-prefix Node selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
