@@ -1,4 +1,6 @@
 {
+  "agent-clients.test.ts": "clients",
+  "workbuddy-selector-recovery.test.ts": "clients",
   "server-live-close.test.ts": "server",
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
