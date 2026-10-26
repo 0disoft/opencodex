@@ -284,6 +284,20 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
+  test("a Link Child not-owned answer without a receipt still gets the parent's restoration", async () => {
+    // An old build answers not-owned for ANY connected client before it ever checks the
+    // deferral query, and this stop has no receipt to send. That answer preserves the
+    // link route instead of tearing it down, so it cannot confirm the parent's teardown:
+    // the parent owns the restoration itself, exactly as for an unconfirmed stop.
+    const outcome = await runParentStop({ receipt: false, clientTransport: "link", json: true,
+      response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.nonce).toBeUndefined();
+    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "restored" });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+  });
+
   test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });

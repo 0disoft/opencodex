@@ -1153,6 +1153,11 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     const graceful = await stopProxy(pid, {
       fetchFn: stopRequestFetch(readClientConnectionState(), stoppingSibling),
       deferSharedTeardownNonce: teardownNonce,
+      // "not-owned" is a final answer only for a caller with nothing left to restore: a
+      // sibling stop, or a connected hub client whose connection keeps the integrations.
+      // A Link Child's not-owned can only come from an old build that preserved the loopback
+      // route this stop must restore, so refusing it keeps restoration here.
+      acceptNotOwnedTeardown: stoppingSibling || connectedClientSkip !== null,
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
