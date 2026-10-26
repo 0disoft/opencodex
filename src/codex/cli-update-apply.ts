@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, lstatSync, mkdirSync, mkdtempSync,
+import { accessSync, constants, lstatSync, mkdirSync,
   realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import { acquireCodexCliApplyLease } from "./cli-update-lease";
 import { scanCodexSessionProcessesAsync } from "./app-server-processes";
 import { observeCodexCliFileSet, observeCodexCliPreimage, sameCodexCliPreimage, codexCliExpectedFiles, sameCodexCliFiles } from "./cli-update-files";
 import type { CodexCliUpdateCommitWindow } from "./cli-update-selection-gate";
+import { createCodexCliApplyStaging, observeCodexCliMutationPaths, sameCodexCliMutationPaths } from "./cli-update-paths";
 
 export interface CodexCliApplyResult {
   readonly outcome: "refused" | "applied" | "not_applied" | "ambiguous";
@@ -50,10 +51,10 @@ export interface CodexCliApplyDeps extends CodexCliUpdatePlanDeps {
    */
   readonly isCancelled?: () => boolean;
   /**
-   * The worker's short selection commit window. When present, the final
-   * process scan and the synchronous guard block run while the shared gate is
-   * held, and commit()'s fence CAS is the last check before the installer
-   * spawn. Absent preserves the ungated in-process behavior tests rely on.
+   * The worker holds admission from the final process scan through terminal
+   * installer evidence and readback. commit()'s fence CAS is the last check
+   * before spawn. An unknown child lifetime retains admission indefinitely.
+   * Absent preserves the ungated in-process behavior tests rely on.
    */
   readonly commitWindow?: CodexCliUpdateCommitWindow;
   readonly temporaryRoot?: string;
@@ -172,6 +173,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
   let started = false;
   let verificationPid: number | null = null;
   let output: CodexCliApplyResult | undefined;
+  let windowHeld = false;
   const result = (outcome: CodexCliApplyResult["outcome"], reason: string): CodexCliApplyResult =>
     output = { outcome, reason, planId, installedVersion, targetVersion, installerExitCode: exitCode, leaseRetained: keepLease, verificationPid, cleanupErrors: [] };
   // Both cancellation channels are consulted at every checkpoint: the plain
@@ -195,6 +197,9 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     if (acquired.kind === "busy") return result("refused", "installation_busy");
     if (acquired.kind !== "acquired") return result("refused", "installation_lease_unavailable");
     lease = acquired;
+    let mutationPaths;
+    try { mutationPaths = observeCodexCliMutationPaths(prefix); }
+    catch { return result("refused", "installation_paths_untrusted"); }
     const freshPlan = () => createCodexCliUpdatePlan({ ...deps, inspectionDeps: freshInspection(deps) });
     const plan = await freshPlan();
     targetVersion = plan.targetVersion;
@@ -203,8 +208,9 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     const artifacts = plan.targetArtifacts;
     if (!artifacts || artifacts.platform !== (deps.platform ?? process.platform)
       || artifacts.arch !== (deps.inspectionDeps?.arch ?? process.arch)) return result("refused", "target_artifacts_unverified");
-    staging = mkdtempSync(join(deps.temporaryRoot ?? tmpdir(), "ocx-codex-cli-apply-"));
-    staging = realpathSync.native(staging);
+    try { staging = createCodexCliApplyStaging(deps.temporaryRoot ?? tmpdir()); }
+    catch { return result("refused", "staging_path_untrusted"); }
+    const stagingIdentity = lstatSync(staging);
     const paths: string[] = [];
     for (const [index, artifact] of [artifacts.main, artifacts.backing].entries()) {
       let path: string;
@@ -240,6 +246,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
       || currentPrefix.ino !== prefixIdentity.ino) return result("refused", "installation_changed");
     if (cancelled()) return result("refused", "cancelled");
     const isolation = createNpmConfigIsolation(staging, deps.inspectionDeps?.env);
+    isolation.env.TMPDIR = isolation.env.TEMP = isolation.env.TMP = staging;
     const args = ["install", "-g", "--prefix", prefix, "--offline", "--ignore-scripts", "--omit=optional",
       "--no-audit", "--no-fund", "--package-lock=false", "--update-notifier=false",
       `${artifacts.main.installName}@file:${paths[0]}`, `${artifacts.backing.installName}@file:${paths[1]}`];
@@ -252,54 +259,57 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     // process observation is taken only after the window is held; a gate that
     // stays busy or a cancel that lands first refuses before the spawn.
     const commitWindow = deps.commitWindow;
-    let windowHeld = false;
     if (commitWindow) {
       windowHeld = commitWindow.tryEnter() || await commitWindow.waitEnter();
       if (!windowHeld) return result("refused", cancelled() ? "cancelled" : "installation_busy");
     }
+    const lastScan = deps.scanProcessesAsync
+      ? await deps.scanProcessesAsync(deps.processIo ?? {})
+      : deps.scanProcesses
+        ? deps.scanProcesses(deps.processIo ?? {})
+        : await scanCodexSessionProcessesAsync(deps.processIo ?? {});
+    if (lastScan.kind !== "observed") return result("refused", "blocked_process_state_unknown");
+    if (lastScan.processes.length) return result("refused", "blocked_active_session");
+    // Every earlier await could have yielded the event loop to a mutation of
+    // the install tree, the prefix or the selected command, so the last turn
+    // before spawn re-verifies them synchronously: prefix identity, the
+    // byte-level preimage taken before the downloads, the launcher's live
+    // canonical selection and the signal. Nothing can interleave between
+    // this block and the install invocation on the same event-loop turn,
+    // and the held gate keeps the gated parent operations out of the window.
+    if (cancelled()) return result("refused", "cancelled");
     try {
-      const lastScan = deps.scanProcessesAsync
-        ? await deps.scanProcessesAsync(deps.processIo ?? {})
-        : deps.scanProcesses
-          ? deps.scanProcesses(deps.processIo ?? {})
-          : await scanCodexSessionProcessesAsync(deps.processIo ?? {});
-      if (lastScan.kind !== "observed") return result("refused", "blocked_process_state_unknown");
-      if (lastScan.processes.length) return result("refused", "blocked_active_session");
-      // Every earlier await could have yielded the event loop to a mutation of
-      // the install tree, the prefix or the selected command, so the last turn
-      // before spawn re-verifies them synchronously: prefix identity, the
-      // byte-level preimage taken before the downloads, the launcher's live
-      // canonical selection and the signal. Nothing can interleave between
-      // this block and the install invocation on the same event-loop turn,
-      // and the held gate keeps the gated parent operations out of the window.
-      if (cancelled()) return result("refused", "cancelled");
-      const lastPrefix = lstatSync(prefix);
-      if (realpathSync.native(prefix) !== prefix || lastPrefix.dev !== prefixIdentity.dev
-        || lastPrefix.ino !== prefixIdentity.ino
-        || !sameCodexCliPreimage(original, observeCodexCliPreimage(originalRoots))
-        || !codexCliMutationSelectionMatches(evidence, freshInspection(deps))) {
-        return result("refused", "installation_changed");
+      if (!sameCodexCliMutationPaths(mutationPaths, observeCodexCliMutationPaths(prefix))) {
+        return result("refused", "installation_paths_untrusted");
       }
-      // The commit CAS is the final synchronous guard: a cancel already
-      // landed wins and no spawn happens; once COMMITTED, a later cancel is
-      // deferred to the live installer's close and readback.
-      if (commitWindow && !commitWindow.commit()) return result("refused", "cancelled");
-      started = true;
-      keepLease = true;
-      // The install implementation contract requires the child spawn to start
-      // synchronously inside this call (runNpm's spawn runs in the Promise
-      // executor), so returning means the spawn already happened under the
-      // held gate and the window may close while the child runs. This is a
-      // property of these two callables, not of arbitrary async callbacks.
-      const installPromise = (deps.install ?? runNpm)({ bin: invocation.bin, args: invocation.args,
-        cwd: isolation.dir, env: isolation.env });
-      if (commitWindow) { commitWindow.exit(); windowHeld = false; }
-      const installed = await installPromise;
-      exitCode = installed.exitCode;
-      if (!installed.terminal) return result("ambiguous", "installer_state_unknown");
-    } finally {
-      if (windowHeld) commitWindow?.exit();
+    } catch { return result("refused", "installation_paths_untrusted"); }
+    try {
+      observeCodexCliMutationPaths(staging);
+      const stage = lstatSync(staging);
+      if (stage.dev !== stagingIdentity.dev || stage.ino !== stagingIdentity.ino) {
+        return result("refused", "staging_path_untrusted");
+      }
+    } catch { return result("refused", "staging_path_untrusted"); }
+    const lastPrefix = lstatSync(prefix);
+    if (realpathSync.native(prefix) !== prefix || lastPrefix.dev !== prefixIdentity.dev
+      || lastPrefix.ino !== prefixIdentity.ino
+      || !sameCodexCliPreimage(original, observeCodexCliPreimage(originalRoots))
+      || !codexCliMutationSelectionMatches(evidence, freshInspection(deps))) {
+      return result("refused", "installation_changed");
     }
+    // The commit CAS is the final synchronous guard: a cancel already
+    // landed wins and no spawn happens; once COMMITTED, a later cancel is
+    // deferred to the live installer's close and readback.
+    if (commitWindow && !commitWindow.commit()) return result("refused", "cancelled");
+    started = true;
+    keepLease = true;
+    // Admission remains exclusive through installer termination AND readback.
+    // Unknown child lifetime retains both the lease and this process gate.
+    const installPromise = (deps.install ?? runNpm)({ bin: invocation.bin, args: invocation.args,
+      cwd: isolation.dir, env: isolation.env });
+    const installed = await installPromise;
+    exitCode = installed.exitCode;
+    if (!installed.terminal) return result("ambiguous", "installer_state_unknown");
     keepLease = false;
     // Readback outranks exit code. Partial or unreadable installs are never retried.
     const after: CodexCliInstallReport = await inspect(freshInspection(deps));
@@ -336,6 +346,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     if (!keepLease) {
       const cleanup = cleanupCodexCliApply(lease, staging);
       if (output) Object.assign(output, cleanup);
+      if (windowHeld) deps.commitWindow?.exit();
     }
     if (output) { Object.freeze(output.cleanupErrors); Object.freeze(output); }
   }

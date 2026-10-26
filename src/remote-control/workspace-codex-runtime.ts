@@ -371,7 +371,7 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
     ], { env: childEnv });
     let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
     // A cli-update worker holds this gate from its final process scan through
-    // its installer spawn; a new session shell must not appear inside that
+    // installer termination/readback; a new session must not appear inside that
     // window. Busy is the same explicit pre-spawn failure path as a spawn
     // throw, so the bridge and isolation are reclaimed identically.
     const selectionWrite = beginCodexCliSelectionParentWrite();

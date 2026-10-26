@@ -80,8 +80,15 @@ cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pac
 The version verification child inherits the owned Node compile-cache path, which is removed with
 terminal apply staging; an uncertain live child retains that staging and its lease. A verifier setup
 failure before any child exists is terminal evidence instead, so the lease is released and later applies are not blocked.
-The owned staging directory is canonicalized immediately after creation, so symlinked temporary roots
-and macOS's /var alias are supported without accepting a linked archive file.
+`src/codex/cli-update-paths.ts` supplies the shared POSIX ancestry policy for the lease,
+mutation paths and job store. Canonical ancestors must be root/current-user owned and lack group/other
+write permission; root-owned sticky ancestors are allowed. Every existing directory under the npm
+prefix must additionally lack shared write permission, including executable, scope and package parents.
+Their identities and permissions are revalidated before spawn. Directory links and unbounded trees refuse.
+Staging is a private 0700 same-owner child of a canonical trusted temporary root; unsafe TMPDIR refuses
+with `staging_path_untrusted`. Canonical temporary aliases (including macOS /var) remain supported.
+Staging identity/ancestry is rechecked before install; npm temp and compile-cache writes stay inside it.
+The policy excludes other-user namespace replacement, not concurrent changes by the same user or root.
 `src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
 256 MiB compressed, 512 MiB total unpacked, 384 MiB member and 4,096 member bounds. Only small
 manifest/entrypoint bytes are retained; native and auxiliary members retain size/mode/hash metadata.
@@ -173,10 +180,12 @@ cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation remo
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
 its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
-window spans only the worker's final process scan through its installer-spawn call, and a synchronous
+window spans the worker's final process scan through installer termination and post-install readback. A synchronous
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
-the same target must not split the exclusion; a writer on a different configDir can see a brief busy.
+the same target must not split the exclusion; a writer on a different configDir can also see busy.
+An installer/verifier with unconfirmed terminal state retains the gate as well as lease/staging;
+worker close never automatically releases admission. Preparation refusal and terminal readback release it.
 Ordinary config writes, account operations, model requests, existing session interrupt/close and
 arbitrary subprocesses are not gated. The gate claims nothing about processes the parent does not own:
 an external installer, a handoff helper's delayed descendants, or an OS-level snapshot race stays the

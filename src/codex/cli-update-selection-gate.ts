@@ -18,12 +18,12 @@
  *   parent selection writers (runtime pin persist/clear, shim install/
  *   auto-restore/uninstall) and the two parent session-spawn paths (remote
  *   workspace child, desktop relaunch). FREE -> WORKER_COMMIT is taken by the
- *   update worker for only its short final window. Writers report busy rather
- *   than wait: the window is seconds at most and a synchronous parent writer
+ *   update worker through installer termination and post-install readback.
+ *   Writers report busy rather than wait: a synchronous parent writer
  *   must never park the event loop behind it. The gate is intentionally one
  *   cell for the whole process rather than per-configDir: alias/junction/case
  *   spellings of the same target must not split the exclusion, so a writer on
- *   a different configDir can also see a brief busy.
+ *   a different configDir can also see busy until the installation settles.
  *
  * This module claims nothing about processes it does not own: an external
  * installer, a late descendant of an earlier child, or an OS snapshot race
@@ -111,10 +111,11 @@ export function beginCodexCliSelectionParentWrite(): CodexCliSelectionParentWrit
 }
 
 /**
- * The worker's short final window. tryEnter covers the uncontended same-turn
+ * The worker's installation window. tryEnter covers the uncontended same-turn
  * case; waitEnter is the bounded retry for a held parent write. commit() is
  * the fence CAS issued in the same event-loop turn as the installer spawn;
- * exit() releases the gate once the spawn call has returned.
+ * exit() releases the gate after terminal installer evidence and readback.
+ * Unknown installer/verifier lifetime intentionally leaves admission closed.
  */
 export interface CodexCliUpdateCommitWindow {
   tryEnter(): boolean;

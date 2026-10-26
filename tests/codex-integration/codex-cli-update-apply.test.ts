@@ -633,7 +633,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
         try { expect(next.entered).toBe(true); } finally { next.exit(); }
       } finally { release(); await pending.catch(() => {}); }
     }, 120_000);
-  test("actual apply commits while install is called synchronously, then frees gate before awaiting it", async () => {
+  test("actual apply holds admission until installer termination and readback", async () => {
     const f = fixture(), id = await approved(f), fence = createCodexCliUpdateFence();
     const commitWindow = createWorkerCommitWindow({ gate: codexCliUpdateSelectionGate(), fence });
     let entered!: () => void, finish!: () => void, installs = 0, settled = false;
@@ -658,7 +658,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       await waitForApplyAdmission(started, pending);
       expect(installs).toBe(1); expect(settled).toBe(false);
       const writer = beginCodexCliSelectionParentWrite();
-      try { expect(writer.entered).toBe(true); } finally { writer.exit(); }
+      try { expect(writer.entered).toBe(false); } finally { writer.exit(); }
       expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
       expect(readdirSync(f.temporaryRoot).length).toBeGreaterThan(0);
     } finally { finish(); await pending.catch(() => {}); }
