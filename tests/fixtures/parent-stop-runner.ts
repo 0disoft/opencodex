@@ -29,6 +29,10 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   disconnectDuringProbe?: boolean;
   /** Commit a hub connection while orphan discovery is in flight. */
   connectDuringDiscovery?: boolean;
+  /** Commit a hub connection while the stop POST is in flight, before server teardown reads it. */
+  connectDuringPost?: boolean;
+  /** The client lifecycle lock is held elsewhere when the parent reaches its restore boundary. */
+  lifecycleBusy?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -49,9 +53,27 @@ if (options.proxyProbePort) {
   process.exit(0);
 }
 const home = process.env.OPENCODEX_HOME!;
+function writeHubConnection(): void {
+  const serverUrl = "https://hub.example.test";
+  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
+    serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport: "hub", selectedClients: ["codex"],
+    tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64),
+    protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+  } }));
+}
+// The lock's own suite covers SQLite exclusion; here only "held" versus "busy" matters, and the
+// real lock would harden a directory in the host user's runtime root.
+const lifecycle = await import("../../src/client/lifecycle-lock");
+mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
+  withClientLifecycleSync: (work: Parameters<typeof lifecycle.withClientLifecycleSync>[0]) => {
+    if (options.lifecycleBusy) throw new Error("client_lifecycle_busy");
+    calls.lifecycle += 1;
+    return work(Object.freeze({}) as Parameters<typeof work>[0]);
+  },
+}));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
-const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0 };
+const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0 };
 const urls: string[] = [];
 const probes: string[] = [];
 const transports: string[] = [];
@@ -136,14 +158,7 @@ if (options.orphan || options.alreadyStopped) {
   const liveness = await import("../../src/server/proxy-liveness");
   mock.module("../../src/server/proxy-liveness", () => ({ ...liveness,
     findLiveProxy: async () => {
-      if (options.connectDuringDiscovery) {
-        const serverUrl = "https://hub.example.test";
-        writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
-          serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport: "hub", selectedClients: ["codex"],
-          tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64),
-          protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
-        } }));
-      }
+      if (options.connectDuringDiscovery) writeHubConnection();
       return alive ? { ...endpoint, pid: fakePid, source: "config" } : null;
     },
     proveLiveProxyOwnedByHome: async () => "proven",
@@ -202,6 +217,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (!url.startsWith("http://127.0.0.1:10100/api/stop")) return unexpected(`fetch(${url})`);
   urls.push(url);
   transports.push(viaDirect ? "direct" : "global");
+  if (options.connectDuringPost) writeHubConnection();
   const body = options.serverTeardown && !options.apiFailure
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL(url))
     : options.response;

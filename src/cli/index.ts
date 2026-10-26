@@ -162,7 +162,7 @@ import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreSharedClientStateAfterStop, stopRequestFetch } from "./stop-restore";
+import { assertConnectedClientStopSupported, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopRequestFetch } from "./stop-restore";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -1429,7 +1429,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   if (stoppingSibling) console.log(`↩️  Client routing stays on the proxy at port ${siblingOfPort}; this sibling had no shared teardown to run.`);
   if (connectedClientSkip) console.log(connectedClientSkip);
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;
-  if (!restoreBlocked) {
+  // Ownership can change while the stop awaits; only the state at the restore boundary decides (#7736).
+  const boundary = restoreBlocked ? "restore" : restoreBoundaryOwnership();
+  if (boundary !== "restore") stopFailed = settleUnrestoredStopBoundary(boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
+  if (!restoreBlocked && boundary === "restore") {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
       // not answering. That is the whole point of leaving the receipt behind.

@@ -2,6 +2,9 @@ import { restoreNativeCodexAsync } from "../codex/inject";
 import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { withClientLifecycleSync } from "../client/lifecycle-lock";
+import { clearPendingTeardown } from "../config/pending-teardown";
+import type { StopRunRecord } from "./stop-report";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -142,6 +145,56 @@ export function stopRequestFetch(): typeof fetch {
  */
 export function notOwnedTeardownIsAcceptable(state: ClientConnectionState, stoppingSibling: boolean): boolean {
   return stoppingSibling || state.kind !== "connected" || state.value.transport !== "link";
+}
+
+/** What the parent stop may do with shared client state at its final restore boundary. */
+export type RestoreBoundaryOwnership = "restore" | "hub-owned" | "unproven";
+
+/**
+ * Re-read connection ownership at the parent restore boundary (#7736). A hub connection
+ * committed while the stop was in flight owns Codex routing, the catalog and Grok, so the
+ * stop must not restore over it. `ocx connect`/`ocx disconnect` publish connection state
+ * under the client lifecycle lock (L), so this read takes L. Restoration takes the Codex write
+ * lock (N), which may never be acquired inside L, so L is released before restoring: the same
+ * final-inspection shape `ocx uninstall` uses. A busy or failing lock proves nothing either way.
+ */
+export function restoreBoundaryOwnership(deps: {
+  read?: typeof readClientConnectionState;
+  withLifecycle?: typeof withClientLifecycleSync;
+} = {}): RestoreBoundaryOwnership {
+  const read = deps.read ?? readClientConnectionState;
+  try {
+    return (deps.withLifecycle ?? withClientLifecycleSync)(() => {
+      const state = read();
+      return state.kind === "connected" && state.value.transport !== "link" ? "hub-owned" : "restore";
+    });
+  } catch {
+    return "unproven";
+  }
+}
+
+/**
+ * Settle a restore boundary that must not restore. A hub that now owns the shared state also
+ * supersedes this run's (and recovered) receipts, so they are discharged; an unproven boundary
+ * keeps every obligation. Returns whether the stop failed.
+ */
+export function settleUnrestoredStopBoundary(
+  boundary: "hub-owned" | "unproven",
+  record: Pick<StopRunRecord, "sharedTeardown" | "receiptClearFailed">,
+  nonces: string[],
+): boolean {
+  if (boundary === "unproven") {
+    record.sharedTeardown = "refused";
+    console.error("❌ The client connection could not be confirmed (it may be changing); nothing was restored and the obligation is kept. Rerun 'ocx stop'.");
+    return true;
+  }
+  record.sharedTeardown = "skipped";
+  console.log("↩️  A hub connection was committed while this stop ran; it owns Codex routing, its catalog and the Grok config, so nothing was restored over it.");
+  let failed = false;
+  for (const nonce of nonces) {
+    if (!clearPendingTeardown(nonce)) { failed = true; record.receiptClearFailed = true; }
+  }
+  return failed;
 }
 
 /**

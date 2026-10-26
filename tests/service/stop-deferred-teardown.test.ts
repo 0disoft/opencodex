@@ -67,7 +67,7 @@ async function runParentStop(options: {
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
-  disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean;
+  disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -324,6 +324,33 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
+  for (const [label, transition] of [["during orphan discovery", { orphan: true, connectDuringDiscovery: true }],
+    ["while the POST is in flight", { connectDuringPost: true }]] as const) {
+    for (const receipt of [true, false]) {
+      test(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
+        // #7736 r5: the late not-owned refusal must not let the parent restore over the hub that
+        // now owns routing. Only the ownership read at the restore boundary decides.
+        const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
+          response: null, restore: restoreResult(true), ...transition });
+        expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: receipt ? 1 : 0 });
+        expect(outcome.receiptExists).toBe(false);
+        // Seen before the POST without a nonce, the hub's not-owned answer already confirms the stop.
+        const settledAtPost = "connectDuringDiscovery" in transition && !receipt;
+        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true,
+          sharedTeardown: settledAtPost ? "performed-by-proxy" : "skipped" });
+        if (!settledAtPost) expect(outcome.stdout + outcome.stderr).toContain("A hub connection was committed while this stop ran");
+        expect(outcome.exitCode, outcome.stderr).toBe(0);
+      });
+    }
+  }
+  test("a busy client lifecycle lock at the restore boundary keeps the obligation instead of restoring", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", lifecycleBusy: true, json: true,
+      response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
+    expect(outcome.receiptExists).toBe(true);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, sharedTeardown: "refused" });
+    expect(outcome.exitCode).toBe(1);
+  });
   test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });

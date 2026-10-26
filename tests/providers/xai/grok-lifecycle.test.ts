@@ -115,12 +115,12 @@ describe("Grok fence lifecycle wiring", () => {
     // routing belongs to the live proxy it ran beside, and a connected client, whose routing,
     // catalog and Grok config belong to its connection and are never written back on start (#7563).
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
-    expect(stopFn).toContain("if (!restoreBlocked) {");
+    expect(stopFn).toContain("if (!restoreBlocked && boundary === \"restore\") {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
-    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked) {"));
+    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked && boundary === \"restore\") {"));
   });
 
   test("graceful stop skips caller restore only when the proxy performed it", () => {
@@ -272,7 +272,7 @@ describe("Grok fence lifecycle wiring", () => {
     // attempt at this only logged a warning and then restored anyway, which is not a gate.
     expect(stopFn).toContain("await abandonedTeardownIsSafeToFinish(read.receipt.endpoint)");
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks");
-    expect(stopFn).toContain("if (!restoreBlocked) {");
+    expect(stopFn).toContain("if (!restoreBlocked && boundary === \"restore\") {");
     // The restore is reached only through that gate — no other call site may bypass it.
     const restoreCalls = stopFn.split("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)").length - 1;
     expect(restoreCalls).toBe(1);
