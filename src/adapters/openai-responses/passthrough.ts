@@ -40,7 +40,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -53,8 +53,9 @@ import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchField
 import { observeOutbound } from "../../usage/cache-diagnostic";
 
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
-import { renderCompactionSearchHistoryItems } from "./compaction-search-history";
+import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
+import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -314,7 +315,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = repairLegacyDottedToolCallNames(outBody);
       // Shared HTTP/WS outbound projection, including concrete combo/fallback destinations.
       if (isOpenAiOperatedResponsesDestination(provider)) {
-        outBody = stripProviderInputItemMetadata(outBody);
+        outBody = repairUrlCitationAnnotations(stripProviderInputItemMetadata(outBody));
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         if (provider.preserveResponsesMessageMetadata !== true) {
@@ -334,6 +335,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (!isOpenAiOperatedResponsesDestination(provider)) {
           if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
+          outBody = stripCanonicalOnlyInputItems(outBody);
         }
         outBody = promoteClientLoadedTools(outBody);
       }
@@ -495,22 +497,26 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      // Opt-in Codex Lite history policy: replay remaining hosted actions as untrusted metadata,
-      // after bridge restoration/tool validation. Tool declarations and other input stay intact.
-      if (provider.projectResponsesLiteHostedSearchHistory === true && url === `${CODEX_FORWARD_BASE_URL}/responses`
-        && !parsed._compactionRequest && !parsed._portableCompaction
-        && codexResponsesLiteSelected(headers, finalBody)
-        && isPlainObject(finalBody) && Array.isArray(finalBody.input)
-        && finalBody.input.some(item => isPlainObject(item) && item.type === "web_search_call")) {
-        const referencedIds = new Set(finalBody.input.flatMap(item => isPlainObject(item)
-          && item.type === "item_reference" && typeof item.id === "string" ? [item.id] : []));
-        finalBody = { ...finalBody, input: renderCompactionSearchHistoryItems(finalBody.input, referencedIds) };
+      // Hosted-search history projection, after bridge restoration and tool validation. Two
+      // triggers share one bounded renderer, and tool declarations and other input stay intact:
+      // 1. The opt-in Codex Lite policy covers ordinary turns and native v2 compaction triggers
+      //    (#7268). Portable compaction was already projected by the summary builder above.
+      // 2. Any request whose final tool surface declares no hosted search. Native Sol answers a
+      //    replayed web_search_call without a matching declaration with a generic server_error
+      //    (#7250), so the cells become untrusted reference notes instead of a doomed request.
+      if (isPlainObject(finalBody)
+        && ((provider.projectResponsesLiteHostedSearchHistory === true && url === `${CODEX_FORWARD_BASE_URL}/responses`
+          && !parsed._portableCompaction && codexResponsesLiteSelected(headers, finalBody))
+          || !declaresHostedWebSearch(finalBody))) {
+        finalBody = projectHostedSearchHistory(finalBody);
       }
+      finalBody = normalizeOpenGatewayResponsesInput(finalBody, url);
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
-      const body = JSON.stringify(applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName));
+      const wireBody = applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName);
+      const body = JSON.stringify(wireBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         Buffer.byteLength(body, "utf8"),
@@ -520,6 +526,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body,
+        ...(isPlainObject(wireBody) && typeof wireBody.model === "string" ? { outboundModelId: wireBody.model } : {}),
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(routedCustomToolRepairNames ? { routedCustomToolRepairNames } : {}),

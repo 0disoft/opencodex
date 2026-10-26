@@ -79,7 +79,8 @@ defaults as one owned value.
 The request preference is interpreted after initial Chat route selection and before
 concrete dispatch under the [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
 It never authenticates a client or changes admission policy.
-
+## WorkBuddy editions
+`src/clients/config-export/agent-clients.ts` manages independent `workbuddy` and `workbuddy-ai` roots (`~/.workbuddy/models.json`, `~/.workbuddy-ai/models.json`). Both honor `WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; relative overrides refuse. Rows retain proxy IDs, a full Chat Completions URL, a loopback placeholder and declared metadata. Ownership selects each `id` in object-form `models` or legacy root arrays. Foreign settings stay untouched; `validateApply` refuses hiding `availableModels` restrictions during apply/refresh; status, disable and Undo remain available. An unrepresentable model ID also refuses apply/refresh; its empty desired contribution lets status/disable verify and remove only recorded ownership, preserving foreign-edit checks. Project overrides may shadow user settings. Shared snapshots, drift checks and owned-catalog refresh apply. No client IO runs on inference paths. Doubao Desktop and Devin have no verified arbitrary-provider configuration contract and no managed integration.
 ## Cursor installed capability reads
 
 `src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
@@ -124,6 +125,8 @@ client registry + export context
   -> atomic write
   -> ownership record + operation journal
 ```
+
+A generated contribution that raises `UnrepresentableSelectorError` produces an `unsafe` / `unresolvable-path` status for that client. The shared reader and mutation observer catch only that typed refusal: preview returns an unsafe plan with `canApply: false`, and mutations return the existing unsafe refusal (HTTP 409). Other clients in the status collection remain visible, and unexpected construction errors still propagate.
 
 Status and mutation must use the same classifier. A special case added only to a status endpoint
 would be misleading because refresh or disable could still reject the same file; a special case
@@ -283,7 +286,7 @@ non-empty list without `image` becomes `false`; an absent or empty modality list
 model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
 because its authoritative input-modality vocabulary currently has no video value.
 
-> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
+> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md). Profile selection and per-profile ownership: [Hermes Profiles](hermes.md).
 
 ## Hermes session affinity
 
@@ -291,6 +294,8 @@ Hermes exports include `session_affinity_header: session-id` on the entire OpenC
 independent of the model roster. This is a header name: Hermes generates the conversation-scoped
 value. No static session identifier or protocol switch is emitted, and upstream header-forwarding
 rules remain unchanged. Hermes must support the documented per-provider affinity option to use it.
+Changing `session_affinity_header` to `x-hermes-conversation-id` configures a log-only correlation
+fallback, removing native session affinity and lane scoping; `session-id` remains the generated default.
 
 `src/integrations/ownership-policy.ts` recognizes exactly one predecessor: an owned Hermes block
 without this setting. The block may remain unchanged or have gained only the supported value; after
@@ -485,7 +490,7 @@ Link mode and destinations aliasing Pi's default, configured or preserved origin
 | Variant | Its own evidence | opencodex surface |
 | --- | --- | --- |
 | Pi-based omo (senpi engine) | `~/.omo/agent`, or `OMO_CODING_AGENT_DIR` / `SENPI_CODING_AGENT_DIR` / `PI_CODING_AGENT_DIR` (`omoAgentDir()`) | the `omo` file integration and tab, `providers.opencodex` in `models.json` |
-| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, in their own section of the omo tab |
+| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `.codex-plugin/plugin.json` or `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, in their own section of the omo tab |
 | OpenCode-based omo (oh-my-opencode) | its config under OpenCode | none; nothing here reads or writes it |
 
 `~/.omo` alone identifies none of them: Pi-based omo and LazyCodex both use it.

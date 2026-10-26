@@ -334,7 +334,7 @@ identity retries: WHAM success and terminal 401/403 responses never set or clear
 this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
 the existing auth behavior. Failed or incomplete observations never renew the credit clock;
 refreshing usage does not redeem reset credits or validate pending accounts through inference.
-Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`. Pool accounts use the separate [pool credit renewal](pool-credit-renewal.md) contract; their fresh spendable-evidence requirement is identical.
 
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
@@ -366,6 +366,10 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/codex-integration/main-account-hard-lock-policy.test.ts`,
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
+Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan
+`self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a
+missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`.
+
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
 short 90% and long `MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%, overridden by ordered integer
 `codexMainAccountHardLockThresholds` in 80..100. The 5h/short and weekly windows each govern on
@@ -378,9 +382,13 @@ It blocks newly admitted identity-matched main-account requests. Pool alternativ
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Fresh valid usage below the effective threshold, including 0%, or validated WHAM absence retires a measured short block;
-passing a reset timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
-when no future reset is known or reads remain blocked, main recovery uses the same capped
-5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
+passing a reset timestamp alone does not. A future known reset is a scheduling hint (#7312): recovery
+arms one base delay the first time an identity/credential sees the hold (including a hold that appears
+during token preparation), then reads WHAM metadata on the same capped 5/10/20/40/60-minute delay
+calculation as usage-query failures. The due time is pulled in to the latest known reset, including one
+that moved earlier or just passed, but hold reads stay at least one base interval apart; a nonterminal
+401/403 retry does not re-arm the first-hold delay. An early reset redeemed elsewhere is thus learned
+without inference or reset-credit use. A paused or needs-reauth main gets no hold rechecks. Skipped ticks do not extend the delay;
 the physical bearer is reconciled before checking the delay, and late results cannot charge
 a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
 current credential before the recovery worker takes a profile lease or prepares a token; a replacement
