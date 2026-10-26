@@ -15,7 +15,8 @@ export interface RoleChange {
   after: RoleSetting;
 }
 
-type Restore = (role: string, model: string | undefined, effort: string | null, batch: string) => Promise<boolean>;
+/** `restores` names the batch being put back; the server checks the write against its own history. */
+type Restore = (role: string, model: string | undefined, effort: string | null, batch: string, restores: string) => Promise<boolean>;
 
 /** Newest first, as the server lists them; one entry per batch, so Apply all reads as one action. */
 function groupByBatch(history: RoleChange[]): RoleChange[][] {
@@ -52,7 +53,7 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
     for (const [role, setting] of roles) {
       // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
-      if (!(await restore(role, setting.model ?? undefined, setting.effort, batch))) break;
+      if (!(await restore(role, setting.model ?? undefined, setting.effort, batch, group[0]!.batch))) break;
       count += 1;
     }
     const time = new Date(group[0]!.at).toLocaleString(locale);

@@ -85,6 +85,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     effort: string | null | undefined = undefined,
     displayedEffort?: string,
     batch?: string,
+    restores?: string,
   ): Promise<boolean> => {
     if (pending !== null) return false;
     // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
@@ -101,6 +102,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
           ...(model !== undefined ? { model } : {}),
           ...(sent !== undefined ? { effort: sent } : {}),
           ...(batch !== undefined ? { batch } : {}),
+          ...(restores !== undefined ? { restores } : {}),
         }),
       });
       const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
@@ -258,7 +260,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
           history={data.history}
           unavailable={data.historyUnavailable}
           busy={pending !== null}
-          restore={(role, model, effort, batch) => save(role, model, effort, undefined, batch)}
+          restore={(role, model, effort, batch, restores) => save(role, model, effort, undefined, batch, restores)}
         />
         </>
       )}

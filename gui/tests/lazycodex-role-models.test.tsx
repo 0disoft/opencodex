@@ -552,8 +552,8 @@ test("lists the role change history as one entry per batch and restores a batch'
   await act(async () => { restore.click(); });
   await settle();
   expect(puts.map(put => ({ role: put.url.slice(put.url.lastIndexOf("/") + 1), body: put.body }))).toEqual([
-    { role: "librarian", body: { effort: "medium", batch: (puts[0]!.body as { batch: string }).batch } },
-    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: (puts[0]!.body as { batch: string }).batch } },
+    { role: "librarian", body: { effort: "medium", batch: (puts[0]!.body as { batch: string }).batch, restores: "apply-all" } },
+    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: (puts[0]!.body as { batch: string }).batch, restores: "apply-all" } },
   ]);
   expect((puts[0]!.body as { batch: string }).batch).not.toBe("apply-all");
   expect(container.textContent).toContain("Restored 2 role(s)");

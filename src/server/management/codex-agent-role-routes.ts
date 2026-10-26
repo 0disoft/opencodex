@@ -40,7 +40,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     let changes: import("../../codex/role-model-history").RoleModelChange[] = [];
     let historyUnavailable = false;
     try {
-      changes = history.listRoleModelChanges();
+      changes = history.listRoleModelChanges(codexHome);
     } catch (error) {
       console.error(`[codex-agent-roles] could not read the change history: ${String(error)}`);
       historyUnavailable = true;
@@ -100,7 +100,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   } catch {
     return jsonResponse({ error: "role must be URL-encoded", code: "invalid_role" }, 400, req, config);
   }
-  let body: { model?: unknown; effort?: unknown; batch?: unknown };
+  let body: { model?: unknown; effort?: unknown; batch?: unknown; restores?: unknown };
   try {
     body = await readManagementJsonBody(req);
   } catch (error) {
@@ -117,6 +117,9 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   if (body.batch !== undefined && !history.isRoleHistoryBatch(body.batch)) {
     return jsonResponse({ error: "batch must be 1 to 64 letters, digits or dashes", code: "invalid_batch" }, 400, req, config);
   }
+  if (body.restores !== undefined && !history.isRoleHistoryBatch(body.restores)) {
+    return jsonResponse({ error: "restores must be 1 to 64 letters, digits or dashes", code: "invalid_restores" }, 400, req, config);
+  }
   let model: string | undefined;
   let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
@@ -124,6 +127,25 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   try {
     model = body?.model === undefined ? undefined : roles.validateAgentRoleModel(body.model);
     effort = body?.effort === undefined ? undefined : body.effort === null ? null : roles.validateAgentRoleEffort(body.effort);
+  } catch (error) {
+    if (error instanceof roles.AgentRoleModelError) return jsonResponse({ error: error.message, code: error.code }, 400, req, config);
+    throw error;
+  }
+  // A Restore names the batch it puts back, and only this Codex home's history can vouch for it: the
+  // write must be that role's earliest `before` in the batch, so a stale page cannot carry models
+  // across homes. A role that had no model pin is restored without a model, since a save keeps a pin.
+  if (typeof body.restores === "string") {
+    let allowed: import("../../codex/role-model-history").RoleSetting | null;
+    try {
+      allowed = history.restorableSetting(codexHome, body.restores, role);
+    } catch {
+      allowed = null;
+    }
+    if (!allowed || model !== (allowed.model ?? undefined) || effort !== allowed.effort) {
+      return jsonResponse({ error: "this Codex home's change history has no such change to restore", code: "restore_not_in_history" }, 409, req, config);
+    }
+  }
+  try {
     before = {
       model: roles.listCodexAgentRoleModels(codexHome).find(entry => entry.role === role)?.model ?? null,
       effort: roles.readCodexAgentRoleEffort(role, codexHome),
@@ -139,7 +161,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   }
   if (toml.status === "written") {
     try {
-      history.recordRoleModelChange({
+      history.recordRoleModelChange(codexHome, {
         at: new Date().toISOString(),
         batch: body.batch ?? crypto.randomUUID(),
         role,

@@ -41,11 +41,11 @@ afterEach(() => {
 const config = { port: 10100, providers: {}, defaultProvider: "openai" } as unknown as OcxConfig;
 const DETECTED = { detected: true, pluginEnabled: true, pluginInstalled: true };
 
-function installLazyCodex(): void {
-  const plugin = join(root, "codex", "plugins", "cache", "sisyphuslabs", "omo", "5.1.1");
+function installLazyCodex(home = join(root, "codex")): void {
+  const plugin = join(home, "plugins", "cache", "sisyphuslabs", "omo", "5.1.1");
   mkdirSync(plugin, { recursive: true });
   writeFileSync(join(plugin, "lazycodex-install.json"), "{}");
-  writeFileSync(join(root, "codex", "config.toml"), '[plugins."omo@sisyphuslabs"]\nenabled = true\n');
+  writeFileSync(join(home, "config.toml"), '[plugins."omo@sisyphuslabs"]\nenabled = true\n');
 }
 
 async function call(path: string, init?: RequestInit): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -59,13 +59,38 @@ function put(role: string, model: unknown) {
 }
 
 describe("/api/codex-agent-roles", () => {
+  test("lists and restores only the history of the Codex home the proxy runs against", async () => {
+    const homeA = join(root, "codex");
+    const homeB = join(root, "codex-b");
+    mkdirSync(join(homeB, "agents"), { recursive: true });
+    writeFileSync(join(homeB, "agents", "explorer.toml"), ROLE);
+    installLazyCodex(homeB);
+    const write = (body: Record<string, unknown>) => call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify(body) });
+    expect((await write({ model: "xai/grok-4.5", batch: "home-a" })).status).toBe(200);
+    const restore = { model: "gpt-5.5", effort: null, batch: "restore-1", restores: "home-a" };
+
+    // The proxy restarts against a second home with a role of the same name.
+    process.env.CODEX_HOME = homeB;
+    expect((await call("/api/codex-agent-roles")).body.history).toEqual([]);
+    expect(await write(restore)).toMatchObject({ status: 409, body: { code: "restore_not_in_history" } });
+    expect(readFileSync(join(homeB, "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+
+    process.env.CODEX_HOME = homeA;
+    const history = (await call("/api/codex-agent-roles")).body.history as Array<Record<string, unknown>>;
+    expect(history.map(change => change.batch)).toEqual(["home-a"]);
+    expect(history[0]).not.toHaveProperty("codexHome");
+    expect(await write({ ...restore, model: "a/other" })).toMatchObject({ status: 409, body: { code: "restore_not_in_history" } });
+    expect((await write(restore)).status).toBe(200);
+    expect(readFileSync(join(homeA, "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+  });
+
   test("returns whole batches, so a batch cut by the newest 50 is listed with every role it wrote", async () => {
     const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_LIMIT } = await import("../../src/codex/role-model-history");
     const dir = join(root, "history");
-    const write = (batch: string, role: string) => recordRoleModelChange({ at: "2026-10-24T00:00:00.000Z", batch, role, before: { model: null, effort: null }, after: { model: "m", effort: null } }, dir);
+    const write = (batch: string, role: string) => recordRoleModelChange("home", { at: "2026-10-24T00:00:00.000Z", batch, role, before: { model: null, effort: null }, after: { model: "m", effort: null } }, dir);
     for (let index = 0; index < 3; index++) write("older", `older-${index}`);
     for (let index = 0; index < ROLE_HISTORY_LIMIT + 1; index++) write("apply-all", `role-${index}`);
-    const history = listRoleModelChanges(ROLE_HISTORY_LIMIT, dir);
+    const history = listRoleModelChanges("home", ROLE_HISTORY_LIMIT, dir);
     expect(history.filter(change => change.batch === "apply-all")).toHaveLength(ROLE_HISTORY_LIMIT + 1);
     expect(history.some(change => change.batch === "older")).toBe(false);
   });
