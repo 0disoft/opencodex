@@ -530,10 +530,8 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
-`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
-restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
-input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
-acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
 caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
 a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
 still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup
