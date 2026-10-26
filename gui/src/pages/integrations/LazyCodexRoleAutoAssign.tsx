@@ -2,6 +2,7 @@ import { useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
+import { newClientId } from "../claude-code-types";
 import { EFFORT_LABEL, TIER_LABEL, type SizingEffortIntent, type SizingTier } from "./sizing-labels";
 
 export interface RoleProposal {
@@ -78,14 +79,18 @@ export default function LazyCodexRoleAutoAssign({
 
   const applyAll = async () => {
     setApplying(true);
-    let count = 0;
-    const total = applicable.length;
-    // One batch, so the role history restores the whole Apply all at once.
-    const batch = crypto.randomUUID();
-    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
-    for (const proposal of applicable) if (await applyOne(proposal, batch)) count += 1;
-    setSummary(t("integrations.lazycodexRoles.auto.appliedCount", { count: String(count), total: String(total) }));
-    setApplying(false);
+    try {
+      let count = 0;
+      const total = applicable.length;
+      // One batch, so the role history restores the whole Apply all at once. A dashboard served over
+      // plain HTTP on the LAN has no crypto.randomUUID.
+      const batch = newClientId();
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
+      for (const proposal of applicable) if (await applyOne(proposal, batch)) count += 1;
+      setSummary(t("integrations.lazycodexRoles.auto.appliedCount", { count: String(count), total: String(total) }));
+    } finally {
+      setApplying(false);
+    }
   };
 
   const locked = running || applying || busy;

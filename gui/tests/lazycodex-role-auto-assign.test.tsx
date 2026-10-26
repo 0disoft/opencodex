@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
-const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "crypto", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -257,3 +257,20 @@ test("Apply after a failed effort-only mirror on a model-inheriting role carries
   ]);
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · low");
 });
+
+// A dashboard opened over plain HTTP on the LAN is not a secure context: randomUUID is missing or throws.
+for (const availability of ["absent", "throws"] as const) {
+  test(`Apply all writes one batch and unlocks the panel when randomUUID is ${availability}`, async () => {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: availability === "absent" ? {}
+      : { randomUUID: () => { throw new Error("insecure context"); } } });
+    await mount();
+    await click(button("Auto-assign"));
+    await click(button("Apply all"));
+    const batches = requests.slice(1).map(r => (r.body as { batch?: string }).batch);
+    expect(batches).toHaveLength(2);
+    expect(batches[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(batches[1]).toBe(batches[0]);
+    expect(container.textContent).toContain("Applied 2 of 2 proposals.");
+    expect(button("Auto-assign").disabled).toBe(false);
+  });
+}

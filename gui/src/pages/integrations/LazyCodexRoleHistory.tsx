@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useI18n } from "../../i18n/shared";
 import { Notice } from "../../ui";
+import { newClientId } from "../claude-code-types";
 
 export interface RoleSetting {
   model: string | null;
@@ -47,20 +48,24 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
   const restoreGroup = async (group: RoleChange[]) => {
     setRestoring(group[0]!.batch);
     setSummary(null);
-    const batch = crypto.randomUUID();
-    const roles = [...earliestBefore(group)];
-    let count = 0;
-    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
-    for (const [role, setting] of roles) {
-      // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
-      if (!(await restore(role, setting.model ?? undefined, setting.effort, batch, group[0]!.batch))) break;
-      count += 1;
+    try {
+      // A dashboard served over plain HTTP on the LAN has no crypto.randomUUID.
+      const batch = newClientId();
+      const roles = [...earliestBefore(group)];
+      let count = 0;
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
+      for (const [role, setting] of roles) {
+        // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
+        if (!(await restore(role, setting.model ?? undefined, setting.effort, batch, group[0]!.batch))) break;
+        count += 1;
+      }
+      const time = new Date(group[0]!.at).toLocaleString(locale);
+      setSummary(count === roles.length
+        ? { tone: "ok", text: t("integrations.lazycodexRoles.history.restored", { count: String(count), time }) }
+        : { tone: "warn", text: t("integrations.lazycodexRoles.history.partial", { count: String(count), total: String(roles.length), role: roles[count]![0] }) });
+    } finally {
+      setRestoring(null);
     }
-    const time = new Date(group[0]!.at).toLocaleString(locale);
-    setSummary(count === roles.length
-      ? { tone: "ok", text: t("integrations.lazycodexRoles.history.restored", { count: String(count), time }) }
-      : { tone: "warn", text: t("integrations.lazycodexRoles.history.partial", { count: String(count), total: String(roles.length), role: roles[count]![0] }) });
-    setRestoring(null);
   };
 
   return (

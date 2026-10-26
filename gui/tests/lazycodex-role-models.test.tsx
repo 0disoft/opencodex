@@ -4,7 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { validateAgentRoleEffort } from "../../src/codex/agent-role-models";
 
-const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "crypto", "IS_REACT_ACT_ENVIRONMENT"] as const;
 
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -584,3 +584,26 @@ test("stops a Restore at the first failed role and warns that the batch is only 
   expect(container.textContent).toContain("Restore stopped at librarian: 0 of 2 role(s) went back");
   expect(container.textContent).not.toContain("Restored 0 role(s)");
 });
+
+for (const availability of ["absent", "throws"] as const) {
+  test(`Restore writes the batch back and frees its button when randomUUID is ${availability}`, async () => {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: availability === "absent" ? {}
+      : { randomUUID: () => { throw new Error("insecure context"); } } });
+    rolesBody = {
+      ...(rolesBody as Record<string, unknown>),
+      history: [
+        { at: "2026-10-22T00:09:35.000Z", batch: "apply-all", role: "librarian", before: { model: null, effort: "medium" }, after: { model: "xai/grok-4.5", effort: "low" } },
+        { at: "2026-10-22T00:09:34.000Z", batch: "apply-all", role: "explorer", before: { model: "gpt-5.5", effort: null }, after: { model: "xai/grok-4.5", effort: "low" } },
+      ],
+    };
+    await mount();
+    const restore = () => container.querySelector(".lazycodex-role-history > ul > li button") as HTMLButtonElement;
+    await act(async () => { restore().click(); });
+    await settle();
+    expect(puts).toHaveLength(2);
+    expect((puts[0]!.body as { batch: string }).batch).toMatch(/^[0-9a-f-]{36}$/);
+    expect(container.textContent).toContain("Restored 2 role(s)");
+    expect(restore().disabled).toBe(false);
+    expect(restore().textContent).toBe("Restore");
+  });
+}
