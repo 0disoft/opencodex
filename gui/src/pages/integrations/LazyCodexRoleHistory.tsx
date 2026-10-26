@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useI18n } from "../../i18n/shared";
 import { Notice } from "../../ui";
-import { newClientId } from "../claude-code-types";
 
 export interface RoleSetting {
   model: string | null;
@@ -16,8 +15,16 @@ export interface RoleChange {
   after: RoleSetting;
 }
 
-/** `restores` names the batch being put back; the server checks the write against its own history. */
-type Restore = (role: string, model: string | undefined, effort: string | null, batch: string, restores: string) => Promise<boolean>;
+/** A saved role write: the batch the server recorded it in, absent when it recorded nothing. */
+export interface SavedRole {
+  batch?: string;
+}
+
+/**
+ * `batch` joins the batch the first write of this Restore started (the server hands out batch ids);
+ * `restores` names the batch being put back, and the server checks the write against its own history.
+ */
+type Restore = (role: string, model: string | undefined, effort: string | null, batch: string | undefined, restores: string) => Promise<SavedRole | null>;
 
 /** Newest first, as the server lists them; one entry per batch, so Apply all reads as one action. */
 function groupByBatch(history: RoleChange[]): RoleChange[][] {
@@ -49,14 +56,15 @@ export default function LazyCodexRoleHistory({ history, unavailable, busy, resto
     setRestoring(group[0]!.batch);
     setSummary(null);
     try {
-      // A dashboard served over plain HTTP on the LAN has no crypto.randomUUID.
-      const batch = newClientId();
+      let batch: string | undefined;
       const roles = [...earliestBefore(group)];
       let count = 0;
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: every PUT rewrites the shared omo.jsonc mirror
       for (const [role, setting] of roles) {
         // A role that had no model pin keeps its current one: a save can set a pin, not remove it.
-        if (!(await restore(role, setting.model ?? undefined, setting.effort, batch, group[0]!.batch))) break;
+        const saved = await restore(role, setting.model ?? undefined, setting.effort, batch, group[0]!.batch);
+        if (!saved) break;
+        batch ??= saved.batch;
         count += 1;
       }
       const time = new Date(group[0]!.at).toLocaleString(locale);

@@ -4,6 +4,10 @@
  * role write spans `$CODEX_HOME/agents/<role>.toml` and LazyCodex's omo.jsonc mirror. So the
  * values are recorded rather than bytes, and a restore is an ordinary write of the earlier values.
  * Writes made in one action (auto-assign's Apply all) share a batch and are restored together.
+ * The server hands out batch ids and a write joins a batch only while the history still holds it whole,
+ * so an id compaction dropped can never start over and pass for the beginning of a batch. Every row
+ * carries its number in its batch, which keeps the cap durable and lets a read tell a whole batch
+ * from a cut one, which is never listed or restored.
  * The file sits under the opencodex config directory, which outlives a switch of Codex home, so every
  * row names the canonical Codex home it was written in and only that home's rows are listed or restored.
  * The file is bounded three ways: a batch holds at most ROLE_HISTORY_LIMIT rows, an append that takes
@@ -30,8 +34,16 @@ export interface RoleModelChange {
 
 interface StoredRoleModelChange extends RoleModelChange {
   readonly codexHome: string;
+  /** This row's number in its batch, from 1: a batch is whole when it holds rows 1 to its highest. */
+  readonly n: number;
   /** The batch this row's write restored, so compaction keeps that batch while the Restore is kept. */
   readonly restores?: string;
+}
+
+/** The batch a write is recorded in and its row number there. */
+export interface BatchSlot {
+  readonly batch: string;
+  readonly n: number;
 }
 
 /** Rows one listing returns, and rows one batch may hold, so a whole batch always fits a listing. */
@@ -49,7 +61,7 @@ export function isRoleHistoryBatch(value: unknown): value is string {
 }
 
 /** `codexHome` is the canonical path `getCodexHome()` returns, so two spellings of one home match. */
-export function recordRoleModelChange(codexHome: string, change: RoleModelChange & { readonly restores?: string }, dir: string = integrationsDir()): void {
+export function recordRoleModelChange(codexHome: string, change: RoleModelChange & { readonly n: number; readonly restores?: string }, dir: string = integrationsDir()): void {
   ensureDir(historyPath(dir));
   const stored: StoredRoleModelChange = { ...change, codexHome };
   appendFileSync(historyPath(dir), `${JSON.stringify(stored)}\n`, { encoding: "utf8", mode: 0o600 });
@@ -69,7 +81,7 @@ export function recordRoleModelChange(codexHome: string, change: RoleModelChange
  * whole, so a Restore still writing its roles never loses the batch that vouches for them.
  */
 function compact(dir: string): void {
-  const rows = tailRows(historyPath(dir));
+  const rows = wholeBatches(tailRows(historyPath(dir)));
   let newest = 0;
   let bytes = 0;
   for (const row of rows) {
@@ -107,6 +119,7 @@ function parseRow(line: string): StoredRoleModelChange | null {
   return typeof change === "object" && change !== null && typeof change.codexHome === "string"
     && typeof change.at === "string" && typeof change.role === "string"
     && isRoleHistoryBatch(change.batch) && isSetting(change.before) && isSetting(change.after)
+    && Number.isSafeInteger(change.n) && change.n >= 1
     && (change.restores === undefined || isRoleHistoryBatch(change.restores))
     ? change
     : null;
@@ -115,7 +128,7 @@ function parseRow(line: string): StoredRoleModelChange | null {
 /**
  * Every Codex home's rows, newest first, from at most the last ROLE_HISTORY_MAX_BYTES of the file and
  * at most ROLE_HISTORY_MAX_ROWS of them. When the read starts mid-file, its first partial line is
- * skipped and so is the batch of its oldest row, which may continue above the read.
+ * skipped; a batch that continues above the read is left for `wholeBatches` to drop.
  */
 function tailRows(path: string): StoredRoleModelChange[] {
   let fd: number;
@@ -126,7 +139,6 @@ function tailRows(path: string): StoredRoleModelChange[] {
     throw error;
   }
   let text: string;
-  let truncated: boolean;
   try {
     const stat = fstatSync(fd);
     // Windows opens a directory for reading, so the type is checked rather than left to the read.
@@ -140,24 +152,34 @@ function tailRows(path: string): StoredRoleModelChange[] {
       if (count === 0) break;
       length += count;
     }
-    truncated = start > 0;
     const read = bytes.subarray(0, length);
-    text = (truncated ? read.subarray(read.indexOf(10) + 1) : read).toString("utf8");
+    text = (start > 0 ? read.subarray(read.indexOf(10) + 1) : read).toString("utf8");
   } finally {
     closeSync(fd);
   }
-  const lines = text.split("\n").filter(line => line.trim());
-  truncated ||= lines.length > ROLE_HISTORY_MAX_ROWS;
-  const rows = lines.slice(-ROLE_HISTORY_MAX_ROWS).flatMap(line => {
+  return text.split("\n").filter(line => line.trim()).slice(-ROLE_HISTORY_MAX_ROWS).flatMap(line => {
     const row = parseRow(line);
     return row ? [row] : [];
   }).reverse();
-  const partial = truncated ? rows.at(-1) : undefined;
-  return partial ? rows.filter(row => batchKey(row) !== batchKey(partial)) : rows;
+}
+
+/**
+ * The rows of every batch that holds each of its rows 1 to its highest, so a batch the read or a
+ * compaction cut into is never offered as if it were whole.
+ */
+function wholeBatches(rows: StoredRoleModelChange[]): StoredRoleModelChange[] {
+  const numbers = new Map<string, Set<number>>();
+  const highest = new Map<string, number>();
+  for (const row of rows) {
+    const key = batchKey(row);
+    numbers.set(key, (numbers.get(key) ?? new Set()).add(row.n));
+    highest.set(key, Math.max(highest.get(key) ?? 0, row.n));
+  }
+  return rows.filter(row => numbers.get(batchKey(row))!.size === highest.get(batchKey(row)));
 }
 
 function forHome(rows: StoredRoleModelChange[], codexHome: string): RoleModelChange[] {
-  return rows.flatMap(({ codexHome: home, restores: _restores, ...change }) => home === codexHome ? [change] : []);
+  return rows.flatMap(({ codexHome: home, n: _n, restores: _restores, ...change }) => home === codexHome ? [change] : []);
 }
 
 /**
@@ -168,7 +190,7 @@ function forHome(rows: StoredRoleModelChange[], codexHome: string): RoleModelCha
  * integration journal reads its own.
  */
 export function listRoleModelChanges(codexHome: string, limit: number = ROLE_HISTORY_LIMIT, dir: string = integrationsDir()): RoleModelChange[] {
-  const newestFirst = forHome(tailRows(historyPath(dir)), codexHome);
+  const newestFirst = forHome(wholeBatches(tailRows(historyPath(dir))), codexHome);
   const sizes = new Map<string, number>();
   for (const change of newestFirst) sizes.set(change.batch, (sizes.get(change.batch) ?? 0) + 1);
   const listed = new Set<string>();
@@ -182,9 +204,17 @@ export function listRoleModelChanges(codexHome: string, limit: number = ROLE_HIS
   return newestFirst.filter(change => listed.has(change.batch));
 }
 
-/** How many rows this Codex home's history holds in `batch`; a write is refused once it reaches the cap. */
-export function roleHistoryBatchSize(codexHome: string, batch: string, dir: string = integrationsDir()): number {
-  return forHome(tailRows(historyPath(dir)), codexHome).filter(change => change.batch === batch).length;
+/**
+ * Where a write in this Codex home is recorded. Without `batch` it starts a new batch under a fresh id.
+ * With one, it joins that batch only while this home's retained history holds the batch whole, and is
+ * refused once the batch holds ROLE_HISTORY_LIMIT rows. An id compaction dropped, or one the server
+ * never handed out, is closed: it cannot take a row and pass for the start of a batch.
+ */
+export function claimBatchRow(codexHome: string, batch: string | undefined, dir: string = integrationsDir()): BatchSlot | "batch_closed" | "batch_full" {
+  if (batch === undefined) return { batch: crypto.randomUUID(), n: 1 };
+  const held = wholeBatches(tailRows(historyPath(dir))).filter(row => row.codexHome === codexHome && row.batch === batch);
+  if (held.length === 0) return "batch_closed";
+  return held.length >= ROLE_HISTORY_LIMIT ? "batch_full" : { batch, n: held.length + 1 };
 }
 
 /**
@@ -195,6 +225,6 @@ export function roleHistoryBatchSize(codexHome: string, batch: string, dir: stri
  * because a Restore's own rows push the batch it restores out of that listing before it finishes.
  */
 export function restorableSetting(codexHome: string, batch: string, role: string, dir: string = integrationsDir()): RoleSetting | null {
-  const changes = forHome(tailRows(historyPath(dir)), codexHome).filter(change => change.batch === batch && change.role === role);
+  const changes = forHome(wholeBatches(tailRows(historyPath(dir))), codexHome).filter(change => change.batch === batch && change.role === role);
   return changes.at(-1)?.before ?? null;
 }

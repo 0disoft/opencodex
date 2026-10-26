@@ -82,7 +82,8 @@ beforeEach(() => {
           omoJsoncModel: omoWriteStatus === "written" && model !== undefined ? model : row.omoJsoncModel ?? null,
         } : row),
       };
-      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus } });
+      // Like the server, a write without a batch starts one and the response names it.
+      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: omoWriteStatus }, batch: body.batch ?? `server-${puts.length}` });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "xai/grok-4.5"] });
     if (url.endsWith("/api/injection-model")) {
@@ -552,10 +553,9 @@ test("lists the role change history as one entry per batch and restores a batch'
   await act(async () => { restore.click(); });
   await settle();
   expect(puts.map(put => ({ role: put.url.slice(put.url.lastIndexOf("/") + 1), body: put.body }))).toEqual([
-    { role: "librarian", body: { effort: "medium", batch: (puts[0]!.body as { batch: string }).batch, restores: "apply-all" } },
-    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: (puts[0]!.body as { batch: string }).batch, restores: "apply-all" } },
+    { role: "librarian", body: { effort: "medium", restores: "apply-all" } },
+    { role: "explorer", body: { model: "gpt-5.5", effort: null, batch: "server-1", restores: "apply-all" } },
   ]);
-  expect((puts[0]!.body as { batch: string }).batch).not.toBe("apply-all");
   expect(container.textContent).toContain("Restored 2 role(s)");
 });
 
@@ -601,7 +601,7 @@ for (const availability of ["absent", "throws"] as const) {
     await act(async () => { restore().click(); });
     await settle();
     expect(puts).toHaveLength(2);
-    expect((puts[0]!.body as { batch: string }).batch).toMatch(/^[0-9a-f-]{36}$/);
+    expect(puts.map(put => (put.body as { batch?: string }).batch)).toEqual([undefined, "server-1"]);
     expect(container.textContent).toContain("Restored 2 role(s)");
     expect(restore().disabled).toBe(false);
     expect(restore().textContent).toBe("Restore");

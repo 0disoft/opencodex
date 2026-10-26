@@ -62,7 +62,8 @@ beforeEach(() => {
       const body = JSON.parse(String(init?.body));
       const role = url.slice(url.lastIndexOf("/") + 1);
       roleRows = roleRows.map(row => row.role === role ? { ...row, model: body.model ?? row.model, effort: body.effort === undefined ? row.effort : body.effort } : row);
-      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: mirrorStatus } });
+      // Like the server, a write without a batch starts one and the response names it.
+      return json({ ok: true, toml: { status: "written" }, omoJsonc: { status: mirrorStatus }, batch: body.batch ?? `server-${requests.length}` });
     }
     if (url.endsWith("/api/subagent-models")) return json({ available: ["gpt-5.5", "a/small", "a/mid"] });
     if (url.endsWith("/api/injection-model")) return json({ efforts: ["low", "medium", "high"] });
@@ -144,11 +145,9 @@ test("apply all writes each remaining proposal once and skips unsized roles", as
   await mount();
   await click(button("Auto-assign"));
   await click(button("Apply all"));
-  const batch = (requests[1]!.body as { batch: string }).batch;
-  expect(batch).toMatch(/^[0-9a-f-]{36}$/);
   expect(requests.slice(1)).toEqual([
-    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "a/small", effort: "low", batch } },
-    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid", batch } },
+    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/explorer`, body: { model: "a/small", effort: "low" } },
+    { method: "PUT", url: `${apiBase}/api/codex-agent-roles/worker`, body: { model: "a/mid", batch: "server-2" } },
   ]);
   expect(container.textContent).toContain("Applied 2 of 2 proposals.");
   expect(button("Apply all").disabled).toBe(true);
@@ -208,7 +207,7 @@ test("Apply all merges both confirmed rows when every reload fails", async () =>
   await click(button("Auto-assign"));
   reloadFails = true;
   await click(button("Apply all"));
-  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low", batch: expect.any(String) }, { model: "a/mid", batch: expect.any(String) }]);
+  expect(requests.slice(1).map(r => r.body)).toEqual([{ model: "a/small", effort: "low" }, { model: "a/mid", batch: "server-2" }]);
   expect(roleRow("explorer").querySelectorAll("td")[1]!.textContent).toBe("a/small · low");
   expect(roleRow("worker").querySelectorAll("td")[1]!.textContent).toBe("a/mid · high");
   await expectEffortOptions("explorer", ["Inherit effort", "low", "medium", "high"]);
@@ -267,9 +266,7 @@ for (const availability of ["absent", "throws"] as const) {
     await click(button("Auto-assign"));
     await click(button("Apply all"));
     const batches = requests.slice(1).map(r => (r.body as { batch?: string }).batch);
-    expect(batches).toHaveLength(2);
-    expect(batches[0]).toMatch(/^[0-9a-f-]{36}$/);
-    expect(batches[1]).toBe(batches[0]);
+    expect(batches).toEqual([undefined, "server-2"]);
     expect(container.textContent).toContain("Applied 2 of 2 proposals.");
     expect(button("Auto-assign").disabled).toBe(false);
   });

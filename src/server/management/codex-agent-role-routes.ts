@@ -120,18 +120,21 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   if (body.restores !== undefined && !history.isRoleHistoryBatch(body.restores)) {
     return jsonResponse({ error: "restores must be 1 to 64 letters, digits or dashes", code: "invalid_restores" }, 400, req, config);
   }
-  // A batch is capped at the listing size, so reusing one id cannot grow a batch the history could
-  // never list or restore whole. History is optional: a file that cannot be read does not block saves.
-  if (typeof body.batch === "string") {
-    let size = 0;
-    try {
-      size = history.roleHistoryBatchSize(codexHome, body.batch);
-    } catch (error) {
-      console.error(`[codex-agent-roles] could not read the change history: ${String(error)}`);
+  // A write without `batch` starts a batch and the response names it; a later write joins it only
+  // while it is this home's newest batch, up to the listing size. History is optional: a file that
+  // cannot be read does not block saves, and such a save is simply not recorded.
+  let slot: import("../../codex/role-model-history").BatchSlot | null = null;
+  try {
+    const claimed = history.claimBatchRow(codexHome, body.batch);
+    if (claimed === "batch_closed") {
+      return jsonResponse({ error: "this batch takes no more changes; leave batch out to start a new one", code: "batch_closed" }, 409, req, config);
     }
-    if (size >= history.ROLE_HISTORY_LIMIT) {
+    if (claimed === "batch_full") {
       return jsonResponse({ error: `a batch holds at most ${history.ROLE_HISTORY_LIMIT} changes`, code: "batch_full" }, 409, req, config);
     }
+    slot = claimed;
+  } catch (error) {
+    console.error(`[codex-agent-roles] could not read the change history: ${String(error)}`);
   }
   let model: string | undefined;
   let effort: string | null | undefined;
@@ -172,16 +175,19 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     // Filesystem and ownership errors carry absolute paths and UIDs; keep them out of the response.
     return jsonResponse({ error: "could not write the role file", code: "write_failed" }, 500, req, config);
   }
-  if (toml.status === "written") {
+  let recorded: string | undefined;
+  if (toml.status === "written" && slot) {
     try {
       history.recordRoleModelChange(codexHome, {
         at: new Date().toISOString(),
-        batch: body.batch ?? crypto.randomUUID(),
+        batch: slot.batch,
+        n: slot.n,
         role,
         before,
         after: { model: model ?? before.model, effort: effort === undefined ? before.effort : effort },
         ...(typeof body.restores === "string" ? { restores: body.restores } : {}),
       });
+      recorded = slot.batch;
     } catch (error) {
       // The write already stands; a lost history row only costs the Restore button for it.
       console.error(`[codex-agent-roles] could not record the change: ${String(error)}`);
@@ -203,5 +209,6 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
     ...(effort !== undefined ? { effort } : {}),
     toml,
     omoJsonc: { status: omoStatus },
+    ...(recorded ? { batch: recorded } : {}),
   }, 200, req, config);
 }

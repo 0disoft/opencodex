@@ -5,7 +5,7 @@ import { readJsonOrThrow } from "../../fetch-json";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Select, type SelectOption } from "../../ui";
 import LazyCodexRoleAutoAssign from "./LazyCodexRoleAutoAssign";
-import LazyCodexRoleHistory, { type RoleChange } from "./LazyCodexRoleHistory";
+import LazyCodexRoleHistory, { type RoleChange, type SavedRole } from "./LazyCodexRoleHistory";
 
 interface RoleRow {
   role: string;
@@ -78,7 +78,8 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
   useLayoutEffect(() => { latestData.current = data; }, [data]);
 
   // An undefined model saves the effort alone and leaves the role's model pin, or its inheritance,
-  // as it is. Auto-assign and model picks always pass a model.
+  // as it is. Auto-assign and model picks always pass a model. A save resolves to the batch the
+  // server recorded it in (absent when nothing was written or recorded), or null when it failed.
   const save = async (
     role: string,
     model: string | undefined,
@@ -86,12 +87,12 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
     displayedEffort?: string,
     batch?: string,
     restores?: string,
-  ): Promise<boolean> => {
-    if (pending !== null) return false;
+  ): Promise<SavedRole | null> => {
+    if (pending !== null) return null;
     // An omitted effort still carries a pending omo.jsonc retry's effort, so a later save from any
     // path (the row or auto-assign) cannot drop it. An explicit effort replaces the retry.
     const sent = effort === undefined ? mirrorRetries[role]?.sent : effort;
-    if (model === undefined && sent === undefined) return false;
+    if (model === undefined && sent === undefined) return null;
     setPending(role);
     setResult(null);
     try {
@@ -105,7 +106,7 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
           ...(restores !== undefined ? { restores } : {}),
         }),
       });
-      const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus } }>(
+      const payload = await readJsonOrThrow<{ omoJsonc?: { status?: OmoWriteStatus }; batch?: string }>(
         response,
         t("integrations.lazycodexRoles.saveFailed", { role }),
       );
@@ -145,10 +146,10 @@ export default function LazyCodexRoleModels({ apiBase, active }: { apiBase: stri
       setEffortDrafts(current => keepOnFailure(current, shownEffort));
       setMirrorRetries(current => keepOnFailure(current, { sent }));
       await resource.refresh();
-      return true;
+      return { batch: payload?.batch };
     } catch {
       setResult({ tone: "err", text: t("integrations.lazycodexRoles.saveFailed", { role }) });
-      return false;
+      return null;
     } finally {
       setPending(null);
     }
