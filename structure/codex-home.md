@@ -7,7 +7,7 @@ Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-
 A lock in the Codex credential store is governed by [descriptor identity and age](catalog.md#accounts-namespaces-and-pool-rotation), so the mere presence of its filename is neither acquisition nor release authority. Failed path-identity probes leave the lock for stale recovery and preserve the refresh callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
-
+Launcher credentials require a parsed managed provider transport matching the installation's loopback target or persisted local client connection; provider names and injection comments are not destination authority. Default profiles, project layers and destination-changing arguments suppress automatic token loading.
 The read-only CLI update plan follows the [isolated environment and process-observation contract](codex-cli-update.md).
 
 ## Orca source-owned account import

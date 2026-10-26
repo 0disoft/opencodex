@@ -136,20 +136,13 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx codex [codex args...]`
 
-确保代理正在运行，然后原样启动 `codex`。Codex 的路由始终归配置所有（`~/.codex/config.toml` 中注入的
-`openai_base_url`），因此启动不会改写任何配置文件。环境缺少 `OPENCODEX_API_AUTH_TOKEN` 时，会从
-`~/.opencodex/service-api-token` 补上，与 Codex 自动启动 shim 采用相同的注入方式。
+使用原始参数启动 Codex 前尝试启动代理。路由仍归 Codex 配置所有，启动器不会改写。本机原生及其他网关路由跳过代理启动；未知路由会警告并尝试启动，失败后仍警告并继续。帮助、版本及 `login`、`doctor`、`help` 等内部命令跳过代理启动和自动令牌读取。
 
-`--help`/`-h`、`--version`/`-V` 以及 Codex 内部子命令（`login`、`doctor`、`help` 等）会跳过代理
-ensure 并原样传递环境，与 shim 的 argv 语法保持一致。
+只有所选 provider 的完整传输配置与本次安装的回环监听器或已保存的本地客户端连接对应的管理块一致时，才从本次安装的 `service-api-token` 读取缺失的 `OPENCODEX_API_AUTH_TOKEN`。名称或注入注释本身不构成授权。未知或远程目标、默认 profile、项目配置、`OPENAI_BASE_URL` 以及传入的 `-c`/`--config`、`-p`/`--profile`、`-C`/`--cd`、`--remote` 都会跳过自动读取。保留用户导出的凭据和参数，拒绝令牌文件覆盖和管理令牌冲突。
 
-执行前会先判定路由：没有注入路由时输出提示信息，并不做 ensure 直接启动 `codex`；外部网关（custom-local/custom-remote）
-会输出警告，按原样通过且不触碰该路由；无法验证的路由会输出警告但仍尝试 ensure；ensure 失败时会在 stderr 输出一行，并仍然启动 `codex`。
-当 `codex` 指向自动启动 shim 时，启动器会直接运行其背后的 Codex，避免 shim 重复 ensure。
-如果查找可执行文件或检查 shim 失败，启动器仍会以 `OCX_SHIM_BYPASS=1` 运行 `codex`，跳过 shim 的代理启动和服务令牌加载。
-只有已验证的本地路由才会补充服务令牌，未知路由不会添加。客户端注入会忽略令牌文件路径的环境变量覆盖，并拒绝管理凭据。启动器帮助使用 `ocx help codex`，Codex 自身帮助使用 `ocx codex --help`。
-`-c`/`--config` 或 `-p`/`--profile` 可能改变目标，因此也会跳过自动令牌注入。用户导出的凭据和原始参数会保留。
-稍后再启动普通 `codex` 时，行为与之前完全一致。
+来源已验证的 shim 直接运行其背后的 Codex。其他 Windows CMD wrapper 必须与当前生成模板完整一致，才以 `OCX_SHIM_BYPASS=1` 执行选定的绝对路径。普通 npm 启动器仍受支持。过时、无法读取或含糊的管理 wrapper 会输出诊断并拒绝执行；请用 `ocx codex-shim install` 更新或选择原生可执行文件。本次启动不修复 shim。内容检查不保证 Windows backing 文件来源，也不防止并发路径替换。
+
+启动器帮助为 `ocx help codex`，Codex 帮助为 `ocx codex --help`。以后直接运行普通 `codex` 的行为保持不变。
 
 ### `ocx opencode [opencode args...]`
 

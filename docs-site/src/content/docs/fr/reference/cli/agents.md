@@ -171,28 +171,13 @@ restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglag
 
 ### `ocx codex [codex args...]`
 
-Vérifiez que le proxy est actif, puis lancez `codex` sans modification. Le routage de Codex reste
-la propriété de sa configuration — le `openai_base_url` injecté dans `~/.codex/config.toml` —
-aucun lancement ne réécrit donc de fichier de configuration. Pour un routage local vérifié, un `OPENCODEX_API_AUTH_TOKEN` absent
-est renseigné depuis `~/.opencodex/service-api-token`, la même injection que celle du shim de
-démarrage automatique Codex.
+Le lanceur tente de démarrer le proxy puis transmet les arguments d’origine à Codex, sans réécrire sa configuration. Les routes natives et les passerelles tierces sautent le démarrage. Une route inconnue avertit puis tente le démarrage ; un échec avertit et continue. L’aide, la version et les commandes internes comme `login`, `doctor` et `help` sautent le démarrage et la lecture automatique du jeton.
 
-`--help`/`-h`, `--version`/`-V` et les sous-commandes internes de Codex (`login`, `doctor`, `help`,
-...) sautent l'assurance du proxy et traversent l'environnement inchangé, en reprenant la
-grammaire d'arguments du shim.
+Un `OPENCODEX_API_AUTH_TOKEN` absent est lu dans le `service-api-token` de cette installation uniquement si toute la configuration de transport du provider sélectionné correspond au bloc géré pour son écouteur loopback ou sa connexion client locale enregistrée. Le nom et les commentaires ne suffisent pas. Destinations inconnues ou distantes, profile par défaut, configuration de projet, `OPENAI_BASE_URL` et options transmises `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote` désactivent cette lecture. Les identifiants exportés et les arguments sont conservés ; les remplacements du fichier et les collisions avec les jetons d’administration sont refusés.
 
-Le routage est examiné avant exécution : sans routage injecté, un message informatif s'affiche et
-`codex` est lancé sans assurance du proxy ; une passerelle étrangère (custom-local/custom-remote)
-provoque un avertissement et un passage sans toucher à cette route ; un routage invérifiable
-provoque un avertissement et tente quand même d'assurer le proxy. Si cette tentative échoue, une
-ligne s'affiche sur stderr et `codex` est lancé malgré tout. Lorsque `codex` correspond au shim de
-démarrage automatique, le lanceur exécute directement le Codex sous-jacent pour que le shim ne
-répète pas l'assurance. Un lancement ultérieur de `codex` sans opencodex se comporte
-exactement comme auparavant.
+Un shim dont la provenance est vérifiée lance directement son Codex sous-jacent. Sinon, les wrappers CMD Windows doivent correspondre intégralement au modèle généré actuel avant l’exécution du chemin absolu sélectionné avec `OCX_SHIM_BYPASS=1`. Les lanceurs npm ordinaires restent pris en charge. Les wrappers gérés obsolètes, illisibles ou ambigus sont refusés avec un diagnostic : actualisez-les avec `ocx codex-shim install` ou choisissez l’exécutable natif. Ce lancement ne répare pas les shims. Le contrôle du contenu ne garantit ni la provenance du fichier sous-jacent Windows ni l’absence de remplacement concurrent du chemin.
 
-Si la recherche de l’exécutable ou l’inspection du shim échoue, le lanceur exécute quand même `codex` avec `OCX_SHIM_BYPASS=1`, empêchant le shim de relancer le proxy ou de charger un jeton de service.
-Un routage inconnu n’ajoute jamais de jeton de service. La variable de remplacement du fichier de jeton est ignorée pour le client et les identifiants d’administration sont refusés. `ocx help codex` affiche l’aide du lanceur ; `ocx codex --help` atteint Codex.
-Les options `-c`/`--config` ou `-p`/`--profile` désactivent aussi l’injection automatique, car elles peuvent changer la destination. Les identifiants exportés par l’utilisateur et les arguments restent inchangés.
+Aide du lanceur : `ocx help codex` ; aide de Codex : `ocx codex --help`. Le comportement ultérieur de `codex` seul est conservé.
 
 ### `ocx opencode [opencode args...]`
 

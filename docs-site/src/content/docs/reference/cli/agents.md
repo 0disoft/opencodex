@@ -965,25 +965,13 @@ before choosing it. Rendered models are not proof of native application.
 
 ### `ocx codex [codex args...]`
 
-Ensure the proxy is running, then launch `codex` unchanged. Codex routing stays config-owned —
-the injected `openai_base_url` in `~/.codex/config.toml` — so a launch never rewrites a config
-file. For verified local routing, a missing `OPENCODEX_API_AUTH_TOKEN` is filled from `~/.opencodex/service-api-token`,
-the same injection the Codex autostart shim performs.
+Ensure the proxy is running, then launch Codex with the original arguments. Routing remains in Codex configuration; the launcher never rewrites it. Native and foreign routes skip startup. Unknown routing warns and attempts startup; a failed startup warns and continues. Help/version and internal commands such as `login`, `doctor`, and `help` skip startup and automatic token loading.
 
-`--help`/`-h`, `--version`/`-V`, and Codex-internal subcommands (`login`, `doctor`, `help`, ...)
-skip the proxy ensure and pass the environment through unchanged, matching the shim's argv
-grammar.
+A missing `OPENCODEX_API_AUTH_TOKEN` is read from this installation's `service-api-token` only when the selected provider's complete transport configuration matches the managed block for the configured loopback listener or persisted local client connection. Names and injection comments alone grant no credential access. Unknown or remote destinations, default profiles, project configuration, `OPENAI_BASE_URL`, and forwarded `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, or `--remote` options skip automatic loading. User-exported credentials and arguments are preserved; token-file overrides cannot select a different credential, and management-token collisions are refused.
 
-Routing is examined before exec: no injected routing prints an informational notice and launches
-`codex` with no ensure; a foreign gateway (custom-local/custom-remote) prints a warning and passes
-through without touching that route; unverifiable routing prints a warning and still attempts the ensure. If the ensure fails, one stderr
-line is printed and `codex` launches anyway. When `codex` resolves to the autostart shim, the
-launcher runs the backing Codex directly so the shim does not repeat the ensure. Launching plain
-`codex` later behaves exactly as before.
+A provenance-verified shim uses its backing Codex directly. Otherwise Windows CMD wrappers must match the complete current generated template before the selected absolute command runs with `OCX_SHIM_BYPASS=1`. Ordinary npm launchers remain supported. Obsolete, unreadable, or ambiguous managed wrappers fail closed with a diagnostic; refresh them with `ocx codex-shim install` or select the native executable. This launch does not repair shims. The content check does not establish Windows backing-file provenance or prevent concurrent pathname replacement.
 
-If executable lookup or shim inspection fails, the launcher still runs `codex` with `OCX_SHIM_BYPASS=1`, preventing the shim from repeating proxy startup or loading a service token.
-Unknown routing never adds a service token. The token-file environment override is ignored for client injection, and management credentials are rejected. Use `ocx help codex` for launcher help; `ocx codex --help` reaches Codex itself.
-Forwarding `-c`/`--config` or `-p`/`--profile` also skips automatic token injection because these options can change the destination. User-exported credentials and the original arguments are preserved.
+Use `ocx help codex` for launcher help and `ocx codex --help` for Codex help. Launching plain `codex` later retains its existing behavior.
 
 ### `ocx opencode [opencode args...]`
 

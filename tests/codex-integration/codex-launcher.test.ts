@@ -14,7 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
-  buildCodexLaunchEnv,
+  buildCodexLaunchEnv as buildEnv,
   CODEX_ROUTING_CUSTOM_LOCAL_NOTICE,
   CODEX_ROUTING_CUSTOM_REMOTE_NOTICE,
   CODEX_ROUTING_NATIVE_NOTICE,
@@ -34,6 +34,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+// These env-assembly tests supply destination authority explicitly; real config authority
+// (including the positive managed block) is covered in codex-launcher-security.test.ts.
+const buildCodexLaunchEnv: typeof buildEnv = (base, deps) => buildEnv(base, {
+  credentialDestination: () => true, ...deps,
+});
 
 function withTokenFiles(run: (home: string) => void): void {
   const home = mkdtempSync(join(tmpdir(), "ocx-codex-launch-token-"));
@@ -280,44 +286,43 @@ describe("codex launcher shim handoff", () => {
     expect(launch).toEqual({ command: "/opt/codex/bin/codex.real", env });
   });
 
-  test("an unreadable shim state keeps `codex` but bypasses the shim's ensure", () => {
+  test("an unknown shim state uses the verified selected path with bypass", () => {
     const launch = resolveCodexLaunchCommand(env, {
       findOnPath: onPath,
       inspectShim: () => ({ status: "unknown", reason: "binding_unavailable" }),
+      verifyBypass: () => true,
     });
-    expect(launch.command).toBe("codex");
+    expect(launch.command).toBe(onPath());
     expect(launch.env.OCX_SHIM_BYPASS).toBe("1");
     expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
   });
 
-  test("a PATH lookup error falls back to the unknown-state bypass", () => {
+  test("a PATH lookup error fails closed before any child handoff", () => {
     let inspected = false;
-    const launch = resolveCodexLaunchCommand(env, {
+    expect(() => resolveCodexLaunchCommand(env, {
       findOnPath: () => { throw new Error("PATH lookup unavailable"); },
       inspectShim: () => { inspected = true; return { status: "not-tracked" }; },
-    });
-    expect(launch).toEqual({ command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } });
+    })).toThrow("cannot verify Codex shim bypass");
     expect(inspected).toBe(false);
     expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
   });
 
-  test("a shim filesystem error falls back without changing the input environment", () => {
+  test("a shim filesystem error fails closed without changing the input environment", () => {
     const base = { ...env, OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_inherited_token", OCX_SHIM_BYPASS: "" };
-    const launch = resolveCodexLaunchCommand(base, {
+    expect(() => resolveCodexLaunchCommand(base, {
       findOnPath: onPath,
       inspectShim: () => { throw Object.assign(new Error("shim state read failed"), { code: "EIO" }); },
-    });
-    expect(launch).toEqual({ command: "codex", env: { ...base, OCX_SHIM_BYPASS: "1" } });
+    })).toThrow("cannot verify Codex shim bypass");
     expect(base.OCX_SHIM_BYPASS).toBe("");
   });
 
   test("an untracked or backing codex launches unchanged", () => {
     expect(resolveCodexLaunchCommand(env, { findOnPath: onPath, inspectShim: () => ({ status: "not-tracked" }) }))
-      .toEqual({ command: "codex", env });
+      .toEqual({ command: onPath(), env });
     expect(resolveCodexLaunchCommand(env, {
       findOnPath: onPath,
       inspectShim: () => ({ status: "matched", selectedRole: "backing", backingPath: "/home/test/.local/bin/codex", backingKind: "real" }),
-    })).toEqual({ command: "codex", env });
-    expect(resolveCodexLaunchCommand(env, { findOnPath: () => null })).toEqual({ command: "codex", env });
+    })).toEqual({ command: onPath(), env });
+    expect(() => resolveCodexLaunchCommand(env, { findOnPath: () => null })).toThrow("cannot verify Codex shim bypass");
   });
 });

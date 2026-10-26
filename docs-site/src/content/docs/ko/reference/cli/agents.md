@@ -164,23 +164,13 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 ### `ocx codex [codex args...]`
 
-프록시가 실행 중인지 확인한 뒤, `codex`를 그대로 실행합니다. Codex 라우팅은 config(`~/.codex/config.toml`에 주입된
-`openai_base_url`)가 소유하므로, 이 실행은 config 파일을 재작성하지 않습니다. 환경에 `OPENCODEX_API_AUTH_TOKEN`이
-없으면 `~/.opencodex/service-api-token`에서 채웁니다. 이는 Codex 자동 시작 shim과 동일한 주입입니다.
+원래 인자로 Codex를 실행하기 전에 프록시 시작을 시도합니다. 라우팅은 Codex 설정이 소유하며 런처가 재작성하지 않습니다. 네이티브 및 다른 게이트웨이 경로에서는 시작을 생략합니다. 알 수 없는 라우팅은 경고 후 시작을 시도하며, 시작 실패 시에도 경고 후 실행합니다. 도움말·버전 및 `login`, `doctor`, `help` 같은 내부 명령은 시작과 자동 토큰 읽기를 생략합니다.
 
-`--help`/`-h`, `--version`/`-V` 및 Codex 내부 하위 명령(`login`, `doctor`, `help` 등)은 프록시 ensure를
-건너뛰고 환경을 그대로 전달합니다(shim의 argv 문법과 일치).
+선택한 provider의 전체 전송 설정이 이 설치의 로컬 리스너 또는 저장된 로컬 클라이언트 연결에 대해 생성한 관리 블록과 일치할 때만, 누락된 `OPENCODEX_API_AUTH_TOKEN`을 이 설치의 `service-api-token`에서 읽습니다. 이름이나 주입 주석만으로는 허용하지 않습니다. 알 수 없거나 원격인 목적지, 기본 profile, 프로젝트 설정, `OPENAI_BASE_URL`, 전달된 `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote`는 자동 읽기를 생략합니다. 사용자가 export한 자격 증명과 인자는 보존하며, 토큰 파일 경로 재정의와 관리 토큰 충돌은 거부합니다.
 
-실행 전에 라우팅을 확인합니다. 주입된 라우팅이 없으면 안내 메시지를 출력하고 ensure 없이 `codex`를 실행하고,
-다른 로컬/원격 게이트웨이(custom-local/custom-remote)는 경고를 출력한 뒤 해당 경로를 건드리지 않고 전달하며,
-확인 불가능한 라우팅은 경고를 출력하고 ensure를 시도합니다. ensure가 실패하면 stderr에 한 줄을 출력하고
-그래도 `codex`를 실행합니다. `codex`가 자동 시작 shim을 가리키면 shim이 ensure를 반복하지 않도록 그 뒤의 Codex를
-직접 실행합니다. 이후 plain
-`codex`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
+출처가 검증된 shim은 뒤의 Codex를 직접 실행합니다. 그 외 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 선택된 절대 경로를 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처도 지원합니다. 오래되었거나 읽을 수 없거나 모호한 관리 wrapper는 진단 후 실행을 거부합니다. `ocx codex-shim install`로 갱신하거나 네이티브 실행 파일을 선택하세요. 이 실행은 shim을 자동 복구하지 않습니다. 내용 검사는 Windows backing 파일의 출처나 동시 경로 교체를 보장하지 않습니다.
 
-실행 파일 검색이나 shim 검사가 실패해도 `OCX_SHIM_BYPASS=1`로 `codex`를 실행하여 shim의 프록시 재시작과 서비스 토큰 읽기를 건너뜁니다.
-서비스 토큰 보충은 확인된 로컬 라우팅에만 적용되며, 알 수 없는 라우팅에는 추가하지 않습니다. 클라이언트 주입 시 토큰 파일 환경 변수의 경로 재정의를 무시하고 관리자 자격 증명을 거부합니다. 런처 도움말은 `ocx help codex`, Codex 자체 도움말은 `ocx codex --help`를 사용합니다.
-`-c`/`--config` 또는 `-p`/`--profile`은 목적지를 바꿀 수 있으므로 자동 토큰 주입을 생략합니다. 사용자가 export한 자격 증명과 원래 인자는 보존합니다.
+런처 도움말은 `ocx help codex`, Codex 도움말은 `ocx codex --help`입니다. 이후 plain `codex`의 동작은 기존과 같습니다.
 
 ### `ocx opencode [opencode args...]`
 

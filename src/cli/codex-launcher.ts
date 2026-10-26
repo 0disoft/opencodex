@@ -34,6 +34,8 @@ import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/servic
 import { commandInvocation } from "../lib/win-exec";
 import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import { codexCredentialDestinationIsTrusted } from "./codex-launch-auth";
+import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -154,6 +156,7 @@ export type CodexLaunchEnvDeps = {
   args?: readonly string[];
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
+  credentialDestination?: () => boolean;
 };
 
 /** Read the client admission credential from this installation's service-token file. */
@@ -174,8 +177,9 @@ export function buildCodexLaunchEnv(
   const env = { ...base };
   if (deps.routingKind !== undefined && deps.routingKind !== "opencodex-local") return env;
   // Config/profile overrides can replace the destination after the home was classified.
-  if (deps.args?.some(arg => /^(?:-c|-p|--config(?:=|$)|--profile(?:=|$))/.test(arg))) return env;
+  if (deps.args?.some(arg => /^(?:-c|-p|-C|--config(?:=|$)|--profile(?:=|$)|--cd(?:=|$)|--remote(?:[=-]|$))/.test(arg))) return env;
   if (!env.OPENCODEX_API_AUTH_TOKEN?.trim()) {
+    if (env.OPENAI_BASE_URL || !(deps.credentialDestination ?? codexCredentialDestinationIsTrusted)()) return env;
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
     if (token && !tokenCollidesWithAdmin(token, env)) env.OPENCODEX_API_AUTH_TOKEN = token;
   }
@@ -200,6 +204,7 @@ export function codexNotFoundHint(
 export type CodexLaunchCommandDeps = {
   findOnPath?: (name: string) => string | null;
   inspectShim?: typeof inspectCodexShimBackingForCommand;
+  verifyBypass?: typeof codexCommandCanBypass;
 };
 
 export type CodexLaunchCommand = { command: string; env: CodexLaunchEnv };
@@ -208,9 +213,8 @@ export type CodexLaunchCommand = { command: string; env: CodexLaunchEnv };
  * The launcher has already made the ensure decision, so the generated autostart shim
  * must not make it again: on a passthrough plan it would start the proxy and load the
  * admission token anyway. When `codex` resolves to a recorded shim wrapper, exec its
- * backing Codex directly. When the shim state cannot be read (always on win32, where
- * inspection is deferred), keep `codex` and set OCX_SHIM_BYPASS so at least the shim's
- * ensure is skipped.
+ * backing Codex directly. Unknown state requires a separate bypass-content check;
+ * obsolete or unverifiable Windows wrappers fail closed before starting any child.
  */
 export function resolveCodexLaunchCommand(
   env: CodexLaunchEnv,
@@ -218,19 +222,23 @@ export function resolveCodexLaunchCommand(
 ): CodexLaunchCommand {
   try {
     const selected = (deps.findOnPath ?? findExecutableOnPath)("codex");
-    if (!selected) return { command: "codex", env };
+    if (!selected) throw new Error(CODEX_UNVERIFIED_SHIM);
     const shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected);
     if (shim.status === "matched" && shim.selectedRole === "wrapper") return { command: shim.backingPath, env };
-    if (shim.status !== "unknown") return { command: "codex", env };
-  } catch { // Inspection is optional; retain the same bypass as an unknown state.
+    if (shim.status !== "unknown") return { command: selected, env };
+    if (!(deps.verifyBypass ?? codexCommandCanBypass)(selected, env)) throw new Error(CODEX_UNVERIFIED_SHIM);
+    return { command: selected, env: { ...env, OCX_SHIM_BYPASS: "1" } };
+  } catch {
+    throw new Error(CODEX_UNVERIFIED_SHIM);
   }
-  return { command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } };
 }
 
 /** Launch the selected Codex command with inherited IO and preserve its exit status. */
 function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<number> {
   return new Promise<number>(resolve => {
-    const launch = resolveCodexLaunchCommand(env);
+    let launch: CodexLaunchCommand;
+    try { launch = resolveCodexLaunchCommand(env); }
+    catch { console.error(CODEX_UNVERIFIED_SHIM); resolve(1); return; }
     const inv = commandInvocation(launch.command, args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {

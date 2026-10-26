@@ -189,25 +189,13 @@ eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın
 
 ### `ocx codex [codex args...]`
 
-Proxy'nin çalıştığından emin olun, ardından `codex`'i değiştirmeden başlatın. Codex yönlendirmesi
-yapılandırmaya aittir (`~/.codex/config.toml` içine yazılan `openai_base_url`), bu yüzden bir
-başlatma hiçbir zaman yapılandırma dosyalarını değiştirmez. Eksik `OPENCODEX_API_AUTH_TOKEN`,
-`~/.opencodex/service-api-token` üzerinden doldurulur — Codex otomatik başlatma shim'inin yaptığı
-injection ile aynı.
+Başlatıcı proxy'yi başlatmayı dener ve özgün argümanları Codex'e aktarır; yapılandırmayı yeniden yazmaz. Yerel Codex ve yabancı ağ geçidi yolları proxy başlangıcını atlar. Bilinmeyen yol uyarıp başlangıcı dener; başarısızlık uyarır ve devam eder. Yardım, sürüm ve `login`, `doctor`, `help` gibi iç komutlar başlangıcı ve otomatik belirteç okumayı atlar.
 
-`--help`/`-h`, `--version`/`-V` ve Codex'in iç alt komutları (`login`, `doctor`, `help`, ...) proxy
-garantisini atlar ve ortamı değiştirmeden geçirir — shim'in argv dilbilgisiyle aynı.
+Eksik `OPENCODEX_API_AUTH_TOKEN`, yalnızca seçili provider'ın tüm taşıma yapılandırması bu kurulumun yapılandırılmış loopback dinleyicisi veya kayıtlı yerel istemci bağlantısı için yönetilen blokla eşleştiğinde bu kurulumun `service-api-token` dosyasından okunur. Adlar ve açıklamalar yetki vermez. Bilinmeyen veya uzak hedefler, varsayılan profile, proje yapılandırması, `OPENAI_BASE_URL` ve iletilen `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote` otomatik okumayı atlar. Kullanıcının dışa aktardığı kimlik bilgileri ve argümanlar korunur; belirteç dosyası geçersiz kılmaları ve yönetim belirteci çakışmaları reddedilir.
 
-Başlatmadan önce yönlendirme değerlendirilir. Yazılmış yönlendirme yoksa bilgilendirme yazılır ve
-`codex` garanti olmadan başlatılır; yabancı bir ağ geçidi (custom-local/custom-remote) uyarı yazar
-ve o yola dokunmadan geçer; doğrulanamayan yönlendirme uyarı yazar ama garanti yine de denenir.
-Deneme başarısız olursa stderr'e tek satır yazılır ve `codex` yine de başlatılır. `codex` otomatik
-başlatma shim'ine çözülürse, shim garantiyi tekrarlamasın diye arkasındaki Codex doğrudan başlatılır. Daha sonra düz `codex` başlatmak tam
-olarak eskisi gibi davranır.
+Kaynağı doğrulanmış shim arkasındaki Codex'i doğrudan çalıştırır. Diğer Windows CMD wrapper'ları, seçilen mutlak yol `OCX_SHIM_BYPASS=1` ile çalıştırılmadan önce güncel üretilen şablonla tamamen eşleşmelidir. Normal npm başlatıcıları desteklenir. Eski, okunamayan veya belirsiz yönetilen wrapper tanı mesajıyla reddedilir; `ocx codex-shim install` ile yenileyin veya yerel yürütülebilir dosyayı seçin. Bu başlatma shim'i onarmaz. İçerik denetimi Windows backing dosyasının kaynağını doğrulamaz ve eşzamanlı yol değişimini engellemez.
 
-Çalıştırılabilir dosya araması veya shim incelemesi başarısız olursa başlatıcı yine de `codex`'i `OCX_SHIM_BYPASS=1` ile çalıştırır; böylece shim proxy'yi yeniden başlatmaz ve hizmet belirtecini yüklemez.
-Hizmet belirteci yalnızca doğrulanmış yerel yönlendirmede eklenir; bilinmeyen yönlendirmede eklenmez. İstemciye aktarımda belirteç dosyasının ortam değişkeniyle değiştirilmesi yok sayılır ve yönetim kimlik bilgileri reddedilir. Başlatıcı yardımı için `ocx help codex`, Codex yardımı için `ocx codex --help` kullanın.
-`-c`/`--config` veya `-p`/`--profile` hedefi değiştirebildiğinden otomatik belirteç aktarımını da atlar. Kullanıcının dışa aktardığı kimlik bilgileri ve özgün argümanlar korunur.
+Başlatıcı yardımı: `ocx help codex`; Codex yardımı: `ocx codex --help`. Sonraki düz `codex` çalıştırmasının davranışı korunur.
 
 ### `ocx opencode [opencode argumanlari...]`
 
