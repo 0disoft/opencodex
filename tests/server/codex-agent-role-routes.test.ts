@@ -84,15 +84,81 @@ describe("/api/codex-agent-roles", () => {
     expect(readFileSync(join(homeA, "agents", "explorer.toml"), "utf8")).toBe(ROLE);
   });
 
-  test("returns whole batches, so a batch cut by the newest 50 is listed with every role it wrote", async () => {
+  function historyRow(batch: string, role: string, model = "m"): import("../../src/codex/role-model-history").RoleModelChange {
+    return { at: "2026-10-24T00:00:00.000Z", batch, role, before: { model: null, effort: null }, after: { model, effort: null } };
+  }
+
+  test("lists whole batches and never more than 50 rows, even when one batch id was reused past its cap", async () => {
     const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_LIMIT } = await import("../../src/codex/role-model-history");
     const dir = join(root, "history");
-    const write = (batch: string, role: string) => recordRoleModelChange("home", { at: "2026-10-24T00:00:00.000Z", batch, role, before: { model: null, effort: null }, after: { model: "m", effort: null } }, dir);
-    for (let index = 0; index < 3; index++) write("older", `older-${index}`);
-    for (let index = 0; index < ROLE_HISTORY_LIMIT + 1; index++) write("apply-all", `role-${index}`);
+    for (let index = 0; index < 30; index++) recordRoleModelChange("home", historyRow("a", `a-${index}`), dir);
+    for (let index = 0; index < 30; index++) recordRoleModelChange("home", historyRow("b", `b-${index}`), dir);
+    expect(listRoleModelChanges("home", ROLE_HISTORY_LIMIT, dir).map(change => change.batch)).toEqual(Array(30).fill("b"));
+    // A file written before the batch cap can hold one batch larger than the whole response.
+    for (let index = 0; index < 120; index++) recordRoleModelChange("home", historyRow("reused", `r-${index}`), dir);
     const history = listRoleModelChanges("home", ROLE_HISTORY_LIMIT, dir);
-    expect(history.filter(change => change.batch === "apply-all")).toHaveLength(ROLE_HISTORY_LIMIT + 1);
-    expect(history.some(change => change.batch === "older")).toBe(false);
+    expect(history.length).toBeLessThanOrEqual(ROLE_HISTORY_LIMIT);
+    expect(history.map(change => change.batch)).toEqual(Array(30).fill("b"));
+  });
+
+  test("a write into a batch that already holds 50 rows is refused before the role file changes", async () => {
+    const { recordRoleModelChange, ROLE_HISTORY_LIMIT } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "ocx", "integrations");
+    for (let index = 0; index < ROLE_HISTORY_LIMIT; index++) recordRoleModelChange(join(root, "codex"), historyRow("full", `role-${index}`), dir);
+    const refused = await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "xai/grok-4.5", batch: "full" }) });
+    expect(refused).toMatchObject({ status: 409, body: { code: "batch_full" } });
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toBe(ROLE);
+    expect((await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "xai/grok-4.5", batch: "next" }) })).status).toBe(200);
+  });
+
+  test("keeps the history file within its byte budget by dropping the oldest whole batches", async () => {
+    const { listRoleModelChanges, recordRoleModelChange, ROLE_HISTORY_MAX_BYTES } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "history");
+    const wide = "m".repeat(4000);
+    let batches = 0;
+    for (let written = 0; written < ROLE_HISTORY_MAX_BYTES * 3; written += 3 * wide.length, batches += 1) {
+      for (let role = 0; role < 3; role++) recordRoleModelChange("home", historyRow(`batch-${batches}`, `role-${role}`, wide), dir);
+    }
+    const path = join(dir, "codex-agent-roles.jsonl");
+    expect(fs.statSync(path).size).toBeLessThanOrEqual(ROLE_HISTORY_MAX_BYTES);
+    const rows = readFileSync(path, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as { batch: string });
+    const sizes = new Map<string, number>();
+    for (const row of rows) sizes.set(row.batch, (sizes.get(row.batch) ?? 0) + 1);
+    expect([...sizes.values()].every(size => size === 3)).toBe(true);
+    expect(rows.at(-1)!.batch).toBe(`batch-${batches - 1}`);
+    expect(sizes.has("batch-0")).toBe(false);
+    expect(listRoleModelChanges("home", 50, dir)[0]!.batch).toBe(`batch-${batches - 1}`);
+  });
+
+  test("reads only the tail of an oversized history file", async () => {
+    const { listRoleModelChanges, ROLE_HISTORY_MAX_BYTES } = await import("../../src/codex/role-model-history");
+    const dir = join(root, "history");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "codex-agent-roles.jsonl");
+    const line = (batch: string, role: string) => `${JSON.stringify({ ...historyRow(batch, role), codexHome: "home" })}\n`;
+    // An oversized file from before retention, or one a failed compaction left behind.
+    writeFileSync(path, line("ancient", "explorer").repeat(Math.ceil((ROLE_HISTORY_MAX_BYTES * 4) / line("ancient", "explorer").length)) + line("newest", "explorer"));
+    const nativeReadFile = fs.readFileSync;
+    const nativeRead = fs.readSync;
+    let wholeReads = 0;
+    let bytesRead = 0;
+    const readFile = spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, options?: unknown) => {
+      if (String(target) === path) wholeReads += 1;
+      return nativeReadFile(target, options as BufferEncoding);
+    }) as never);
+    const read = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+      const count = (nativeRead as (...rest: unknown[]) => number)(...args);
+      bytesRead += count;
+      return count;
+    }) as never);
+    try {
+      expect(listRoleModelChanges("home", 50, dir)[0]!.batch).toBe("newest");
+    } finally {
+      readFile.mockRestore();
+      read.mockRestore();
+    }
+    expect(wholeReads).toBe(0);
+    expect(bytesRead).toBeLessThanOrEqual(ROLE_HISTORY_MAX_BYTES + 1);
   });
 
   test("an unreadable history file leaves the role list and role saves working", async () => {

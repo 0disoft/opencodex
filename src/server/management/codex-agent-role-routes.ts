@@ -120,6 +120,19 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
   if (body.restores !== undefined && !history.isRoleHistoryBatch(body.restores)) {
     return jsonResponse({ error: "restores must be 1 to 64 letters, digits or dashes", code: "invalid_restores" }, 400, req, config);
   }
+  // A batch is capped at the listing size, so reusing one id cannot grow a batch the history could
+  // never list or restore whole. History is optional: a file that cannot be read does not block saves.
+  if (typeof body.batch === "string") {
+    let size = 0;
+    try {
+      size = history.roleHistoryBatchSize(codexHome, body.batch);
+    } catch (error) {
+      console.error(`[codex-agent-roles] could not read the change history: ${String(error)}`);
+    }
+    if (size >= history.ROLE_HISTORY_LIMIT) {
+      return jsonResponse({ error: `a batch holds at most ${history.ROLE_HISTORY_LIMIT} changes`, code: "batch_full" }, 409, req, config);
+    }
+  }
   let model: string | undefined;
   let effort: string | null | undefined;
   let toml: { status: "written" | "unchanged" };
