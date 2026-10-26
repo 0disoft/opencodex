@@ -171,6 +171,16 @@ restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglag
 
 ### `ocx codex [codex args...]`
 
+La clé est fournie uniquement si la configuration et ses espaces de noms sont protégés contre les modifications par d’autres principaux ; l’utilisateur courant et les autorités privilégiées du système sont de confiance. Les processus du même utilisateur sont de confiance : un acteur disposant de vos droits d’écriture peut déjà lire votre fichier de clé OpenCodex. Le remplacement de configuration par ce même utilisateur entre vérification et démarrage natif est hors de ce modèle de menace ; le lanceur ne fige pas la configuration lors du transfert.
+
+Sur une installation Windows normale, les droits ProgramData par défaut permettent à d’autres utilisateurs de créer des dossiers. Les identifiants automatiques sont donc retenus même si `ProgramData\OpenAI\Codex` est absent. Le contrôle reste fermé et affiche une ligne stderr précise avec la commande suivante. Un administrateur peut protéger les deux dossiers dédiés par ACL (écriture SYSTEM/Administrators, lecture/exécution Users). Vérifiez d’abord la politique existante, puis exécutez dans **Windows PowerShell 5.1 avec élévation** ; la commande remplace les ACL des dossiers existants et refuse les points de réanalyse :
+
+```powershell
+& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
+```
+
+Le lanceur n’exécute jamais cette commande et ne modifie pas les ACL. Réessayez `ocx codex` après préparation. Les fichiers de configuration système existants empêchent toujours l’injection automatique et nécessitent un examen distinct. Chaque autre refus produit une courte ligne stderr précise : arguments/environnement non audités, propriété ou inspection du dossier/configuration, couches/consommateurs/transport, identifiant de service indisponible ou collision avec un identifiant de gestion. Aucun contenu, chemin de fichier de clé ou valeur secrète n’est affiché ; les identifiants explicitement exportés sont conservés.
+
 Placez `--` avant une invite d’un seul mot pour éviter la sélection d’une sous-commande Codex inconnue.
 
 L’espace de configuration machine doit empêcher un autre utilisateur de créer les fichiers système absents. Un espace Windows ProgramData/OpenAI/Codex non protégé bloque l’injection sans créer de répertoire. macOS refuse les ACL étendues, même avec des bits de mode sûrs.

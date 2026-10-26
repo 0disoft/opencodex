@@ -1032,6 +1032,12 @@ its two modes:
   It never substitutes a Pool or provider credential for the assertion, and it never forwards or
   logs the assertion. Use `dual_header`, or turn the feature off, when Codex runs through opencodex.
 
+### Launch with `ocx codex`
+
+The key is supplied only when the configuration and its namespaces are protected from other principals; the current user and privileged OS authorities are trusted. Same-user processes are trusted: an actor with your write access can already read your OpenCodex key file. Same-user configuration replacement between verification and native startup is outside this threat model; the launcher does not freeze configuration at handoff.
+
+On Windows, default ProgramData creation rights withhold the key even when `ProgramData\OpenAI\Codex` is absent. An administrator must provision protected OpenAI and Codex namespaces. The launcher prints the specific reason and exact provisioning command on stderr, and never changes ACLs itself. See [launcher diagnostics and the elevated Windows PowerShell 5.1 command](/reference/cli/agents/#ocx-codex-codex-args). Other refusals also produce one short specific stderr line without key values, key-file contents or key-file paths; explicit credentials are preserved.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs

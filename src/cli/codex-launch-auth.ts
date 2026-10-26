@@ -9,6 +9,7 @@ import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../cod
 import { readClientConnectionState } from "../client/state";
 import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./codex-launch-policy";
 import { codexLaunchHomeIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
+import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
 /** Resolve once; the credential verifier and child must use this exact directory. */
 export function resolveCodexLaunchHome(env: Record<string, string | undefined>): string | null {
@@ -27,47 +28,49 @@ export function resolveCodexLaunchHome(env: Record<string, string | undefined>):
 }
 
 /** Config classification is a startup hint; credentials need an independently bound destination. */
-export function codexCredentialDestinationIsTrusted(home: string, systemNamespaceDirectory?: string): boolean {
+export function codexCredentialDestinationIsTrusted(home: string, systemNamespaceDirectory?: string, report?: CodexTokenRefusalReporter): boolean {
+  const refuse = (reason: CodexTokenRefusal): false => { report?.(reason); return false; };
   try {
-    if (!codexLaunchHomeIsOwned(home)) return false;
-    if (!codexLaunchSystemNamespaceIsSafe(systemNamespaceDirectory)) return false;
+    if (!codexLaunchHomeIsOwned(home)) return refuse("ownership");
+    if (!codexLaunchSystemNamespaceIsSafe(systemNamespaceDirectory, report)) return false;
     const additionalLayers = [join(home, "auth.json"), join(home, "managed_config.toml"), join(home, "requirements.toml")];
     if (process.platform !== "win32") additionalLayers.push("/etc/codex/config.toml", "/etc/codex/managed_config.toml", "/etc/codex/requirements.toml");
     for (const path of additionalLayers) {
-      try { lstatSync(path); return false; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+      try { lstatSync(path); return refuse("additionalLayer"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("layerInspection"); }
     }
     const diagnostics = readConfigDiagnostics();
-    if (diagnostics.error || diagnostics.source === "fallback") return false;
+    if (diagnostics.error || diagnostics.source === "fallback") return refuse("installationConfig");
     const cfg = diagnostics.config;
     let target = standaloneCodexRoutingTarget(cfg.port, cfg);
     if (cfg.runtimeRole === "client") {
       // Direct clients bind to persisted connection state; link clients use an authless relay.
       const connection = readClientConnectionState();
-      if (connection.kind !== "connected" || connection.value.transport === "link") return false;
+      if (connection.kind !== "connected" || connection.value.transport === "link") return refuse("connection");
       target = validateCodexRoutingTarget({ baseUrl: `${connection.value.serverUrl}/v1`, requiresAdmissionToken: true, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" });
     }
     const url = new URL(target.baseUrl);
-    if (!target.requiresAdmissionToken) return false;
-    if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) return false;
+    if (!target.requiresAdmissionToken) return refuse("admission");
+    if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) return refuse("loopback");
     const content = readBoundedCodexConfig(join(home, "config.toml"));
-    if (content === null) return false;
+    if (content === null) return refuse("configRead");
     const config = Bun.TOML.parse(content) as Record<string, unknown>;
-    if (codexHasOtherTokenConsumers(config) || !codexTokenConfigShapeIsSafe(config)) return false;
+    if (codexHasOtherTokenConsumers(config)) return refuse("consumers");
+    if (!codexTokenConfigShapeIsSafe(config)) return refuse("configShape");
     // This native feature resolves OS/PAC routes without honoring NO_PROXY.
     const features = config.features as Record<string, unknown> | undefined;
-    if (features?.respect_system_proxy !== undefined && features.respect_system_proxy !== false) return false;
+    if (features?.respect_system_proxy !== undefined && features.respect_system_proxy !== false) return refuse("systemProxy");
     // Codex layers project configs and profiles after the home. Without proving those layers,
     // conservatively leave authentication to the user's environment.
-    if (config.profile !== undefined || config.model_provider !== "opencodex") return false;
+    if (config.profile !== undefined || config.model_provider !== "opencodex") return refuse("provider");
     for (const key of ["openai_base_url", "experimental_realtime_ws_base_url"]) {
-      if (config[key] !== undefined && config[key] !== target.baseUrl) return false;
+      if (config[key] !== undefined && config[key] !== target.baseUrl) return refuse("rootUrl");
     }
     for (let directory = process.cwd(); ; directory = dirname(directory)) {
       const projectConfig = join(directory, ".codex", "config.toml");
       if (projectConfig !== join(home, "config.toml")) {
-        try { lstatSync(projectConfig); return false; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+        try { lstatSync(projectConfig); return refuse("project"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("layerInspection"); }
       }
       // A nested .git need not be Codex's root: custom project_root_markers can select
       // an outer workspace. Without proving that selection, inspect every ancestor.
@@ -78,9 +81,9 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
     const expected = (Bun.TOML.parse(buildProviderTableBlockForTarget(target, websocketsEnabled(cfg))) as { model_providers: { opencodex: Record<string, unknown> } }).model_providers.opencodex;
     // Display names are cosmetic; every transport and credential-bearing field must match
     // the block emitted by our writer for this installation/connection.
-    if (!provider || typeof provider.name !== "string") return false;
+    if (!provider || typeof provider.name !== "string") return refuse("providerTransport");
     const { name: _name, ...transport } = provider;
     const { name: _expectedName, ...expectedTransport } = expected;
-    return isDeepStrictEqual(transport, expectedTransport);
-  } catch { return false; }
+    return isDeepStrictEqual(transport, expectedTransport) || refuse("providerTransport");
+  } catch { return refuse("inspection"); }
 }

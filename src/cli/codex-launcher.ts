@@ -37,6 +37,7 @@ import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
+import { codexTokenWithheldDiagnostic, type CodexTokenRefusal, type CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -157,7 +158,7 @@ export type CodexLaunchEnvDeps = {
   args?: readonly string[];
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
-  credentialDestination?: (home: string) => boolean;
+  credentialDestination?: (home: string, report?: CodexTokenRefusalReporter) => boolean;
 };
 
 /** Read the client admission credential from this installation's service-token file. */
@@ -179,29 +180,36 @@ export function buildCodexLaunchEnv(
   const env = { ...base };
   if (deps.routingKind !== undefined && deps.routingKind !== "opencodex-local") return env;
   if (!env.OPENCODEX_API_AUTH_TOKEN?.trim()) {
-    const withhold = (): CodexLaunchEnv => {
-      console.error("OpenCodex: automatic service token withheld; Codex arguments, environment, config consumers or ownership could not be verified. Launching without a fresh token.");
+    const withhold = (reason: CodexTokenRefusal): CodexLaunchEnv => {
+      console.error(codexTokenWithheldDiagnostic(reason));
       return env;
     };
-    if (!codexTokenArgsAreSafe(deps.args ?? []) || !codexTokenEnvironmentIsSafe(env)) return withhold();
+    if (!codexTokenArgsAreSafe(deps.args ?? [])) return withhold("args");
+    if (!codexTokenEnvironmentIsSafe(env)) return withhold("environment");
     // NO_PROXY parsing and precedence vary across native HTTP/WebSocket transports.
     // Without proving bypass, preserve the user's transport but never load a secret.
     const home = resolveCodexLaunchHome(env);
-    if (!home || !(deps.credentialDestination ?? codexCredentialDestinationIsTrusted)(home)) return withhold();
+    if (!home) return withhold("home");
+    let refusal: CodexTokenRefusal = "destination";
+    const report: CodexTokenRefusalReporter = reason => { refusal = reason; };
+    const trusted = deps.credentialDestination
+      ? deps.credentialDestination(home, report)
+      : codexCredentialDestinationIsTrusted(home, undefined, report);
+    if (!trusted) return withhold(refusal);
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
-    if (token && !tokenCollidesWithAdmin(token, env)) {
-      // Reqwest's default transport can discover OS proxies even without proxy
-      // env. Bind both bypass spellings to the allowed loopback hosts, preserving
-      // existing entries and removing conflicting case aliases before handoff.
-      const bypass = ["127.0.0.1", "::1"];
-      for (const key of Object.keys(env)) if (/^no_proxy$/i.test(key)) {
-        if (env[key]) bypass.push(env[key]!);
-        delete env[key];
-      }
-      env.NO_PROXY = env.no_proxy = bypass.join(",");
-      env.CODEX_HOME = home;
-      env.OPENCODEX_API_AUTH_TOKEN = token;
+    if (!token) return withhold("credential");
+    if (tokenCollidesWithAdmin(token, env)) return withhold("collision");
+    // Reqwest's default transport can discover OS proxies even without proxy
+    // env. Bind both bypass spellings to the allowed loopback hosts, preserving
+    // existing entries and removing conflicting case aliases before handoff.
+    const bypass = ["127.0.0.1", "::1"];
+    for (const key of Object.keys(env)) if (/^no_proxy$/i.test(key)) {
+      if (env[key]) bypass.push(env[key]!);
+      delete env[key];
     }
+    env.NO_PROXY = env.no_proxy = bypass.join(",");
+    env.CODEX_HOME = home;
+    env.OPENCODEX_API_AUTH_TOKEN = token;
   }
   return env;
 }

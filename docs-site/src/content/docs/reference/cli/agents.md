@@ -965,6 +965,16 @@ before choosing it. Rendered models are not proof of native application.
 
 ### `ocx codex [codex args...]`
 
+The key is supplied only when the configuration and its namespaces are protected from other principals; the current user and privileged OS authorities are trusted. Same-user processes are trusted: an actor with your write access can already read your OpenCodex key file. Same-user configuration replacement between verification and native startup is outside this threat model; the launcher does not freeze configuration at handoff.
+
+On a normal Windows installation, default ProgramData permissions allow other users to create directories. Automatic credentials are therefore withheld even when `ProgramData\OpenAI\Codex` is absent. The launcher keeps this check closed and prints one specific stderr diagnostic, including the command below. An administrator can provision both dedicated directories with protected ACLs (SYSTEM/Administrators write, Users read/execute). Review existing directory policy first, then run this in **elevated Windows PowerShell 5.1**; it replaces the ACL on existing directories and refuses reparse points:
+
+```powershell
+& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
+```
+
+The launcher never runs this command or changes ACLs itself. Retry `ocx codex` after provisioning. Existing system configuration files still withhold automatic credentials and require separate review. Every other withholding reason has one short specific stderr line, including unaudited arguments/environment, home/config ownership or inspection, configuration layers/consumers/transport, an unavailable service credential, and a management-credential collision. Diagnostics include no key values, key-file contents or key-file paths. Explicit user credentials remain unchanged.
+
 Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
 
 The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS refuses extended filesystem ACLs even with safe mode bits.

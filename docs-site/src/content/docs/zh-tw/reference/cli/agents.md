@@ -133,6 +133,16 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 
 ### `ocx codex [codex args...]`
 
+只有設定及其命名空間受到保護、其他主體無法修改時才提供金鑰；目前使用者和特權 OS 主體受到信任。同一使用者的程序受到信任：具有該使用者寫入權限的主體已能讀取該使用者的 OpenCodex 金鑰檔案。驗證與原生啟動之間由同一使用者替換設定不在此威脅模型內，啟動器不會在交接時凍結設定。
+
+一般 Windows 安裝的預設 ProgramData 權限允許其他使用者建立目錄。因此即使 `ProgramData\OpenAI\Codex` 不存在，也會暫緩自動認證資料。檢查維持拒絕，並向 stderr 輸出一行包含以下命令的具體診斷。管理員可為兩個專用目錄配置受保護 ACL（SYSTEM/Administrators 可寫入，Users 僅讀取/執行）。先審查現有目錄原則，再於 **提升權限的 Windows PowerShell 5.1** 執行；命令會取代現有目錄 ACL，並拒絕 reparse point：
+
+```powershell
+& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
+```
+
+啟動器不會自行執行命令或變更 ACL。完成後重試 `ocx codex`。既有系統設定檔仍會阻止自動注入，須另行審查。其他暫緩原因也各有一行簡短明確的 stderr 訊息，區分未審核的引數/環境、主目錄/設定擁有權或檢查、設定層/消費者/傳輸、服務認證資料缺失及管理認證資料衝突。不會列印金鑰值、金鑰檔案內容或路徑；明確匯出的使用者認證資料維持不變。
+
 單字提示前請加 `--`，以免選取未知的 Codex 子命令。
 
 即使系統設定檔不存在，也必須阻止其他使用者建立這些檔案。無法驗證 Windows ProgramData/OpenAI/Codex 路徑保護時不自動注入權杖，也不建立目錄。macOS 即使 mode 位元安全，也會拒絕擴充 ACL。

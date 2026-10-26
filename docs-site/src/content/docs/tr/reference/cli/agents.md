@@ -189,6 +189,16 @@ eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın
 
 ### `ocx codex [codex args...]`
 
+Anahtar yalnızca yapılandırma ve ad alanları diğer güvenlik sorumlularının değişikliklerine karşı korunduğunda sağlanır; geçerli kullanıcı ve ayrıcalıklı işletim sistemi yetkilileri güvenilirdir. Aynı kullanıcının süreçlerine güvenilir: yazma yetkinize sahip bir aktör OpenCodex anahtar dosyanızı zaten okuyabilir. Doğrulama ile yerel başlatma arasında aynı kullanıcının yapılandırmayı değiştirmesi bu tehdit modelinin kapsamı dışındadır; başlatıcı aktarım sırasında yapılandırmayı dondurmaz.
+
+Normal Windows kurulumunda varsayılan ProgramData izinleri diğer kullanıcıların dizin oluşturmasına izin verir. Bu nedenle `ProgramData\OpenAI\Codex` yokken bile otomatik kimlik bilgileri verilmez. Denetim kapalı kalır ve aşağıdaki komutu içeren tek, belirli bir stderr tanısı gösterilir. Yönetici iki özel dizini korumalı ACL ile hazırlayabilir (SYSTEM/Administrators yazma, Users okuma/çalıştırma). Önce mevcut dizin politikasını inceleyin, sonra **yükseltilmiş Windows PowerShell 5.1** içinde çalıştırın; komut mevcut dizinlerin ACL’lerini değiştirir ve reparse point öğelerini reddeder:
+
+```powershell
+& { $ErrorActionPreference='Stop'; foreach ($rel in @('OpenAI','OpenAI\Codex')) { $p=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $rel; $acl=[System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;BU)'); if ([System.IO.Directory]::Exists($p)) { if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Refusing a reparse point' }; [System.IO.Directory]::SetAccessControl($p,$acl) } else { [System.IO.Directory]::CreateDirectory($p,$acl) | Out-Null } } }
+```
+
+Başlatıcı bu komutu kendisi çalıştırmaz ve ACL değiştirmez. Hazırlıktan sonra `ocx codex` komutunu yeniden deneyin. Mevcut sistem yapılandırma dosyaları otomatik aktarımı hâlâ engeller ve ayrıca incelenmelidir. Diğer her engelleme nedeni de kısa ve belirli tek stderr satırı üretir: denetlenmemiş argüman/ortam, ana dizin/yapılandırma sahipliği veya incelemesi, katmanlar/tüketiciler/taşıma, kullanılamayan hizmet kimlik bilgisi veya yönetim kimlik bilgisi çakışması. Anahtar değerleri, anahtar dosyası içeriği ve yolları yazdırılmaz; açıkça dışa aktarılan kimlik bilgileri korunur.
+
 Bilinmeyen bir Codex alt komutu seçilmesini önlemek için tek sözcüklü istemden önce `--` kullanın.
 
 Makine yapılandırma alanı, diğer kullanıcıların eksik sistem dosyalarını oluşturmasını da engellemelidir. Korunmayan Windows ProgramData/OpenAI/Codex alanı otomatik belirteci engeller; dizin oluşturulmaz. macOS güvenli mod bitlerinde bile genişletilmiş ACL’leri reddeder.

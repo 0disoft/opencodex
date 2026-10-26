@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
+import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
 // Paths are environment data, never interpolated PowerShell source. The token is
 // not read until this read-only subprocess and the config checks have succeeded.
@@ -21,7 +22,7 @@ try {
       $systemDir=[System.IO.Path]::Combine($programData,'OpenAI','Codex')
     }
     foreach ($file in @('config.toml','requirements.toml','managed_config.toml')) {
-      try { $null=[System.IO.File]::GetAttributes([System.IO.Path]::Combine($systemDir,$file)); exit 1 }
+      try { $null=[System.IO.File]::GetAttributes([System.IO.Path]::Combine($systemDir,$file)); exit 3 }
       catch [System.IO.FileNotFoundException] { }
       catch [System.IO.DirectoryNotFoundException] { }
     }
@@ -61,7 +62,10 @@ try {
       $mask=[int64]$ace.AccessMask -band 4294967295
       $mutation=1343029590
       if ($i -ge 2 -or ($exactOwners -eq 0 -and $i -ge 1)) { $mutation=1343029312 }
-      if (($mask -band $mutation) -ne 0) { exit 1 }
+      if (($mask -band $mutation) -ne 0) {
+        if ($exactOwners -eq 0) { exit 2 }
+        exit 1
+      }
     }
   }
   exit 0
@@ -69,7 +73,7 @@ try {
 `;
 const ENCODED_SCRIPT = Buffer.from(SCRIPT, "utf16le").toString("base64");
 
-function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirectory?: string): boolean {
+function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirectory?: string, report?: CodexTokenRefusalReporter): boolean {
   // Remove case aliases before constructing a Windows environment block. These
   // private protocol inputs must come from this call, never the caller's shell.
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -78,7 +82,9 @@ function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirector
     resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_SCRIPT,
   ], { env: { ...inherited, OCX_CODEX_OWNED_HOME: home, OCX_CODEX_NAMESPACE_CHECK: namespace ? "1" : "0",
     OCX_CODEX_NAMESPACE_FIXTURE: fixtureDirectory }, stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 5_000, windowsHide: true });
-  return result.success && !result.exitedDueToTimeout;
+  const safe = result.success && !result.exitedDueToTimeout;
+  if (!safe && namespace) report?.(result.exitCode === 2 ? "systemNamespaceWritable" : result.exitCode === 3 ? "systemConfig" : "systemNamespace");
+  return safe;
 }
 
 /** A missing system layer is safe only if another user cannot create it later. */
@@ -87,31 +93,32 @@ export function codexPosixSystemNamespace(platform: NodeJS.Platform = process.pl
   return platform === "darwin" ? "/private/etc/codex" : "/etc/codex";
 }
 
-export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string): boolean {
+export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string, report?: CodexTokenRefusalReporter): boolean {
+  const refuse = (reason: CodexTokenRefusal): false => { report?.(reason); return false; };
   try {
-    if (process.platform === "win32") return windowsOwnershipCheck("", true, fixtureDirectory);
+    if (process.platform === "win32") return windowsOwnershipCheck("", true, fixtureDirectory, report);
     let path = fixtureDirectory ?? codexPosixSystemNamespace();
     for (const file of ["config.toml", "requirements.toml", "managed_config.toml"]) {
-      try { lstatSync(join(path, file)); return false; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+      try { lstatSync(join(path, file)); return refuse("systemConfig"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("systemNamespace"); }
     }
     for (;;) {
       try { lstatSync(path); break; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
-      if (dirname(path) === path) return false;
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("systemNamespace"); }
+      if (dirname(path) === path) return refuse("systemNamespace");
       path = dirname(path);
     }
     const paths: string[] = [];
     for (;;) {
       const stat = lstatSync(path);
       if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== process.getuid?.() && stat.uid !== 0)
-        || ((stat.mode & 0o022) !== 0 && (paths.length === 0 || (stat.mode & 0o1000) === 0))) return false;
+        || ((stat.mode & 0o022) !== 0 && (paths.length === 0 || (stat.mode & 0o1000) === 0))) return refuse("systemNamespace");
       paths.push(path);
       if (dirname(path) === path) break;
       path = dirname(path);
     }
-    return process.platform !== "darwin" || macHasNoManagedCodexPreferences(paths);
-  } catch { return false; }
+    return process.platform !== "darwin" || macHasNoManagedCodexPreferences(paths) || refuse("systemNamespace");
+  } catch { return refuse("systemNamespace"); }
 }
 
 /** Match Codex's CFPreferencesAppValueIsForced test without reading preference contents. */
