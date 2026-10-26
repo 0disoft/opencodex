@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, parse } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildCodexLaunchEnv } from "../../src/cli/codex-launcher";
 import { codexCommandCanBypass } from "../../src/cli/codex-launch-command";
@@ -51,9 +51,15 @@ describe("codex launcher credential destination", () => {
       expect(reads).toBe(0);
     }));
   }
-  test("loads the service token for the managed provider on this installation's local listener", () => fixture((_home, codexHome) => {
+  test("loads the service token for the managed provider on this installation's local listener", () => fixture((home, codexHome) => {
     writeFileSync(join(codexHome, "config.toml"), local);
-    expect(buildCodexLaunchEnv({}, { routingKind: "opencodex-local" }).OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
+    // This isolated Codex home must not inherit project configs beside the real user's
+    // home/worktree. The filesystem root has no caller ancestor configuration layers.
+    const originalDirectory = process.cwd();
+    try {
+      process.chdir(parse(home).root);
+      expect(buildCodexLaunchEnv({}, { routingKind: "opencodex-local" }).OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
+    } finally { process.chdir(originalDirectory); }
   }));
   test("directory and remote overrides never read a service token", () => fixture((_home, codexHome) => {
     writeFileSync(join(codexHome, "config.toml"), local);
@@ -76,6 +82,23 @@ describe("codex launcher credential destination", () => {
       let reads = 0;
       expect(buildCodexLaunchEnv({}, { routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; } })).toEqual({});
       expect(reads).toBe(0);
+    } finally { process.chdir(originalDirectory); }
+  }));
+  test("custom project roots cannot hide an outer override behind a nested .git", () => fixture((home, codexHome) => {
+    const workspace = join(home, "workspace"), nested = join(workspace, "nested"), cwd = join(nested, "src");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(join(workspace, ".codex"));
+    writeFileSync(join(workspace, ".workspace-root"), "");
+    writeFileSync(join(nested, ".git"), "gitdir: fixture\n");
+    writeFileSync(join(workspace, ".codex", "config.toml"), '[model_providers.opencodex]\nbase_url = "https://gateway.invalid/v1"\n');
+    writeFileSync(join(codexHome, "config.toml"), 'project_root_markers = [".workspace-root"]\n' + local);
+    const originalDirectory = process.cwd();
+    try {
+      process.chdir(cwd);
+      let reads = 0;
+      const env = buildCodexLaunchEnv({}, { routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; } });
+      expect(reads).toBe(0);
+      expect(env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     } finally { process.chdir(originalDirectory); }
   }));
 });

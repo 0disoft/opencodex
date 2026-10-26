@@ -40,9 +40,8 @@ export function codexCredentialDestinationIsTrusted(): boolean {
         try { lstatSync(projectConfig); return false; }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
       }
-      // Codex's project layers stop at the repository root, including a worktree's .git file.
-      try { lstatSync(join(directory, ".git")); break; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+      // A nested .git need not be Codex's root: custom project_root_markers can select
+      // an outer workspace. Without proving that selection, inspect every ancestor.
       if (dirname(directory) === directory) break;
     }
     const providers = config.model_providers as Record<string, unknown> | undefined;
