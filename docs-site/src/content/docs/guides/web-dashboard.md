@@ -41,6 +41,8 @@ The private dashboard-sessions.json stores hashes of the cookie, proof, admin cr
 
 Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
 
+An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
+
 ### Finding the admin token
 
 You only need this on a non-loopback bind. A local dashboard never asks, and if a local one

@@ -191,7 +191,7 @@ The server issues a local in-memory session for five minutes or a remote session
 with 128 live sessions maximum. Stored-key reads require a current pairing or trusted Tailscale-identity session, not automatic loopback issuance or admin tokens. `POST /api/keys/reveal` uses `createManagementSessionControl().canRevealDataKeys` before and after body reception; absent controls deny. Every session is bound to the exact server and browser origins;
 state-changing requests additionally require the session CSRF token. A raw admin token remains
 ordinary management authority only and cannot satisfy consent routes. The dashboard never attaches
-its management session to `/v1/*` requests, and pages containing a session bootstrap are served with
+its management session to `/v1/*` requests. Only `POST /api/session/logout` tolerates remembered-device User-Agent drift after session-token, Origin, CSRF, cookie, server-origin and current admin-credential checks; ordinary access, currentness and resumption retain the User-Agent binding (`tests/server/persistent-dashboard-admission.test.ts`). Pages containing a session bootstrap are served with
 `Cache-Control: no-store`.
 
 Proxy admission credentials must never reach an upstream provider. The forwarding guard rejects the

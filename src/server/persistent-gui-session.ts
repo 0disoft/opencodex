@@ -84,9 +84,9 @@ function readRecords(): DeviceRecord[] {
   } finally { closeSync(fd); }
 }
 
-function matches(row: DeviceRecord, req: Request, origin: string, state: State, now: number): boolean {
+function matches(row: DeviceRecord, req: Request, origin: string, state: State, now: number, ignoreUserAgent = false): boolean {
   return row.serverOrigin === origin && row.credential === hash(state.token)
-    && row.userAgent === hash(req.headers.get("User-Agent") ?? "") && row.expiresAt > now;
+    && (ignoreUserAgent || row.userAgent === hash(req.headers.get("User-Agent") ?? "")) && row.expiresAt > now;
 }
 
 function mintDeviceSession(row: DeviceRecord, state: State, now: number) {
@@ -128,11 +128,13 @@ export function resumeGuiDevice(req: Request, config: OcxConfig, state: State, n
   } catch { return null; }
 }
 
-export function rememberedGuiSessionIsCurrent(req: Request, config: OcxConfig, state: State, session: GuiSessionRecord): boolean {
+export function rememberedGuiSessionIsCurrent(req: Request, config: OcxConfig, state: State, session: GuiSessionRecord, purpose: "access" | "logout" = "access"): boolean {
   if (!session.persistentDigest) return true;
   const origin = directOrigin(req, config);
   if (!origin || deviceDigest(req, origin) !== session.persistentDigest) return false;
-  try { return readRecords().some(row => row.digest === session.persistentDigest && matches(row, req, origin, state, Date.now())); }
+  // Admission alone may tolerate browser updates for revocation; currentness and resume stay bound.
+  const revoking = purpose === "logout" && req.method === "POST" && new URL(req.url).pathname === "/api/session/logout";
+  try { return readRecords().some(row => row.digest === session.persistentDigest && matches(row, req, origin, state, Date.now(), revoking)); }
   catch { return false; }
 }
 

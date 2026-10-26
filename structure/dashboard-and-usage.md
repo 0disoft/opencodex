@@ -1,7 +1,7 @@
 # Dashboard Surfaces And Usage
 
 Dashboard page contracts, usage accounting and request metrics, and the management settings that
-back individual dashboard surfaces. Serving, authentication boundaries, and `/api/*` ownership are
+back individual dashboard surfaces. An already-issued, otherwise valid remembered session can Forget after a User-Agent change; access and resumption still require the original browser binding. Serving, authentication boundaries, and `/api/*` ownership are
 in [GUI and management API](gui-and-management-api.md). Model-price editing and estimate selection follow [pricing](pricing.md).
 
 ## UX boundary

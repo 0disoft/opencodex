@@ -589,7 +589,7 @@ function resolveManagementAdmission(
     }
     else if (config) {
       const admission = authorizeGuiSessionRequest(req, config, state);
-      if (admission.ok && rememberedGuiSessionIsCurrent(req, config, state, admission.session)) principal = "gui-session";
+      if (admission.ok && rememberedGuiSessionIsCurrent(req, config, state, admission.session, "logout")) principal = "gui-session";
     }
   }
   if (principal) admittedManagementRequests.set(req, principal);

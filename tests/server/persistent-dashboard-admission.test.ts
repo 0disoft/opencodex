@@ -213,6 +213,51 @@ test("logout needs CSRF; successful forget survives a new auth state reading dis
   state = initializeManagementAuthState(config); expect(resume(device)).toBeNull();
 });
 
+test.each(["enrolled", "resumed"])("UA-drifted %s session admits only authenticated durable logout", async source => {
+  const device = await remember();
+  const sibling = resume(device)!;
+  if (source === "resumed") device.body.session = resume(device)!;
+  const drifted = (path = "/api/session/logout", method = "POST") => {
+    const req = deviceRequest(device, path, { method });
+    req.headers.set("User-Agent", "dashboard-admission-upgraded");
+    return req;
+  };
+  const stored = readFileSync(home.path("dashboard-sessions.json"), "utf8");
+  expect(resume(device, device.body.device.proof, "/", { "User-Agent": "dashboard-admission-upgraded" })).toBeNull();
+  for (const [path, method] of [["/api/config", "GET"], ["/api/session/logout", "GET"],
+    ["/api/session/remember", "POST"], ["/api/session/logout/extra", "POST"]]) {
+    expect((await dispatch(drifted(path, method))).status).toBe(401);
+  }
+  for (const header of ["Origin", "X-OpenCodex-CSRF-Token", "Cookie", "X-OpenCodex-API-Key", "X-OpenCodex-GUI-Origin"]) {
+    for (const value of [null, "invalid"]) {
+      const req = drifted();
+      if (value === null) req.headers.delete(header); else req.headers.set(header, value);
+      expect((await dispatch(req)).status).toBe(401);
+      expect(readFileSync(home.path("dashboard-sessions.json"), "utf8")).toBe(stored);
+    }
+  }
+  const wrongServer = drifted(); wrongServer.headers.set("Host", "other.example.test");
+  expect((await dispatch(wrongServer)).status).toBe(401);
+  // Credential binding is checked on disk even while the derived session remains in memory.
+  const rows = JSON.parse(stored);
+  writeFileSync(home.path("dashboard-sessions.json"), JSON.stringify([{ ...rows[0], credential: "0".repeat(64) }]));
+  expect((await dispatch(drifted())).status).toBe(401);
+  writeFileSync(home.path("dashboard-sessions.json"), stored);
+  expect((await dispatch(deviceRequest(device, "/api/config", { method: "GET" }))).status).toBe(200);
+  const response = await dispatch(drifted());
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+  expect(JSON.parse(readFileSync(home.path("dashboard-sessions.json"), "utf8"))).toEqual([]);
+  for (const session of [device.body.session, sibling]) {
+    const replay = deviceRequest({ ...device, body: { ...device.body, session } }, "/api/config", { method: "GET" });
+    expect((await dispatch(replay)).status).toBe(401);
+  }
+  expect(resume(device)).toBeNull();
+  state = initializeManagementAuthState(config);
+  expect(JSON.parse(readFileSync(home.path("dashboard-sessions.json"), "utf8"))).toEqual([]);
+  expect(resume(device)).toBeNull();
+});
+
 test("failed durable forget keeps disk records and all derived sessions for retry", async () => {
   const device = await remember(); const recovered = resume(device)!;
   const before = readFileSync(home.path("dashboard-sessions.json"), "utf8");
