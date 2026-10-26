@@ -33,6 +33,8 @@ import type { OcxProviderConfig } from "../../src/types";
 import type { OcxConfig } from "../../src/types";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, shouldUseCodexWsUpstream, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { installCompactionRoutingAclFixture as installRoutingAclFixture } from "../helpers/compaction-routing-fixtures";
+installRoutingAclFixture();
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
 
