@@ -14,7 +14,7 @@ import { acquireDesktopRestartLock, releaseDesktopRestartLock } from "../../src/
 import {
   codexCliUpdateSelectionGate,
   beginCodexCliSelectionParentWrite,
-  createWorkerCommitWindow,
+  createWorkerCommitWindow, createCodexCliUpdateFence,
 } from "../../src/codex/cli-update-selection-gate";
 
 /**
@@ -148,7 +148,7 @@ describe("starting a handoff", () => {
     };
     const window = createWorkerCommitWindow({
       gate: codexCliUpdateSelectionGate(),
-      fence: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+      fence: createCodexCliUpdateFence(),
     });
     let held = false;
     try {

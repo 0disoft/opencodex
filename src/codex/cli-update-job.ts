@@ -3,6 +3,7 @@ import { chmodSync, closeSync, constants, fsyncSync, fstatSync, lstatSync, mkdir
   readFileSync, readSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
+import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
 import type { CodexCliApplyResult } from "./cli-update-apply";
 import { CODEX_CLI_JOB_REASONS as SAFE_REASONS, CODEX_CLI_JOB_CLEANUP_ERRORS,
   CodexCliJobStoreBusyError, normalizeCodexCliJobResult, runCodexCliUpdateJobWork } from "./cli-update-job-execution";
@@ -42,20 +43,8 @@ function paths(configDir = getConfigDir()) {
   return { config, dir, file: join(dir, FILE), lock: join(dir, LOCK) };
 }
 function assertTrustedConfigAncestry(parent: string) {
-  const euid = process.geteuid?.();
-  if (euid === undefined) throw new Error("unsupported_store");
-  let current = resolve(parent);
-  for (;;) {
-    const stat = lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== euid && stat.uid !== 0)
-      || realpathSync.native(current) !== current) throw new Error("unsafe_store");
-    const sharedWritable = (stat.mode & 0o022) !== 0;
-    const stickyRootDirectory = (stat.mode & 0o1000) !== 0 && stat.uid === 0;
-    if (sharedWritable && !stickyRootDirectory) throw new Error("unsafe_store");
-    const ancestor = dirname(current);
-    if (ancestor === current) return;
-    current = ancestor;
-  }
+  try { assertTrustedCodexCliAncestry(parent); }
+  catch { throw new Error("unsafe_store"); }
 }
 function prepare(configDir?: string, create = false, createConfigRoot = false) {
   const p = paths(configDir);

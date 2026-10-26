@@ -251,7 +251,7 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   // and kills it. Own-pid reentrancy means the wp5 helper runs this same step and
   // finds the lock its caller made out to it.
   // A cli-update worker holds this gate from its final process scan through
-  // its installer spawn, so no new shell may appear inside that window. The
+  // installer termination and readback, so no new shell may appear inside. The
   // admission check runs BEFORE the restart lock and every mutation this
   // function performs: a busy refusal must leave the app, the lock and any
   // handoff all untouched. Held through relaunch or a failed attempt's

@@ -1212,6 +1212,23 @@ Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macO
 approved plan under an installation lease, verifies the exact main/platform archives, installs them
 offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
 Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
+Installation directories and staging require trusted POSIX ownership and permissions throughout their
+ancestry. Unsafe installation paths report `installation_prefix_unsupported` or
+`installation_paths_untrusted`; unsafe temporary roots report `staging_path_untrusted`. Use a private
+temporary directory below trusted ancestors (root-owned sticky temporary roots are supported).
+Owned session starts, desktop restarts and runtime/shim selection changes report busy while installation
+and readback run. An unconfirmed installer or verification child keeps admission closed. Admission
+recovers when the owned process group is proven gone, including a verification child that closes after
+its reap deadline. Worker loss before commit also restores admission; worker close after commit alone
+does not. Durable recovery records preserve this exclusion across proxy restarts. Missing child identity,
+partial records or inaccessible liveness evidence require inspection. A complete terminal write left
+before its publication rename can restore admission after restart when its exact owner and current
+parent/group absence are verified; incomplete or armed pending writes still require inspection.
+Recovery does not change an
+ambiguous job result, retry installation or reclaim an abandoned installation lease.
+Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary
+operations. With history, admission reads the protected canonical home target; unsafe recovery
+paths still report busy. This does not relax the updater's installation or config-path eligibility.
 Windows apply, shim repair, native apps and other installation managers remain unsupported.
 
 Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
