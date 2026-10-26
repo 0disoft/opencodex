@@ -136,6 +136,21 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx codex [codex args...]`
 
+单词提示前请加 `--`，以免选择未知的 Codex 子命令。
+
+即使系统配置文件不存在，也必须阻止其他用户创建这些文件。无法验证 Windows ProgramData/OpenAI/Codex 路径保护时不自动注入令牌，也不创建目录。macOS 即使 mode 位安全，也会拒绝扩展 ACL。
+
+新服务令牌默认不注入。必须确认使用准确的托管 loopback provider、仅含已审核键的配置，以及交互启动或 `exec`。未知标志或配置键、`--oss`、`--local-provider`、任何 `-c`/`--config` 或 profile 覆盖、恢复会话（`resume`/`fork`）、额外 provider、MCP 服务器、hook、通知命令、项目配置，以及额外 system/managed/requirements/认证配置层都会阻止注入。非空 `CODEX_*`（规范 `CODEX_HOME` 除外）、`OPENAI_*`、`AZURE_OPENAI_*` 环境变量也会阻止注入。原始参数和用户明确导出的凭据保持不变，stderr 会说明原因。
+
+规范主目录和 `config.toml` 必须属于当前用户。POSIX 拒绝 group/other 写权限；Windows 验证所有者 SID，并拒绝当前用户、SYSTEM、Administrators 之外的 DACL 写入授权。还会检查祖先路径替换权限。macOS 还要求不存在强制 Codex 配置 preference。这些检查不能隔离同一用户或管理员运行的恶意进程。
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 自动凭证读取会将 `CODEX_HOME` 中的 `~` 与空白视为字面路径，验证后将同一个规范绝对路径传给子进程。无法读取主目录时不读取令牌。只要存在非空的 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`（不区分大小写），就会跳过自动读取，不受 `NO_PROXY` 影响；拒绝的启动和用户导出的凭证保持不变。传递新令牌时，子进程的 `NO_PROXY` 与 `no_proxy` 会保留已有排除项并加入 `127.0.0.1` 和 `::1`。启用 `features.respect_system_proxy` 或传入 `--enable`/`--disable` 会跳过自动读取。
 
 使用原始参数启动 Codex 前尝试启动代理。路由仍归 Codex 配置所有，启动器不会改写。本机原生及其他网关路由跳过代理启动；未知路由会警告并尝试启动，失败后仍警告并继续。帮助、版本及 `login`、`doctor`、`help` 等内部命令跳过代理启动和自动令牌读取。

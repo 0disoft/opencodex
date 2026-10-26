@@ -189,6 +189,21 @@ eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın
 
 ### `ocx codex [codex args...]`
 
+Bilinmeyen bir Codex alt komutu seçilmesini önlemek için tek sözcüklü istemden önce `--` kullanın.
+
+Makine yapılandırma alanı, diğer kullanıcıların eksik sistem dosyalarını oluşturmasını da engellemelidir. Korunmayan Windows ProgramData/OpenAI/Codex alanı otomatik belirteci engeller; dizin oluşturulmaz. macOS güvenli mod bitlerinde bile genişletilmiş ACL’leri reddeder.
+
+Yeni hizmet belirteci varsayılan olarak eklenmez. Tam doğrulanmış yönetilen loopback sağlayıcısı, yalnızca denetlenmiş yapılandırma anahtarları ve etkileşimli başlatma veya `exec` gerekir. Bilinmeyen bayraklar ve anahtarlar, `--oss`, `--local-provider`, tüm `-c`/`--config` ve profil geçersiz kılmaları, geri yüklenen oturumlar (`resume`/`fork`), ek sağlayıcılar, MCP sunucuları, hook ve bildirim komutları, proje yapılandırması ve ek system/managed/requirements/kimlik doğrulama katmanları belirteci engeller. Boş olmayan `CODEX_*` (kanonik `CODEX_HOME` hariç), `OPENAI_*` ve `AZURE_OPENAI_*` da engeller. Özgün argümanlar ve kullanıcının açıkça dışa aktardığı kimlik bilgileri korunur; stderr açıklama verir.
+
+Kanonik dizin ve `config.toml` geçerli kullanıcıya ait olmalıdır. POSIX group/other yazmasını reddeder; Windows sahip SID’sini doğrular ve geçerli kullanıcı, SYSTEM ve Administrators dışındaki DACL yazma izinlerini reddeder. Üst yol değiştirme izinleri de denetlenir. macOS ayrıca zorunlu Codex tercihlerinin bulunmamasını gerektirir. Bu kontroller aynı kullanıcı veya yönetici olarak çalışan kötü amaçlı işlemleri yalıtmaz.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 Otomatik kimlik bilgisi yükleme, `CODEX_HOME` içindeki `~` ve boşlukları değişmez yol olarak yorumlar, doğrular ve aynı kurallı mutlak yolu alt sürece aktarır. Okunamayan dizinde yükleme atlanır. Büyük/küçük harfe bakılmaksızın boş olmayan `HTTP_PROXY`, `HTTPS_PROXY` veya `ALL_PROXY` değeri varsa `NO_PROXY` ne olursa olsun yükleme atlanır; reddedilen başlatmalar ve kullanıcının dışa aktardığı kimlik bilgileri değiştirilmez. Yeni token aktarılırken alt sürecin `NO_PROXY` ve `no_proxy` değerlerine mevcut istisnalar korunarak `127.0.0.1` ve `::1` eklenir. `features.respect_system_proxy` etkinleştirilirse veya `--enable`/`--disable` aktarılırsa otomatik yükleme atlanır.
 
 Başlatıcı proxy'yi başlatmayı dener ve özgün argümanları Codex'e aktarır; yapılandırmayı yeniden yazmaz. Yerel Codex ve yabancı ağ geçidi yolları proxy başlangıcını atlar. Bilinmeyen yol uyarıp başlangıcı dener; başarısızlık uyarır ve devam eder. Yardım, sürüm ve `login`, `doctor`, `help` gibi iç komutlar başlangıcı ve otomatik belirteç okumayı atlar.

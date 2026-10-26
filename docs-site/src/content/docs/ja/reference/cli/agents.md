@@ -132,6 +132,21 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx codex [codex args...]`
 
+単語一つのプロンプトの前に `--` を置き、未知の Codex サブコマンド選択を防いでください。
+
+設定ファイルがなくても、machine 設定パスに他の利用者が作成できない必要があります。Windows ProgramData/OpenAI/Codex の保護を確認できなければ注入を保留し、ディレクトリを作成しません。macOS は mode が安全でも拡張 ACL があれば拒否します。
+
+新しいサービストークンは既定で注入しません。検証済みの管理 loopback provider、監査済みキーのみの設定、対話実行または `exec` が必要です。未知のフラグ・設定キー、`--oss`、`--local-provider`、すべての `-c`/`--config` と profile 上書き、復元セッション（`resume`/`fork`）、追加 provider、MCP サーバー、hook、通知コマンド、プロジェクト設定、追加の system/managed/requirements/認証設定層があると注入を保留します。空でない `CODEX_*`（正規の `CODEX_HOME` を除く）、`OPENAI_*`、`AZURE_OPENAI_*` も同様です。元の引数と利用者が明示した資格情報は維持し、stderr で通知します。
+
+正規ホームと `config.toml` は現在の利用者所有である必要があります。POSIX は group/other の書き込みを、Windows は現在の利用者・SYSTEM・Administrators 以外への DACL 書き込み許可を拒否し、所有者 SID を確認します。祖先パスの置換権限も確認し、macOS は強制 Codex 設定 preference がないことも要求します。同じ利用者や管理者の悪意あるプロセスを隔離するものではありません。
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 自動認証情報の読み込みでは `CODEX_HOME` の `~` と空白をリテラルなパスとして解釈して検証し、同じ正規絶対パスを子プロセスに渡します。ホームを読めない場合は読み込みません。大文字小文字を問わず、空でない `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` があれば `NO_PROXY` に関係なく自動読み込みを省略します。拒否した起動とユーザーがエクスポートした認証情報は変更しません。新しいトークンを渡す場合、既存の除外項目を保持し、子の `NO_PROXY` と `no_proxy` に `127.0.0.1` と `::1` を追加します。`features.respect_system_proxy` の有効化や `--enable`/`--disable` の転送では自動読み込みを省略します。
 
 元の引数で Codex を起動する前にプロキシの起動を試みます。ルーティングは Codex 設定が所有し、ランチャーは書き換えません。ネイティブと外部ゲートウェイでは起動を省略します。不明なルートでは警告して起動を試み、失敗しても警告後に続行します。ヘルプ、バージョン、`login`、`doctor`、`help` などの内部コマンドは起動と自動トークン読み込みを省略します。

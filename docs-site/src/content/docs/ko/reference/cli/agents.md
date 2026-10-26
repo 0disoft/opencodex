@@ -164,6 +164,21 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 ### `ocx codex [codex args...]`
 
+한 단어 프롬프트 앞에는 `--`를 넣어 알 수 없는 Codex 하위 명령 선택을 막으세요.
+
+설정 파일이 없어도 machine 설정 경로에 다른 사용자가 파일을 만들 수 없어야 합니다. Windows ProgramData/OpenAI/Codex 경로의 보호를 증명할 수 없으면 자동 토큰을 보류하며 디렉터리를 만들지 않습니다. macOS에서는 mode 비트가 안전해도 확장 ACL이 있으면 거부합니다.
+
+새 서비스 토큰은 기본적으로 주입하지 않습니다. 정확한 관리 loopback provider, 검증된 키만 포함하는 설정, 대화형 실행 또는 `exec`가 모두 확인되어야 합니다. 알 수 없는 플래그·설정 키, `--oss`, `--local-provider`, 모든 `-c`/`--config` 및 profile 재정의, 세션 복원(`resume`/`fork`), 추가 provider, MCP 서버, hook, 알림 명령, 프로젝트 설정, 추가 system/managed/requirements/인증 설정층이 있으면 토큰을 보류합니다. 비어 있지 않은 `CODEX_*`(정규 `CODEX_HOME` 제외), `OPENAI_*`, `AZURE_OPENAI_*` 환경 변수도 주입을 막습니다. 원래 인자와 명시적으로 내보낸 사용자 토큰은 유지하며 stderr에 이유를 안내합니다.
+
+정규 홈 디렉터리와 `config.toml`은 현재 사용자 소유여야 합니다. POSIX에서는 group/other 쓰기를, Windows에서는 현재 사용자·SYSTEM·Administrators 이외의 DACL 쓰기 권한을 거부하고 소유자 SID를 확인합니다. 상위 경로 교체 권한도 확인합니다. macOS에서는 강제 Codex 설정 preference가 없어야 합니다. 같은 사용자나 관리자의 악성 프로세스로부터 격리하는 기능은 아닙니다.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 자동 자격 증명 전달은 `CODEX_HOME`의 `~`와 공백을 리터럴 경로로 해석하고 검증한 뒤, 동일한 정규 절대 경로를 자식에게 전달합니다. 홈을 읽을 수 없으면 토큰을 읽지 않습니다. 대소문자와 관계없이 `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` 중 비어 있지 않은 값이 있으면 `NO_PROXY`와 무관하게 자동 로딩을 건너뜁니다. 거부된 실행과 사용자가 내보낸 자격 증명은 변경하지 않습니다. 새 토큰을 전달할 때 자식의 `NO_PROXY`와 `no_proxy`에 기존 우회 항목을 보존하면서 `127.0.0.1`과 `::1`을 추가합니다. `features.respect_system_proxy`를 켜거나 `--enable`/`--disable`을 전달하면 자동 로딩을 건너뜁니다.
 
 원래 인자로 Codex를 실행하기 전에 프록시 시작을 시도합니다. 라우팅은 Codex 설정이 소유하며 런처가 재작성하지 않습니다. 네이티브 및 다른 게이트웨이 경로에서는 시작을 생략합니다. 알 수 없는 라우팅은 경고 후 시작을 시도하며, 시작 실패 시에도 경고 후 실행합니다. 도움말·버전 및 `login`, `doctor`, `help` 같은 내부 명령은 시작과 자동 토큰 읽기를 생략합니다.

@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, parse } from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildCodexLaunchEnv } from "../../src/cli/codex-launcher";
 import { codexCommandCanBypass } from "../../src/cli/codex-launch-command";
 import { classifyCodexRouting } from "../../src/codex/inject/routing-classify";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
@@ -12,6 +11,7 @@ import { buildWindowsCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/c
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { makeCodexLaunchFixturePrivate, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
 
 const fixtureToken = "ocx_fixture_launcher_security";
 const installation = { port: 12199, hostname: "0.0.0.0" };
@@ -20,6 +20,7 @@ const local = 'model_provider = "opencodex"\n' + buildProviderTableBlockForTarge
 function fixture(run: (home: string, codexHome: string, ocxHome: string) => void): void {
   const temp = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir();
   const home = mkdtempSync(join(temp, "ocx-launch-security-"));
+  makeCodexLaunchFixturePrivate(home);
   const cwd = process.cwd();
   const saved = { CODEX_HOME: process.env.CODEX_HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME };
   const codexHome = join(home, "codex-home"), ocxHome = join(home, "ocx-home");

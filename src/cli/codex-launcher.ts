@@ -36,6 +36,7 @@ import { findExecutableOnPath } from "../remote-control/workspace-executable";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { codexCredentialDestinationIsTrusted, resolveCodexLaunchHome } from "./codex-launch-auth";
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
+import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -167,8 +168,9 @@ const defaultServiceToken = (base: CodexLaunchEnv): string | null =>
  * Launch env for a routed exec. The one injection is the shim's own: a missing
  * OPENCODEX_API_AUTH_TOKEN is re-exported from the hardened service token file, so
  * `ocx codex` from a shell without the system-env snapshot authenticates to the
- * loopback proxy like a shimmed launch does. Fresh credentials require a bound home
- * and no inherited transport proxy. User exports always win.
+ * loopback proxy like a shimmed launch does. Fresh credentials require explicit
+ * argv/env/config allowlists, an exclusive managed provider and protected home/system
+ * configuration namespaces. User exports always win.
  */
 export function buildCodexLaunchEnv(
   base: CodexLaunchEnv = process.env,
@@ -176,14 +178,16 @@ export function buildCodexLaunchEnv(
 ): CodexLaunchEnv {
   const env = { ...base };
   if (deps.routingKind !== undefined && deps.routingKind !== "opencodex-local") return env;
-  // Config/profile overrides can replace the destination after the home was classified.
-  if (deps.args?.some(arg => /^(?:-c|-p|-C|--config(?:=|$)|--profile(?:=|$)|--cd(?:=|$)|--remote(?:[=-]|$)|--(?:enable|disable)(?:=|$))/.test(arg))) return env;
   if (!env.OPENCODEX_API_AUTH_TOKEN?.trim()) {
+    const withhold = (): CodexLaunchEnv => {
+      console.error("OpenCodex: automatic service token withheld; Codex arguments, environment, config consumers or ownership could not be verified. Launching without a fresh token.");
+      return env;
+    };
+    if (!codexTokenArgsAreSafe(deps.args ?? []) || !codexTokenEnvironmentIsSafe(env)) return withhold();
     // NO_PROXY parsing and precedence vary across native HTTP/WebSocket transports.
     // Without proving bypass, preserve the user's transport but never load a secret.
-    if (Object.entries(env).some(([key, value]) => /^(?:https?|all)_proxy$/i.test(key) && value)) return env;
     const home = resolveCodexLaunchHome(env);
-    if (!home || env.OPENAI_BASE_URL || !(deps.credentialDestination ?? codexCredentialDestinationIsTrusted)(home)) return env;
+    if (!home || !(deps.credentialDestination ?? codexCredentialDestinationIsTrusted)(home)) return withhold();
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
     if (token && !tokenCollidesWithAdmin(token, env)) {
       // Reqwest's default transport can discover OS proxies even without proxy

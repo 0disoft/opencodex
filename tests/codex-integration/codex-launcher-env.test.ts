@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildCodexLaunchEnv } from "../../src/cli/codex-launcher";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { makeCodexLaunchFixturePrivate, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
 
 const token = "ocx_fixture_launch_env";
 const installation = { port: 12199, hostname: "0.0.0.0" };
@@ -20,13 +20,15 @@ async function fixture(run: (root: string, home: string) => void | Promise<void>
   // Avoid the real user's ancestor .codex layer, which deliberately denies injection.
   const temp = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir();
   const root = mkdtempSync(join(temp, "ocx-launch-env-"));
+  makeCodexLaunchFixturePrivate(root);
   const saved = { ...process.env }, cwd = process.cwd();
   const user = join(root, "user"), home = join(root, "codex-home"), ocx = join(root, "ocx");
   for (const path of [user, home, ocx]) mkdirSync(path);
   process.env.HOME = user; process.env.USERPROFILE = user;
   process.env.CODEX_HOME = home; process.env.OPENCODEX_HOME = ocx;
   for (const key of Object.keys(process.env)) {
-    if (/^(?:(?:https?|all|no)_proxy|OPENCODEX_API_AUTH_TOKEN|OPENCODEX_ADMIN_AUTH_TOKEN|OPENAI_BASE_URL|OCX_API_TOKEN_FILE)$/i.test(key)) delete process.env[key];
+    if ((key !== "CODEX_HOME" && /^(?:CODEX_|OPENAI_|AZURE_OPENAI_)/i.test(key))
+      || /^(?:(?:https?|all|no)_proxy|OPENCODEX_API_AUTH_TOKEN|OPENCODEX_ADMIN_AUTH_TOKEN|OCX_API_TOKEN_FILE)$/i.test(key)) delete process.env[key];
   }
   writeFileSync(join(ocx, "config.json"), JSON.stringify(installation));
   writeFileSync(join(home, "config.toml"), local);

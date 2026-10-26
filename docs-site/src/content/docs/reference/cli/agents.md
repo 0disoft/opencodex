@@ -965,6 +965,21 @@ before choosing it. Rendered models are not proof of native application.
 
 ### `ocx codex [codex args...]`
 
+Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
+
+The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS refuses extended filesystem ACLs even with safe mode bits.
+
+Fresh service-token injection is denied by default. It requires the exact managed loopback provider, a configuration containing only the audited keys, and a launch restricted to interactive mode or `exec`. Unknown flags and configuration keys, `--oss`, `--local-provider`, every `-c`/`--config` or profile override, restored sessions (`resume`/`fork`), additional providers, MCP servers, hooks, notification commands, project configuration, and additional system/managed/requirements/authentication layers withhold the token. Nonempty `CODEX_*` (except canonical `CODEX_HOME`), `OPENAI_*`, and `AZURE_OPENAI_*` environment controls also withhold it. Codex still receives the original arguments and a clear stderr note; explicit user credentials are preserved.
+
+The canonical home directory and `config.toml` must belong to the current user. POSIX denies group/other writes; Windows checks owner SID and rejects DACL write grants outside the current user, SYSTEM and Administrators. Ancestor replacement permissions are checked too. macOS additionally requires no forced Codex configuration preferences. These checks exclude other-user writers; they do not isolate a malicious process running as the same user or an administrator.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 Automatic credential delivery resolves `CODEX_HOME` as a literal path (including `~` and whitespace), verifies that home, and passes its canonical absolute path to the child. An unreadable home skips loading. Any nonempty `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` variable, in any letter case, also skips loading regardless of `NO_PROXY`; denied launches and user-exported credentials remain unchanged. With a newly loaded token, both child `NO_PROXY` and `no_proxy` include `127.0.0.1` and `::1`, preserving existing bypass entries. Enabling `features.respect_system_proxy` or forwarding `--enable`/`--disable` skips automatic loading.
 
 Ensure the proxy is running, then launch Codex with the original arguments. Routing remains in Codex configuration; the launcher never rewrites it. Native and foreign routes skip startup. Unknown routing warns and attempts startup; a failed startup warns and continues. Help/version and internal commands such as `login`, `doctor`, and `help` skip startup and automatic token loading.

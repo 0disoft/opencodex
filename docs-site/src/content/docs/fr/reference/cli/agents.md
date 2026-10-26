@@ -171,6 +171,21 @@ restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglag
 
 ### `ocx codex [codex args...]`
 
+Placez `--` avant une invite d’un seul mot pour éviter la sélection d’une sous-commande Codex inconnue.
+
+L’espace de configuration machine doit empêcher un autre utilisateur de créer les fichiers système absents. Un espace Windows ProgramData/OpenAI/Codex non protégé bloque l’injection sans créer de répertoire. macOS refuse les ACL étendues, même avec des bits de mode sûrs.
+
+L’injection d’un nouveau jeton de service est refusée par défaut. Elle exige le fournisseur loopback géré exact, uniquement les clés de configuration auditées et un lancement interactif ou `exec`. Les options ou clés inconnues, `--oss`, `--local-provider`, toute surcharge `-c`/`--config` ou de profil, les sessions restaurées (`resume`/`fork`), les fournisseurs supplémentaires, serveurs MCP, hooks, commandes de notification, configurations de projet et couches supplémentaires system/managed/requirements/authentification empêchent l’injection. Les variables non vides `CODEX_*` (sauf `CODEX_HOME` canonique), `OPENAI_*` et `AZURE_OPENAI_*` l’empêchent aussi. Les arguments et identifiants explicitement exportés sont conservés ; stderr explique le refus.
+
+Le répertoire canonique et `config.toml` doivent appartenir à l’utilisateur courant. POSIX refuse les écritures group/other ; Windows vérifie le SID propriétaire et refuse les droits d’écriture DACL hors utilisateur courant, SYSTEM et Administrators. Les droits de remplacement des ancêtres sont vérifiés. macOS exige aussi l’absence de préférences Codex forcées. Ces contrôles n’isolent pas un processus malveillant du même utilisateur ou d’un administrateur.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 Le chargement automatique interprète `CODEX_HOME` comme un chemin littéral, y compris `~` et les espaces, le vérifie et transmet le même chemin absolu canonique au processus enfant. Un répertoire illisible empêche le chargement. Toute valeur non vide de `HTTP_PROXY`, `HTTPS_PROXY` ou `ALL_PROXY`, quelle que soit la casse, empêche aussi le chargement indépendamment de `NO_PROXY` ; les lancements refusés et les identifiants exportés par l’utilisateur restent inchangés. Avec un nouveau jeton, `NO_PROXY` et `no_proxy` du processus enfant incluent `127.0.0.1` et `::1` en conservant les exclusions existantes. Activer `features.respect_system_proxy` ou transmettre `--enable`/`--disable` empêche le chargement automatique.
 
 Le lanceur tente de démarrer le proxy puis transmet les arguments d’origine à Codex, sans réécrire sa configuration. Les routes natives et les passerelles tierces sautent le démarrage. Une route inconnue avertit puis tente le démarrage ; un échec avertit et continue. L’aide, la version et les commandes internes comme `login`, `doctor` et `help` sautent le démarrage et la lecture automatique du jeton.

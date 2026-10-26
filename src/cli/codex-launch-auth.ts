@@ -7,6 +7,8 @@ import { readBoundedCodexConfig } from "../codex/inject/bounded-config-reader";
 import { buildProviderTableBlockForTarget } from "../codex/inject/config-toml";
 import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../codex/inject/routing-target";
 import { readClientConnectionState } from "../client/state";
+import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./codex-launch-policy";
+import { codexLaunchHomeIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
 
 /** Resolve once; the credential verifier and child must use this exact directory. */
 export function resolveCodexLaunchHome(env: Record<string, string | undefined>): string | null {
@@ -25,8 +27,16 @@ export function resolveCodexLaunchHome(env: Record<string, string | undefined>):
 }
 
 /** Config classification is a startup hint; credentials need an independently bound destination. */
-export function codexCredentialDestinationIsTrusted(home: string): boolean {
+export function codexCredentialDestinationIsTrusted(home: string, systemNamespaceDirectory?: string): boolean {
   try {
+    if (!codexLaunchHomeIsOwned(home)) return false;
+    if (!codexLaunchSystemNamespaceIsSafe(systemNamespaceDirectory)) return false;
+    const additionalLayers = [join(home, "auth.json"), join(home, "managed_config.toml"), join(home, "requirements.toml")];
+    if (process.platform !== "win32") additionalLayers.push("/etc/codex/config.toml", "/etc/codex/managed_config.toml", "/etc/codex/requirements.toml");
+    for (const path of additionalLayers) {
+      try { lstatSync(path); return false; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+    }
     const diagnostics = readConfigDiagnostics();
     if (diagnostics.error || diagnostics.source === "fallback") return false;
     const cfg = diagnostics.config;
@@ -43,6 +53,7 @@ export function codexCredentialDestinationIsTrusted(home: string): boolean {
     const content = readBoundedCodexConfig(join(home, "config.toml"));
     if (content === null) return false;
     const config = Bun.TOML.parse(content) as Record<string, unknown>;
+    if (codexHasOtherTokenConsumers(config) || !codexTokenConfigShapeIsSafe(config)) return false;
     // This native feature resolves OS/PAC routes without honoring NO_PROXY.
     const features = config.features as Record<string, unknown> | undefined;
     if (features?.respect_system_proxy !== undefined && features.respect_system_proxy !== false) return false;

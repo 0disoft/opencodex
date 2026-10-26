@@ -133,6 +133,21 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 
 ### `ocx codex [codex args...]`
 
+單字提示前請加 `--`，以免選取未知的 Codex 子命令。
+
+即使系統設定檔不存在，也必須阻止其他使用者建立這些檔案。無法驗證 Windows ProgramData/OpenAI/Codex 路徑保護時不自動注入權杖，也不建立目錄。macOS 即使 mode 位元安全，也會拒絕擴充 ACL。
+
+新服務權杖預設不注入。必須確認使用準確的受管 loopback provider、僅含已稽核鍵的設定，以及互動啟動或 `exec`。未知旗標或設定鍵、`--oss`、`--local-provider`、任何 `-c`/`--config` 或 profile 覆寫、還原工作階段（`resume`/`fork`）、額外 provider、MCP 伺服器、hook、通知命令、專案設定，以及額外 system/managed/requirements/驗證設定層都會阻止注入。非空 `CODEX_*`（標準 `CODEX_HOME` 除外）、`OPENAI_*`、`AZURE_OPENAI_*` 環境變數也會阻止注入。原始引數與使用者明確匯出的憑證維持不變，stderr 會說明原因。
+
+標準主目錄與 `config.toml` 必須屬於目前使用者。POSIX 拒絕 group/other 寫入權限；Windows 驗證擁有者 SID，並拒絕目前使用者、SYSTEM、Administrators 以外的 DACL 寫入授權。也會檢查祖先路徑替換權限。macOS 還要求不存在強制 Codex 設定 preference。這些檢查無法隔離相同使用者或管理員執行的惡意程序。
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
 自動憑證讀取會將 `CODEX_HOME` 中的 `~` 與空白視為字面路徑，驗證後將同一個正規絕對路徑傳給子程序。無法讀取主目錄時不讀取權杖。只要存在非空的 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY`（不分大小寫），就會略過自動讀取，不受 `NO_PROXY` 影響；拒絕的啟動和使用者匯出的憑證保持不變。傳遞新權杖時，子程序的 `NO_PROXY` 與 `no_proxy` 會保留既有排除項目並加入 `127.0.0.1` 和 `::1`。啟用 `features.respect_system_proxy` 或傳入 `--enable`/`--disable` 會略過自動讀取。
 
 使用原始引數啟動 Codex 前嘗試啟動代理。路由仍由 Codex 設定擁有，啟動器不會改寫。原生及其他閘道路由略過代理啟動；未知路由會警告並嘗試啟動，失敗後仍警告並繼續。說明、版本及 `login`、`doctor`、`help` 等內部命令略過代理啟動和自動權杖讀取。
