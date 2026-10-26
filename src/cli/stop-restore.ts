@@ -121,6 +121,15 @@ export function connectedClientStopSkipLine(state: ClientConnectionState): strin
 }
 
 /**
+ * Transport for the authenticated `POST /api/stop`. Restoration ownership and transport are
+ * separate decisions: a Link Child restores on stop, but like every connected client it still
+ * sends the admin token over direct loopback HTTP so an environment proxy never receives it.
+ */
+export function stopRequestFetch(state: ClientConnectionState, stoppingSibling: boolean): typeof fetch | undefined {
+  return !stoppingSibling && state.kind === "connected" ? directLocalHttpFetch as typeof fetch : undefined;
+}
+
+/**
  * Restore shared client state after a stop.
  *
  * Returns the two failure kinds separately. `historyOnly` means teardown succeeded and

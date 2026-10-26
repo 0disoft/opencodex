@@ -156,7 +156,8 @@ describe("parent CLI shared teardown completion", () => {
       expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false });
     });
   }
-  test("preservation probes bypass environment proxies without exposing the admin token", async () => {
+  for (const transport of ["hub", "link"] as const) test(`${transport} stop probes and POST bypass environment proxies without exposing the admin token`, async () => {
+    connectClient(transport);
     const targetPaths: string[] = [];
     const proxyPaths: string[] = [];
     const proxyTokens: string[] = [];

@@ -34,10 +34,12 @@ if (options.proxyProbePort) {
   const { assertConnectedClientStopSupported } = await import("../../src/cli/stop-restore");
   await assertConnectedClientStopSupported({ pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1" });
   const { stopProxyGracefully } = await import("../../src/lib/process-control");
-  const { directLocalHttpFetch } = await import("../../src/server/direct-local-http");
+  // The CLI's own selector, not a hand-picked transport: a Link Child must stay direct too.
+  const { stopRequestFetch } = await import("../../src/cli/stop-restore");
+  const { readClientConnectionState } = await import("../../src/client/state");
   const result = await stopProxyGracefully(process.pid, {
     runtimeEndpoint: { port: options.proxyProbePort, hostname: "127.0.0.1" },
-    fetchFn: directLocalHttpFetch, waitExit: () => true,
+    fetchFn: stopRequestFetch(readClientConnectionState(), false), waitExit: () => true,
   });
   if (result !== true) throw new Error("direct stop request failed");
   console.log(JSON.stringify({ ok: true, control: control.via }));
