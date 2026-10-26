@@ -28,8 +28,8 @@
  */
 import { writeFileSync } from "node:fs";
 import { loadConfig } from "../config";
+import { ClientPathError } from "../clients/client-path";
 import {
-  ClientPathError,
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
   buildClientConfigText,

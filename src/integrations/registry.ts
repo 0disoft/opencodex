@@ -16,8 +16,8 @@ import { readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
 import type { IntegrationIO } from "./config-io";
 import { dirname, join } from "node:path";
+import { ClientPathError } from "../clients/client-path";
 import {
-  ClientPathError,
   buildDroidContribution,
   qoderConfigPath,
   qoderHomeDir,

@@ -16,7 +16,8 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { canonicalContribution, fingerprint, type OwnershipRecord } from "./ownership";
-import { ClientPathError, EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import { ClientPathError } from "../clients/client-path";
+import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
 import {
   ZCODE_STORE_MODEL_RULES_PATH,
