@@ -967,7 +967,7 @@ before choosing it. Rendered models are not proof of native application.
 
 Ensure the proxy is running, then launch `codex` unchanged. Codex routing stays config-owned —
 the injected `openai_base_url` in `~/.codex/config.toml` — so a launch never rewrites a config
-file. A missing `OPENCODEX_API_AUTH_TOKEN` is filled from `~/.opencodex/service-api-token`,
+file. For verified local routing, a missing `OPENCODEX_API_AUTH_TOKEN` is filled from `~/.opencodex/service-api-token`,
 the same injection the Codex autostart shim performs.
 
 `--help`/`-h`, `--version`/`-V`, and Codex-internal subcommands (`login`, `doctor`, `exec`, ...)
@@ -980,6 +980,9 @@ through without touching that route; unverifiable routing prints a warning and s
 line is printed and `codex` launches anyway. When `codex` resolves to the autostart shim, the
 launcher runs the backing Codex directly so the shim does not repeat the ensure. Launching plain
 `codex` later behaves exactly as before.
+
+If executable lookup or shim inspection fails, the launcher still runs `codex` with `OCX_SHIM_BYPASS=1`, preventing the shim from repeating proxy startup or loading a service token.
+Unknown routing never adds a service token. The token-file environment override is ignored for client injection, and management credentials are rejected. Use `ocx help codex` for launcher help; `ocx codex --help` reaches Codex itself.
 
 ### `ocx opencode [opencode args...]`
 

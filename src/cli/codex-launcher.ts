@@ -28,6 +28,7 @@ import { inspectCodexShimBackingForCommand } from "../codex/shim";
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS, CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC } from "../codex/shim-templates";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { commandInvocation } from "../lib/win-exec";
@@ -149,12 +150,14 @@ export async function ensureProxyForCodex(deps: CodexProxyEnsureDeps = {}): Prom
 }
 
 export type CodexLaunchEnvDeps = {
+  routingKind?: CodexRoutingKind;
   /** Test seam; production reads the hardened service token file. */
   serviceToken?: (base: CodexLaunchEnv) => string | null;
 };
 
+/** Read the client admission credential from this installation's service-token file. */
 const defaultServiceToken = (base: CodexLaunchEnv): string | null =>
-  loadServiceTokenFromFile({ OCX_API_TOKEN_FILE: serviceApiTokenFilePath(), ...base });
+  loadServiceTokenFromFile({ ...base, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() });
 
 /**
  * Launch env for a routed exec. The one injection is the shim's own: a missing
@@ -168,9 +171,10 @@ export function buildCodexLaunchEnv(
   deps: CodexLaunchEnvDeps = {},
 ): CodexLaunchEnv {
   const env = { ...base };
+  if (deps.routingKind !== undefined && deps.routingKind !== "opencodex-local") return env;
   if (!env.OPENCODEX_API_AUTH_TOKEN?.trim()) {
     const token = (deps.serviceToken ?? defaultServiceToken)(env);
-    if (token) env.OPENCODEX_API_AUTH_TOKEN = token;
+    if (token && !tokenCollidesWithAdmin(token, env)) env.OPENCODEX_API_AUTH_TOKEN = token;
   }
   return env;
 }
@@ -209,14 +213,18 @@ export function resolveCodexLaunchCommand(
   env: CodexLaunchEnv,
   deps: CodexLaunchCommandDeps = {},
 ): CodexLaunchCommand {
-  const selected = (deps.findOnPath ?? findExecutableOnPath)("codex");
-  if (!selected) return { command: "codex", env };
-  const shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected);
-  if (shim.status === "matched" && shim.selectedRole === "wrapper") return { command: shim.backingPath, env };
-  if (shim.status === "unknown") return { command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } };
-  return { command: "codex", env };
+  try {
+    const selected = (deps.findOnPath ?? findExecutableOnPath)("codex");
+    if (!selected) return { command: "codex", env };
+    const shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected);
+    if (shim.status === "matched" && shim.selectedRole === "wrapper") return { command: shim.backingPath, env };
+    if (shim.status !== "unknown") return { command: "codex", env };
+  } catch { // Inspection is optional; retain the same bypass as an unknown state.
+  }
+  return { command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } };
 }
 
+/** Launch the selected Codex command with inherited IO and preserve its exit status. */
 function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<number> {
   return new Promise<number>(resolve => {
     const launch = resolveCodexLaunchCommand(env);
@@ -238,9 +246,11 @@ function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<numbe
   });
 }
 
+/** Apply the argument/routing plan, then hand the original arguments to Codex. */
 export async function cmdCodex(args: string[]): Promise<number> {
   if (codexFastPathReason(args) !== null) return spawnCodex(args, { ...process.env });
-  const plan = codexLaunchPlan(getCodexRoutingKind());
+  const routingKind = getCodexRoutingKind();
+  const plan = codexLaunchPlan(routingKind);
   const notice = plan.kind === "passthrough" ? plan.notice : undefined;
   if (notice) console.error(notice);
   const needsProxy = plan.kind === "routed"
@@ -253,5 +263,5 @@ export async function cmdCodex(args: string[]): Promise<number> {
     // what the session does next; `ocx doctor` names the autostart failure.
     console.error(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC);
   }
-  return spawnCodex(args, buildCodexLaunchEnv(process.env));
+  return spawnCodex(args, buildCodexLaunchEnv(process.env, { routingKind }));
 }

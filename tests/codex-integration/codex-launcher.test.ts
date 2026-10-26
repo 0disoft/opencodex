@@ -29,6 +29,36 @@ import {
 import { CODEX_GLOBAL_OPTIONS_WITH_VALUE, CODEX_INTERNAL_COMMANDS } from "../../src/codex/shim-templates";
 import { SIBLING_HANDOFF_NONCE_ENV, SIBLING_OF_PORT_ENV } from "../../src/codex/sibling-start";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
+import { maybeAutoRestoreCodexShim } from "../../src/cli/codex-shim-autorestore";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+function withTokenFiles(run: (home: string) => void): void {
+  const home = mkdtempSync(join(tmpdir(), "ocx-codex-launch-token-"));
+  const prior = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = home;
+  try { run(home); }
+  finally {
+    if (prior === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = prior;
+    removeTreeWithRetry(home);
+  }
+}
+
+test("codex launch defers shim handling to its routing plan without root repair", () => {
+  for (const args of [["codex", "--version"], ["codex", "login"], ["codex", "resume"]]) {
+    let restored = false;
+    maybeAutoRestoreCodexShim("codex", args, {
+      env: {},
+      warn: () => {},
+      readConfig: () => { throw new Error("launcher preflight must not read config"); },
+      restore: () => { restored = true; return { status: "disabled" }; },
+    });
+    expect(restored).toBe(false);
+  }
+});
 
 describe("codex launcher fast path", () => {
   test("help/version and internal subcommands skip the proxy ensure", () => {
@@ -106,6 +136,39 @@ describe("codex launcher plan", () => {
 });
 
 describe("codex launch env assembly", () => {
+  test("an inherited token-file override cannot select the admin credential", () => {
+    withTokenFiles(home => {
+      const admin = `ocx_admin_${"a".repeat(43)}`;
+      writeFileSync(join(home, "admin-api-token"), admin);
+      writeFileSync(join(home, "service-api-token"), "ocx_fixture_service_token");
+      const env = buildCodexLaunchEnv({ OCX_API_TOKEN_FILE: join(home, "admin-api-token") });
+      expect(env.OPENCODEX_API_AUTH_TOKEN).toBe("ocx_fixture_service_token");
+    });
+  });
+
+  test("a service file containing a management credential is never injected", () => {
+    withTokenFiles(home => {
+      for (const admin of [`ocx_admin_${"a".repeat(43)}`, "ocx_fixture_custom_admin"]) {
+        writeFileSync(join(home, "service-api-token"), admin);
+        const env = buildCodexLaunchEnv({ OPENCODEX_ADMIN_AUTH_TOKEN: admin });
+        expect(env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+      }
+    });
+  });
+
+  test("unknown and foreign routing never read or inject the service token", () => {
+    for (const routingKind of ["unknown", "custom-local", "custom-remote", "native"] as const) {
+      let consulted = false;
+      const base = { PATH: "/usr/bin" };
+      const env = buildCodexLaunchEnv(base, {
+        routingKind,
+        serviceToken: () => { consulted = true; return "ocx_fixture_service_token"; },
+      });
+      expect(env).toEqual(base);
+      expect(consulted).toBe(false);
+    }
+  });
+
   test("a missing admission token comes from the service token ladder", () => {
     const env = buildCodexLaunchEnv({ PATH: "/usr/bin" }, { serviceToken: () => "tok-from-file" });
     expect(env.OPENCODEX_API_AUTH_TOKEN).toBe("tok-from-file");
@@ -207,6 +270,27 @@ describe("codex launcher shim handoff", () => {
     expect(launch.command).toBe("codex");
     expect(launch.env.OCX_SHIM_BYPASS).toBe("1");
     expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
+  });
+
+  test("a PATH lookup error falls back to the unknown-state bypass", () => {
+    let inspected = false;
+    const launch = resolveCodexLaunchCommand(env, {
+      findOnPath: () => { throw new Error("PATH lookup unavailable"); },
+      inspectShim: () => { inspected = true; return { status: "not-tracked" }; },
+    });
+    expect(launch).toEqual({ command: "codex", env: { ...env, OCX_SHIM_BYPASS: "1" } });
+    expect(inspected).toBe(false);
+    expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
+  });
+
+  test("a shim filesystem error falls back without changing the input environment", () => {
+    const base = { ...env, OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_inherited_token", OCX_SHIM_BYPASS: "" };
+    const launch = resolveCodexLaunchCommand(base, {
+      findOnPath: onPath,
+      inspectShim: () => { throw Object.assign(new Error("shim state read failed"), { code: "EIO" }); },
+    });
+    expect(launch).toEqual({ command: "codex", env: { ...base, OCX_SHIM_BYPASS: "1" } });
+    expect(base.OCX_SHIM_BYPASS).toBe("");
   });
 
   test("an untracked or backing codex launches unchanged", () => {

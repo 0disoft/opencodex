@@ -143,6 +143,8 @@ ensure 並原樣傳遞環境，與 shim 的 argv 語法保持一致。
 執行前會先判定路由：沒有注入路由時輸出提示訊息，並不做 ensure 直接啟動 `codex`；外部閘道（custom-local/custom-remote）
 會輸出警告並原樣通過、不觸碰該路由；無法驗證的路由會輸出警告但仍嘗試 ensure；ensure 失敗時會在 stderr 輸出一行，並仍然啟動 `codex`。
 當 `codex` 指向自動啟動 shim 時，啟動器會直接執行其背後的 Codex，避免 shim 重複 ensure。
+若尋找執行檔或檢查 shim 失敗，啟動器仍會以 `OCX_SHIM_BYPASS=1` 執行 `codex`，略過 shim 的代理啟動與服務權杖載入。
+只有已驗證的本機路由才會補上服務權杖，未知路由不會新增。用戶端注入會忽略權杖檔案路徑的環境變數覆寫，並拒絕管理憑證。啟動器說明使用 `ocx help codex`，Codex 本身說明使用 `ocx codex --help`。
 之後啟動普通 `codex` 的行為與之前完全相同。
 
 ### `ocx opencode [opencode args...]`

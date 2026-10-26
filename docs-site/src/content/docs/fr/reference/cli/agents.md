@@ -173,7 +173,7 @@ restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglag
 
 Vérifiez que le proxy est actif, puis lancez `codex` sans modification. Le routage de Codex reste
 la propriété de sa configuration — le `openai_base_url` injecté dans `~/.codex/config.toml` —
-aucun lancement ne réécrit donc de fichier de configuration. Un `OPENCODEX_API_AUTH_TOKEN` absent
+aucun lancement ne réécrit donc de fichier de configuration. Pour un routage local vérifié, un `OPENCODEX_API_AUTH_TOKEN` absent
 est renseigné depuis `~/.opencodex/service-api-token`, la même injection que celle du shim de
 démarrage automatique Codex.
 
@@ -189,6 +189,9 @@ ligne s'affiche sur stderr et `codex` est lancé malgré tout. Lorsque `codex` c
 démarrage automatique, le lanceur exécute directement le Codex sous-jacent pour que le shim ne
 répète pas l'assurance. Un lancement ultérieur de `codex` sans opencodex se comporte
 exactement comme auparavant.
+
+Si la recherche de l’exécutable ou l’inspection du shim échoue, le lanceur exécute quand même `codex` avec `OCX_SHIM_BYPASS=1`, empêchant le shim de relancer le proxy ou de charger un jeton de service.
+Un routage inconnu n’ajoute jamais de jeton de service. La variable de remplacement du fichier de jeton est ignorée pour le client et les identifiants d’administration sont refusés. `ocx help codex` affiche l’aide du lanceur ; `ocx codex --help` atteint Codex.
 
 ### `ocx opencode [opencode args...]`
 

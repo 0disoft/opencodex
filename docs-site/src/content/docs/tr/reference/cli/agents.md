@@ -205,6 +205,9 @@ Deneme başarısız olursa stderr'e tek satır yazılır ve `codex` yine de baş
 başlatma shim'ine çözülürse, shim garantiyi tekrarlamasın diye arkasındaki Codex doğrudan başlatılır. Daha sonra düz `codex` başlatmak tam
 olarak eskisi gibi davranır.
 
+Çalıştırılabilir dosya araması veya shim incelemesi başarısız olursa başlatıcı yine de `codex`'i `OCX_SHIM_BYPASS=1` ile çalıştırır; böylece shim proxy'yi yeniden başlatmaz ve hizmet belirtecini yüklemez.
+Hizmet belirteci yalnızca doğrulanmış yerel yönlendirmede eklenir; bilinmeyen yönlendirmede eklenmez. İstemciye aktarımda belirteç dosyasının ortam değişkeniyle değiştirilmesi yok sayılır ve yönetim kimlik bilgileri reddedilir. Başlatıcı yardımı için `ocx help codex`, Codex yardımı için `ocx codex --help` kullanın.
+
 ### `ocx opencode [opencode argumanlari...]`
 
 Proxy'nin çalıştığından emin olun, ardından OpenCode'un satır içi çalışma zamanı

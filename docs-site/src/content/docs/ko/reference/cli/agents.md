@@ -178,6 +178,9 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 직접 실행합니다. 이후 plain
 `codex`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
 
+실행 파일 검색이나 shim 검사가 실패해도 `OCX_SHIM_BYPASS=1`로 `codex`를 실행하여 shim의 프록시 재시작과 서비스 토큰 읽기를 건너뜁니다.
+서비스 토큰 보충은 확인된 로컬 라우팅에만 적용되며, 알 수 없는 라우팅에는 추가하지 않습니다. 클라이언트 주입 시 토큰 파일 환경 변수의 경로 재정의를 무시하고 관리자 자격 증명을 거부합니다. 런처 도움말은 `ocx help codex`, Codex 자체 도움말은 `ocx codex --help`를 사용합니다.
+
 ### `ocx opencode [opencode args...]`
 
 프록시가 실행 중인지 확인한 뒤, OpenCode의 인라인 런타임 계층(`OPENCODE_CONFIG_CONTENT`)에 생성된 `provider.opencodex` 및 `providers.opencodex` 블록을 넣어 opencode를 실행합니다. 기존 인라인 config는 유지되고, 이번 실행에서는 이 두 키만 교체됩니다. 전역 또는 프로젝트 `opencode.json` 파일은 기존 override가 있는지 경고하기 위해 읽을 수 있지만, 디스크상의 파일은 절대 수정하지 않습니다. 라우팅된 model은 `opencodex/<provider>/<model>`로 나타납니다. 이후 plain `opencode`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
