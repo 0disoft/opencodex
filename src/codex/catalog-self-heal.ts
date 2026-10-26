@@ -251,9 +251,11 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
 
   const unsubscribe = (deps.subscribe ?? subscribeCatalogPublication)(event => {
     if (stopped) return;
+    const release = event.kind === "native-released" || event.intent === "restore";
+    // Bind publication evidence before comparisons can observe a retargeted alias.
+    const stillPublished = !release && event.path !== null ? (deps.retainPath ?? retainCatalogHealPath)(event.path) : null;
     // Native restoration can remove the journal before notification. Fence the known
     // target (and target-less releases) without resolving possibly unavailable evidence.
-    const release = event.kind === "native-released" || event.intent === "restore";
     const known = event.path !== null && target !== null ? compareCatalogHealPaths(event.path, target) : "different";
     if (release && (event.path === null || known !== "different")) {
       clear();
@@ -273,9 +275,8 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
       return; // Catalog-success/cache-failure must not accept a baseline.
     }
     // A committed owner publication supplies a read-only baseline even while heal writes are gated.
-    if (event.path === null || path === null || selected !== "same") return;
+    if (event.path === null || path === null || selected !== "same" || stillPublished === null) return;
     // Read independently of obsolete evidence, but retire it only after current selection proof.
-    const stillPublished = (deps.retainPath ?? retainCatalogHealPath)(event.path);
     const seen = read(event.path, true);
     const current = catalogPath();
     if (seen?.namespaces == null || current === null

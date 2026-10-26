@@ -269,6 +269,74 @@ for (const publishedAlias of [false, true]) {
   });
 }
 
+test.each([false, true])("publication identity precedes the initial comparisons (released=%s)", async released => {
+  const root = fixture(), a = join(root, "a"), b = join(root, "b"), alias = join(root, "alias");
+  fs.mkdirSync(a); fs.mkdirSync(b); fs.symlinkSync(a, alias, "junction");
+  const original = join(a, "catalog.json"), foreign = join(b, "catalog.json"), published = join(alias, "catalog.json");
+  const catalog = (names: string[]) => JSON.stringify({ models: names.map(ns => ({
+    slug: `${ns}/a`, description: `Routed via opencodex → ${ns}/a (owner).`,
+  })) });
+  fs.writeFileSync(original, catalog(["ark"]));
+  fs.writeFileSync(foreign, catalog(["ark", "tx"]));
+  let listener: (event: CatalogPublicationEvent) => void = () => {};
+  let converges = 0, authorized = false;
+  const config = { port: 10100, defaultProvider: "ark", providers: {
+    ark: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+    tx: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+  } } as OcxConfig;
+  const handle = startCodexCatalogSelfHeal({ deps: {
+    scheduleFn: () => ({ cancel() {} }), catalogPath: () => published,
+    subscribe: fn => { listener = fn; return () => {}; },
+    converge: async (_config, lifecycle) => {
+      converges++;
+      authorized = lifecycle.beforeCommit();
+      return { committed: false };
+    },
+    gates: { siblingOfLivePort: () => null, exiting: () => false, idle: () => true,
+      runtimeOwned: () => true, loadConfig: () => config,
+      ownsCodexHome: () => true, clientConnected: () => false, clientJournalOwner: () => false },
+    log: { warn() {} },
+  } });
+  try {
+    if (released) listener({ kind: "native-released", path: original });
+    const stat = fs.statSync;
+    let stats = 0, swapped = false;
+    const spy = spyOn(fs, "statSync").mockImplementation((path, options) => {
+      const result = stat(path, options);
+      // Two native comparisons use eight stat calls each. Retarget after the last
+      // returned A evidence, before the old handler began its independent capture.
+      // Capture-first must keep A evidence even when this schedule interrupts a comparison.
+      if (++stats === 16) {
+        fs.renameSync(alias, join(root, "saved-a"));
+        fs.symlinkSync(b, alias, "junction");
+        swapped = true;
+      }
+      return result;
+    });
+    try { listener({ kind: "published", path: published, intent: "refresh" }); }
+    finally { spy.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(fs.realpathSync.native(published)).toBe(fs.realpathSync.native(foreign));
+    fs.writeFileSync(foreign, catalog(["ark"]));
+    await handle.tickForTests();
+    expect(converges).toBe(0);
+    expect(authorized).toBe(false);
+    // The rejected publication preserves A's baseline and the original release fence.
+    fs.renameSync(alias, join(root, "saved-b"));
+    fs.renameSync(join(root, "saved-a"), alias);
+    fs.writeFileSync(original, catalog([]));
+    await handle.tickForTests();
+    expect(converges).toBe(released ? 0 : 1);
+    expect(authorized).toBe(!released);
+    fs.writeFileSync(original, catalog(["ark"]));
+    listener({ kind: "published", path: published, intent: "refresh" });
+    fs.writeFileSync(original, catalog([]));
+    await handle.tickForTests();
+    expect(converges).toBe(released ? 1 : 2);
+    expect(authorized).toBe(true);
+  } finally { handle.stop(); }
+});
+
 test.each([false, true])("a published junction cannot supply foreign bytes during an A-B-A retarget (released=%s)", async released => {
   const root = fixture(), a = join(root, "a"), b = join(root, "b"), alias = join(root, "alias");
   fs.mkdirSync(a); fs.mkdirSync(b); fs.symlinkSync(a, alias, "junction");
