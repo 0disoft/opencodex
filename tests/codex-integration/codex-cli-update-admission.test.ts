@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 
-test.each(["terminal", "unknown", "unsafe-stage", "unsafe-install", "rename-install", "rename-stage"])("apply %s enforces mutation admission and lifetime", async lane => {
+test.each(["terminal", "unknown", "recovery", "unsafe-stage", "unsafe-install", "rename-install", "rename-stage"])("apply %s enforces mutation admission and lifetime", async lane => {
   const child = spawn(process.execPath, [helperPath("codex-cli-apply-admission.ts"), lane], {
     cwd: repoRoot(), env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   });

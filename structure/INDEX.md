@@ -240,7 +240,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-selection-gate.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-worker-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |

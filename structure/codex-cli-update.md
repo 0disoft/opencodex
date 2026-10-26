@@ -117,7 +117,9 @@ Required launcher/native paths must also pass the current user's X_OK check; ano
 After file/selection readback, the selected launcher runs with `--version` in an owned home/temp sandbox,
 with 16 KiB output and an eight-second deadline. Normal exit and the exact target version are required.
 Only this verification's new POSIX process group may be terminated on a deadline; an unconfirmed close/group
-exit retains lease/staging and reports its PID with an ambiguous result. Existing sessions are never signalled.
+exit retains lease/staging and reports its PID with an ambiguous result. Its observer survives the bounded
+reap result: late close plus group absence, or a group probe returning ESRCH, releases that owner's
+admission and cleans up its lease/staging without rewriting the ambiguous receipt. Existing sessions are never signalled.
 Verified target readback and execution are `applied` even after nonzero installer exit; unchanged full original evidence
 is `not_applied` even after exit zero. Partial, unreadable or uncertain results are `ambiguous`.
 Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A failed or thrown
@@ -184,8 +186,27 @@ window spans the worker's final process scan through installer termination and p
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
 the same target must not split the exclusion; a writer on a different configDir can also see busy.
-An installer/verifier with unconfirmed terminal state retains the gate as well as lease/staging;
-worker close never automatically releases admission. Preparation refusal and terminal readback release it.
+The gate's holder word carries a unique generation; release compares that exact owner, so an obsolete
+observer cannot clear a later window. An installer/verifier with unconfirmed terminal state retains the
+gate as well as lease/staging. `src/codex/cli-update-worker-recovery.ts` observes worker close: a fence
+that never committed is atomically cancelled before releasing that worker's owner, preventing a late
+commit after Bun's close notification. A committed fence is sealed against a subsequent verifier spawn. After commit,
+worker close alone does not release admission: the published detached POSIX process group must be absent,
+or the worker must have published terminal cleanup. Missing child publication stays uncertain. Recovery
+continues probing a known group after dispatch settlement. Preparation refusal and terminal readback release it.
+
+`src/codex/cli-update-recovery.ts` persists a private, token-scoped recovery record under the config root
+before commit/spawn, publishes each child group after spawn, and records terminal cleanup before gate
+release. Starting the verifier first resets the child publication and durable record to armed, so an old
+installer group's exit cannot clear a new verifier. Parent admission checks these records after restart:
+terminal records permit admission; child records require both parent-process absence and whole-group
+absence. Owner-specific terminal markers survive an interrupted worker's late publication; verified markers
+also resolve that owner's partial precommit publication. EPERM, unrelated malformed/partial records,
+and an armed record with no published child stay closed for
+operator inspection. PID reuse can delay recovery but cannot prove absence. The protected durable job
+ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it
+to success. Abandoned installation-prefix leases and staging after process death are not reclaimed by
+this admission recovery. Old jobs lacking recovery records retain their existing unknown-state projection.
 Ordinary config writes, account operations, model requests, existing session interrupt/close and
 arbitrary subprocesses are not gated. The gate claims nothing about processes the parent does not own:
 an external installer, a handoff helper's delayed descendants, or an OS-level snapshot race stays the

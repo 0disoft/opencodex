@@ -7,7 +7,7 @@ import { listCodexDesktopShellPids, restartCodexDesktopApp, type DesktopAppResta
 import {
   codexCliUpdateSelectionGate,
   beginCodexCliSelectionParentWrite,
-  createWorkerCommitWindow,
+  createWorkerCommitWindow, createCodexCliUpdateFence,
 } from "../../src/codex/cli-update-selection-gate";
 import { classifyDesktopPicker, readCodexCatalogBinding, readCodexDesktopPickerState } from "../../src/codex/desktop-app/picker-freshness";
 import type { DesktopAppAdapter, DesktopProcess } from "../../src/codex/desktop-app/types";
@@ -640,7 +640,7 @@ describe("the cli-update selection gate covers the whole restart ladder", () => 
     });
     const window = createWorkerCommitWindow({
       gate: codexCliUpdateSelectionGate(),
-      fence: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+      fence: createCodexCliUpdateFence(),
     });
     let held = false;
     try {

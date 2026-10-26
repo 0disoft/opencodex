@@ -9,6 +9,7 @@
     "codex-cli-update-apply.test.ts": "codex-integration",
     "codex-cli-update-paths.test.ts": "codex-integration",
     "codex-cli-update-admission.test.ts": "codex-integration",
+    "codex-cli-update-recovery.test.ts": "codex-integration",
     "codex-cli-update-worker.test.ts": "codex-integration",
     "responses-replay-metadata-principal.test.ts": "responses",
     "responses-combo-replay-principal.test.ts": "responses",

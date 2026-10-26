@@ -27,6 +27,7 @@ const { createCodexCliUpdatePlan } = await import("../../src/codex/cli-update-pl
 const gate = await import("../../src/codex/cli-update-selection-gate");
 const { CodexRemoteWorkspaceRuntimeFactory, RemoteWorkspaceCoordinator } = await import("../../src/remote-control");
 const { restartCodexDesktopApp } = await import("../../src/codex/desktop-app-restart");
+const { linuxDesktopAppAdapter } = await import("../../src/codex/desktop-app/linux");
 
 // Model POSIX directory ownership only; actual paths, identities and operations
 // remain native. No Windows installation or real Codex child is permitted.
@@ -47,6 +48,8 @@ const terminal = new Promise<{ terminal: boolean; exitCode: number }>(resolve =>
 const inspecting = new Promise<void>(resolve => { readback = resolve; });
 const receipt = new Promise<void>(resolve => { completeReadback = resolve; });
 let running = false;
+let recover!: () => void;
+const recovery = new Promise<void>(resolve => { recover = resolve; });
 let scans = 0, installs = 0;
 const pathLane = ["unsafe-stage", "unsafe-install", "rename-install", "rename-stage"].includes(lane);
 const deps = { platform: "linux" as const, temporaryRoot, inspectionDeps: { arch: "x64", env: process.env },
@@ -71,7 +74,8 @@ const deps = { platform: "linux" as const, temporaryRoot, inspectionDeps: { arch
   acquireLease: () => ({ kind: "acquired" as const, release: () => true }), commitWindow: installWindow,
   inspect: async () => { if (running) { readback(); await receipt; } return report as provenance.CodexCliInstallReport; },
   install: () => { installs++; if (pathLane) return Promise.resolve({ terminal: true, exitCode: 0 });
-    running = true; spawned(); return terminal.then(value => lane === "unknown" ? { ...value, terminal: false } : value); } };
+    running = true; spawned(); return terminal.then(value => ["unknown", "recovery"].includes(lane)
+      ? { ...value, terminal: false, ...(lane === "recovery" ? { recovery } : {}) } : value); } };
 let pending: ReturnType<typeof applyCodexCliUpdate> | undefined;
 const spawn = spyOn(Bun, "spawn").mockImplementation(() => { throw new Error("unexpected_owned_spawn"); });
 async function refusedCallers() {
@@ -105,9 +109,26 @@ try {
   expect(admitted).toBe("started");
   await refusedCallers();
   terminate();
-  if (lane === "unknown") {
+  if (["unknown", "recovery"].includes(lane)) {
     expect(await pending).toMatchObject({ outcome: "ambiguous", reason: "installer_state_unknown", leaseRetained: true });
     await refusedCallers();
+    if (lane === "recovery") {
+      recover(); await recovery; await Promise.resolve();
+      const factory = new CodexRemoteWorkspaceRuntimeFactory({ command: [process.execPath, "unused-fixture.ts"] });
+      let remoteFailure = "";
+      try { await factory.start({ sessionId: "fixture-session", deviceId: "fixture-device", deviceName: "Fixture",
+        rootId: "fixture-root", rootLabel: "Fixture", capabilities: ["workspace.read"], tools: ["read_file"],
+        coordinator: new RemoteWorkspaceCoordinator({ isOnline: () => true, invoke: async () => ({ ok: true }) }), emit: () => {} });
+      } catch (error) { remoteFailure = (error as Error).message; }
+      let discoveries = 0;
+      const restarted = restartCodexDesktopApp({ platform: "linux", execFile: () => null,
+        adapter: { ...linuxDesktopAppAdapter, discover: () => { discoveries++; return null; } },
+        lock: { lockPath: join(root, "restart.lock") } });
+      expect({ remoteFailure, desktopReason: restarted.reason }).toEqual({
+        remoteFailure: "unexpected_owned_spawn", desktopReason: "package_discovery_failed" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(discoveries).toBe(1);
+    }
   } else {
     await inspecting;
     await refusedCallers();
