@@ -100,6 +100,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
+| [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) | Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call. |
 | [`adapters/registry.md`](adapters/registry.md) | The single adapter construction authority and contract inheritance. |
 | [`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) | Versioned provider compatibility claims and fixture-evidence boundaries. |
 | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) | Optional Lab evidence, automation, and its core-runtime isolation boundary. |
@@ -180,6 +181,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/adapters/openai-chat.ts` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat/required-tool-result.ts` | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/request-strips.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |

@@ -344,6 +344,8 @@
   "chat-anthropic-reasoning-details.test.ts": "responses",
   "chat-inline-document-bytes.test.ts": "responses", "chat-json-sse-fallback.test.ts": "responses",
   "chat-incomplete-length-reason.test.ts": "responses",
+  "openai-chat-required-tool.test.ts": "adapters/openai",
+  "responses-required-chat-tool.test.ts": "responses",
   "chat-media-translation.test.ts": "responses", "chat-native-developer-role.test.ts": "responses",
   "chat-native-reasoning-replay.test.ts": "responses",
   "chat-native-reasoning-scope.test.ts": "responses",

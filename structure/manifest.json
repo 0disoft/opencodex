@@ -680,6 +680,13 @@
       "documents": ["src/adapters/openai-chat/", "src/adapters/openai-chat.ts"]
     },
     {
+      "path": "providers/chat-required-tool-results.md",
+      "tier": 4,
+      "title": "Mandatory Translated Chat Tool Results",
+      "scope": "Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call.",
+      "documents": ["src/adapters/openai-chat/required-tool-result.ts"]
+    },
+    {
       "path": "adapters/registry.md",
       "tier": 4,
       "title": "Adapter Registry Authority",
