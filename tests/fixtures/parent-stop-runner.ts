@@ -25,6 +25,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   alreadyStopped?: boolean;
   absence?: "dead" | "unknown" | "live";
   managerState?: "inactive" | "active" | "unknown";
+  /** Commit a disconnect while the capability probe is in flight. */
+  disconnectDuringProbe?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -51,6 +53,8 @@ const fakePid = 4242;
 const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0 };
 const urls: string[] = [];
 const probes: string[] = [];
+const transports: string[] = [];
+let viaDirect = false;
 const unexpectedIo: string[] = [];
 let alive = !options.alreadyStopped;
 let nonce: string | undefined;
@@ -82,7 +86,7 @@ mock.module("node:child_process", () => ({
 const receipts = await import("../../src/config/pending-teardown");
 process.on("exit", () => {
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
-    calls, urls, probes, unexpectedIo, nonce,
+    calls, urls, probes, transports, unexpectedIo, nonce,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
   }));
 });
@@ -178,11 +182,15 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (options.clientServer === "body-timeout") return new Response(new ReadableStream({ start(c) {
       init.signal?.addEventListener("abort", () => c.error(init.signal!.reason), { once: true });
     } }));
+    if (options.disconnectDuringProbe) {
+      writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "standalone", providers: {}, defaultProvider: "openai" }));
+    }
     return Response.json({ schema: "ocx-stop-capabilities/1", connectedClientOwnership: true,
       pid: options.clientServer === "wrong-pid" ? fakePid + 1 : fakePid });
   }
   if (!url.startsWith("http://127.0.0.1:10100/api/stop")) return unexpected(`fetch(${url})`);
   urls.push(url);
+  transports.push(viaDirect ? "direct" : "global");
   const body = options.serverTeardown && !options.apiFailure
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL(url))
     : options.response;
@@ -195,7 +203,12 @@ const direct = await import("../../src/server/direct-local-http");
 mock.module("../../src/server/direct-local-http", () => ({ ...direct,
   directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit) => {
     if (!alive && String(input).endsWith("/healthz")) throw Object.assign(new Error("fixture listener closed"), { code: "ECONNREFUSED" });
-    return globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
+    viaDirect = true;
+    try {
+      return globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
+    } finally {
+      viaDirect = false;
+    }
   },
 }));
 

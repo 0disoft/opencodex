@@ -67,6 +67,7 @@ async function runParentStop(options: {
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
+  disconnectDuringProbe?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -84,7 +85,7 @@ async function runParentStop(options: {
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
     probes: string[];
-    urls: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
+    urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
   expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped ? 0 : 1);
@@ -208,6 +209,12 @@ describe("parent CLI shared teardown completion", () => {
       if (child && child.exitCode === null) { child.kill(); await child.exited; }
       await target.stop(true); await proxy.stop(true);
     }
+  });
+  test("a disconnect committed during the capability probe cannot move the stop POST off direct transport", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, disconnectDuringProbe: true,
+      json: true, response: null, restore: restoreResult(true) });
+    expect(outcome.probes.some(url => url.endsWith("/api/stop")), outcome.stderr).toBe(true);
+    expect(outcome.transports, outcome.stderr).toEqual(["direct"]);
   });
   for (const clientServer of ["legacy", "unknown", "wrong-pid", "malformed", "oversized", "unauthorized", "redirect", "body-timeout"] as const) {
     test(`connected stop refuses ${clientServer} preservation before service or POST`, async () => {
