@@ -27,6 +27,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   managerState?: "inactive" | "active" | "unknown";
   /** Commit a disconnect while the capability probe is in flight. */
   disconnectDuringProbe?: boolean;
+  /** Commit a hub connection while orphan discovery is in flight. */
+  connectDuringDiscovery?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -38,10 +40,9 @@ if (options.proxyProbePort) {
   const { stopProxyGracefully } = await import("../../src/lib/process-control");
   // The CLI's own selector, not a hand-picked transport: a Link Child must stay direct too.
   const { stopRequestFetch } = await import("../../src/cli/stop-restore");
-  const { readClientConnectionState } = await import("../../src/client/state");
   const result = await stopProxyGracefully(process.pid, {
     runtimeEndpoint: { port: options.proxyProbePort, hostname: "127.0.0.1" },
-    fetchFn: stopRequestFetch(readClientConnectionState(), false), waitExit: () => true,
+    fetchFn: stopRequestFetch(), waitExit: () => true,
   });
   if (result !== true) throw new Error("direct stop request failed");
   console.log(JSON.stringify({ ok: true, control: control.via }));
@@ -134,7 +135,17 @@ if (options.guarded) {
 if (options.orphan || options.alreadyStopped) {
   const liveness = await import("../../src/server/proxy-liveness");
   mock.module("../../src/server/proxy-liveness", () => ({ ...liveness,
-    findLiveProxy: async () => alive ? { ...endpoint, pid: fakePid, source: "config" } : null,
+    findLiveProxy: async () => {
+      if (options.connectDuringDiscovery) {
+        const serverUrl = "https://hub.example.test";
+        writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
+          serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport: "hub", selectedClients: ["codex"],
+          tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64),
+          protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+        } }));
+      }
+      return alive ? { ...endpoint, pid: fakePid, source: "config" } : null;
+    },
     proveLiveProxyOwnedByHome: async () => "proven",
     probeEndpointLiveness: async () => options.absence ?? "dead",
   }));

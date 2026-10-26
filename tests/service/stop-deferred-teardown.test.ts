@@ -67,7 +67,7 @@ async function runParentStop(options: {
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
-  disconnectDuringProbe?: boolean;
+  disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -215,6 +215,14 @@ describe("parent CLI shared teardown completion", () => {
       json: true, response: null, restore: restoreResult(true) });
     expect(outcome.probes.some(url => url.endsWith("/api/stop")), outcome.stderr).toBe(true);
     expect(outcome.transports, outcome.stderr).toEqual(["direct"]);
+  });
+  test("a standalone stop, and a connection committed during orphan discovery, keep the POST on direct transport", async () => {
+    const plain = await runParentStop({ receipt: true, json: true, response: { success: true, sharedTeardown: "deferred" },
+      restore: restoreResult(true) });
+    expect(plain.transports, plain.stderr).toEqual(["direct"]);
+    const connecting = await runParentStop({ receipt: true, orphan: true, connectDuringDiscovery: true, json: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore: restoreResult(true) });
+    expect(connecting.transports, connecting.stderr).toEqual(["direct"]);
   });
   for (const clientServer of ["legacy", "unknown", "wrong-pid", "malformed", "oversized", "unauthorized", "redirect", "body-timeout"] as const) {
     test(`connected stop refuses ${clientServer} preservation before service or POST`, async () => {
