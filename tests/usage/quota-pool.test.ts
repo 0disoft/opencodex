@@ -40,6 +40,7 @@ beforeAll(async () => {
 
 function config(): OcxConfig {
   return {
+    port: 0, defaultProvider: "quiet",
     providers: {
       xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
       "claude-cli": { adapter: "claude-cli", baseUrl: "http://127.0.0.1:9" },
