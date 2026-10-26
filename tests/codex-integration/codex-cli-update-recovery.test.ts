@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
@@ -11,8 +11,31 @@ import * as gate from "../../src/codex/cli-update-selection-gate";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { createCodexCliRecoveryTestHome } from "../helpers/codex-cli-recovery-home";
 
-afterEach(() => gate.resetCodexCliSelectionGatesForTests());
+let recoveryHome: string, savedHome: string | undefined;
+beforeEach(() => {
+  savedHome = process.env.OPENCODEX_HOME;
+  recoveryHome = createCodexCliRecoveryTestHome();
+  process.env.OPENCODEX_HOME = recoveryHome;
+});
+afterEach(() => {
+  gate.resetCodexCliSelectionGatesForTests();
+  if (savedHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = savedHome;
+  removeTreeWithRetry(recoveryHome);
+});
+
+test.each(["macos-temp", "macos-unsafe", "linux-tmp", "linux-tmp-unsafe", "linux-home-755", "linux-home-700"])(
+  "recovery fixture and admission honor the %s layout", async scenario => {
+    const child = childProcess.spawn(process.execPath, [helperPath("codex-cli-recovery-layout.ts"), scenario], {
+      cwd: repoRoot(), env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", bytes => { output += bytes; }); child.stderr.on("data", bytes => { output += bytes; });
+    const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+    expect({ code, output }).toMatchObject({ code: 0 });
+  }, SPAWN_BUDGET_MS,
+);
 
 test.each([
   "child-terminal", "parent-terminal", "parent-no-record", "worker-no-record",
