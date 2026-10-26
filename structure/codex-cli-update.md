@@ -204,8 +204,14 @@ before commit/spawn, publishes each child group after spawn, and records termina
 release. Starting the verifier first resets the child publication and durable record to armed, so an old
 installer group's exit cannot clear a new verifier. Parent admission checks these records after restart:
 terminal records permit admission; child records require both parent-process absence and whole-group
-absence. Owner-specific terminal markers survive an interrupted worker's late publication; verified markers
-also resolve that owner's partial precommit publication. EPERM, unrelated malformed/partial records,
+absence. Parent recovery creates a missing store under the same trusted ancestry/private-permission
+policy and durably publishes its exact token's terminal marker before releasing admission, including
+the config parent's new directory entry. A late arm for a token with a verified marker is a no-op;
+markers also shadow an already interrupted publication and resolve that owner's partial precommit record.
+Absent recovery history admits ordinary callers, including a symlinked config home or ancestor.
+Existing evidence is read through the canonical home target with its trusted ancestry; a linked recovery
+store, unsafe target, or evidence that becomes unreadable stays fenced. Updater mutation eligibility
+retains its stricter canonical/no-alias policy. EPERM, unrelated malformed/partial records,
 and an armed record with no published child stay closed for
 operator inspection. PID reuse can delay recovery but cannot prove absence. The protected durable job
 ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it

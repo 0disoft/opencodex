@@ -13,6 +13,20 @@ import { helperPath, repoRoot } from "../helpers/repo-root";
 
 afterEach(() => gate.resetCodexCliSelectionGatesForTests());
 
+test.each([
+  "close-absent", "close-existing", "sync-failure", "late-arm", "alias-absent", "ancestor-alias-absent",
+  "alias-armed", "alias-terminal", "alias-unsafe", "linked-store", "dangling-store",
+  "canonical-absent", "canonical-armed",
+])("isolated recovery publication and home admission: %s", async scenario => {
+  const child = childProcess.spawn(process.execPath, [helperPath("codex-cli-recovery-publication.ts"), scenario], {
+    cwd: repoRoot(), env: process.env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", bytes => { output += bytes; }); child.stderr.on("data", bytes => { output += bytes; });
+  const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  expect({ code, output }).toMatchObject({ code: 0 });
+});
+
 test("precommit recovery atomically prevents a late commit during publication", () => {
   const buffer = gate.codexCliUpdateSelectionGate(), fence = gate.createCodexCliUpdateFence();
   const owner = gate.allocateCodexCliUpdateGateOwner(buffer);

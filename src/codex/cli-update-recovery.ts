@@ -18,6 +18,10 @@ function processGone(pid: number): boolean {
   try { process.kill(pid, 0); return false; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }
+function syncDirectory(dir: string): void {
+  const fd = openSync(dir, constants.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
 function directory(configDir: string, create: boolean): string {
   assertTrustedCodexCliAncestry(configDir);
   const dir = join(configDir, "codex-cli-update-recovery");
@@ -28,6 +32,8 @@ function directory(configDir: string, create: boolean): string {
   const stat = lstatSync(dir);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.geteuid?.()
     || (stat.mode & 0o077) !== 0 || realpathSync.native(dir) !== dir) throw new Error("unsafe_recovery_store");
+  // Persist the store's directory entry too, including a concurrent creator.
+  if (create) syncDirectory(configDir);
   return dir;
 }
 function read(dir: string, token: string, suffix = ".json"): RecoveryRecord {
@@ -61,24 +67,28 @@ function write(dir: string, record: RecoveryRecord): void {
   const fd = pending(temp);
   try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(temp, join(dir, record.token + ".json"));
-  const directoryFd = openSync(dir, constants.O_RDONLY);
-  try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
+  syncDirectory(dir);
 }
 /** Written before COMMITTED; a crash in the spawn/publication gap stays armed. */
 export function createCodexCliUpdateRecovery(token: string, configDir = getConfigDir()) {
   let dir: string | undefined;
   let record: RecoveryRecord = { version: 1, token, parentPid: process.pid, phase: "armed", pgid: null };
   return {
-    arm() { dir ??= directory(configDir, true); record = { ...record, phase: "armed", pgid: null }; write(dir, record); },
+    arm() {
+      dir ??= directory(configDir, true);
+      try {
+        if (read(dir, token, ".terminal").phase !== "terminal") throw new Error("invalid_recovery_owner");
+        return; // Parent recovery already ended this exact token.
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      record = { ...record, phase: "armed", pgid: null }; write(dir, record);
+    },
     child(pgid: number) { if (dir) { record = { ...record, phase: "child", pgid }; write(dir, record); } },
     terminal() { if (dir) { record = { ...record, phase: "terminal", pgid: null }; write(dir, record); } },
   };
 }
 /** Parent recovery owns this exact run token, never another generation's record. */
 export function finishClosedCodexCliUpdateRecovery(token: string, configDir = getConfigDir()): void {
-  let dir: string;
-  try { dir = directory(configDir, false); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  const dir = directory(configDir, true);
   // An independent terminal marker cannot be overwritten by an interrupted
   // worker finishing its old armed-record rename after the close notification.
   const marker = join(dir, token + ".terminal");
@@ -87,14 +97,19 @@ export function finishClosedCodexCliUpdateRecovery(token: string, configDir = ge
   try { writeFileSync(fd, JSON.stringify({ version: 1, token, parentPid: process.pid, phase: "terminal", pgid: null })); fsyncSync(fd); }
   finally { closeSync(fd); }
   renameSync(temp, marker);
-  const directoryFd = openSync(dir, constants.O_RDONLY);
-  try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }
+  syncDirectory(dir);
 }
 /** No mutation on a read. Old ambiguous job receipts remain ambiguous after recovery. */
 export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()): boolean {
   if (process.platform === "win32") return false; // POSIX apply only
+  // Ordinary callers can use a home alias without any updater history. Probe
+  // lexically first: a dangling store link is existing, unsafe evidence too.
+  try { lstatSync(join(configDir, "codex-cli-update-recovery")); }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
   try {
-    const dir = directory(configDir, false);
+    // Resolve only the supported home alias, never a linked recovery store.
+    // Mutation eligibility still requires the original canonical ancestry.
+    const dir = directory(realpathSync.native(configDir), false);
     const files = readdirSync(dir);
     if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
@@ -116,5 +131,5 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
       if (!partial || !terminal.has(partial[1]!)) return true;
     }
     return false;
-  } catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.
 }

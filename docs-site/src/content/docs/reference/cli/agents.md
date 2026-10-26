@@ -1217,6 +1217,9 @@ its reap deadline. Worker loss before commit also restores admission; worker clo
 does not. Durable recovery records preserve this exclusion across proxy restarts. Missing child identity,
 partial records or inaccessible liveness evidence require inspection. Recovery does not change an
 ambiguous job result, retry installation or reclaim an abandoned installation lease.
+Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary
+operations. With history, admission reads the protected canonical home target; unsafe recovery
+paths still report busy. This does not relax the updater's installation or config-path eligibility.
 Windows apply, shim repair, native apps and other installation managers remain unsupported.
 
 Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
