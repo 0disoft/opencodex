@@ -1766,9 +1766,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
+        // Client cancellation reaches acquisition through req.signal (relay resolution, the
+        // upstream dial). It must not release the lease: a pending join's upstream transport
+        // still owns the admission, and each exit below releases it on close/CLOSED.
         const releaseAcquisition = () => {
-          detachClientAbort();
           acquisition?.clear();
           if (audioController) unregisterTurn(audioController);
           else turnAdmissionLease.release();
@@ -1887,7 +1888,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
-          detachClientAbort();
           acquisition?.clear();
           finalizeLiveRequest(101);
           return undefined as unknown as Response;
