@@ -1617,11 +1617,8 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     loopbackOnly: true,
   },
   /*
-   * Appended rather than filed beside the other Pi-family clients on purpose.
-   * `EXPORT_CLIENT_IDS` is `Object.keys(EXPORT_CLIENTS)`, so this object's
-   * insertion order IS the public order, and three tests assert it exactly. The
-   * existing sequence is landing order — `pi` second, `prime` eleventh — not a
-   * grouping, so appending is the edit that leaves the other thirteen alone.
+   * The shared client roster preserves public landing order, not family grouping.
+   * Keep this registry in the same order so its iteration agrees with the roster.
    */
   omo: {
     id: "omo",
@@ -1714,7 +1711,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   },
 };
 
-export const EXPORT_CLIENT_IDS: readonly ExportClientId[] = Object.keys(EXPORT_CLIENTS) as ExportClientId[];
+export { EXPORT_CLIENT_IDS } from "./client-ids";
 
 export function isExportClientId(value: string): value is ExportClientId {
   return Object.prototype.hasOwnProperty.call(EXPORT_CLIENTS, value);
