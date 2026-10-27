@@ -9,7 +9,7 @@ import { applyGithubCopilotContextTier } from "../../providers/github-copilot-co
 import { Buffer } from "node:buffer";
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER } from "../../codex/forward-transport-headers";
+import { applyCodexRoutingHint, CODEX_RESPONSES_LITE_HEADER, CODEX_RESPONSES_LITE_METADATA_KEY, CODEX_ROUTING_HINT_HEADER, isolateCodexPoolClientMetadata } from "../../codex/forward-transport-headers";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType, transferCompactionCiphertextLease } from "../../responses/compaction";
 import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import {
@@ -476,6 +476,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         finalBody = { ...finalBody, stream: true };
       }
       if (isCanonicalOpenAiForwardProvider(provider)) {
+        const overrideAccountId = (provider as { _codexAccountOverride?: { chatgptAccountId?: string } })._codexAccountOverride?.chatgptAccountId
+          ?? headers["chatgpt-account-id"];
+        if ((provider as { _codexAccountOverride?: unknown })._codexAccountOverride && overrideAccountId) {
+          finalBody = isolateCodexPoolClientMetadata(finalBody, overrideAccountId);
+        }
         const routingHeaders = new Headers(headers);
         applyCodexRoutingHint(routingHeaders, finalBody);
         // Static headers may use mixed casing. Remove every stale spelling
