@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as ownership from "../../src/cli/codex-launch-ownership";
@@ -44,6 +44,19 @@ describe("Codex launcher Darwin ACL mutation admission", () => {
     expect(ownership.darwinAclEntriesAreSafe([{ tag: 0, perms: 0 }])).toBe(false);
     expect(ownership.darwinAclEntriesAreSafe([{ tag: 3, perms: 0 }])).toBe(false);
     expect(ownership.darwinAclEntriesAreSafe(null)).toBe(false);
+  });
+
+  test.skipIf(process.platform !== "darwin")("native protected symlinked user .codex admits", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-darwin-link-")));
+    const home = join(root, "codex-home"), user = join(root, "user"), alias = join(user, ".codex");
+    try {
+      for (const directory of [root, home, user]) { mkdirSync(directory, { recursive: true }); chmodSync(directory, 0o700); }
+      writeFileSync(join(home, "config.toml"), 'model = "fixture"\n', { mode: 0o600 });
+      symlinkSync(home, alias, "dir");
+      expect(ownership.codexLaunchHomeIsOwned(realpathSync(alias))).toBe(true);
+      expect(ownership.codexLaunchProjectAliasIsOwned(alias)).toBe(true);
+      expect(ownership.codexLaunchProjectAliasIsOwned(join(alias, "config.toml"))).toBe(true);
+    } finally { removeTreeWithRetry(root); }
   });
 
   test.skipIf(process.platform !== "darwin")("native deny-delete ACL accepts; a later allow-write ACL refuses", () => {

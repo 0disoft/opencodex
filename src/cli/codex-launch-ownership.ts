@@ -216,9 +216,10 @@ function macHasNoManagedCodexPreferences(paths: ReadonlyMap<string, OwnershipSta
       // Apple bsd/sys/fcntl.h: O_RDONLY=0, O_NONBLOCK=4, O_NOFOLLOW=0x100,
       // O_DIRECTORY=0x100000, O_SYMLINK=0x200000, O_CLOEXEC=0x1000000.
       // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
-      // O_SYMLINK opens the lexical link itself, never its target. Nonblocking
-      // open also prevents a replaced regular file/FIFO from stalling admission.
-      const fd = openSync(path, 0x1000104 | (expected.isSymbolicLink() ? 0x200000 : expected.isDirectory() ? 0x100000 : 0));
+      // O_NOFOLLOW rejects final links even with O_SYMLINK; select one by type.
+      // O_SYMLINK opens a link itself; fstat below rejects non-link replacements.
+      // Nonblocking open prevents a replaced regular file/FIFO from stalling admission.
+      const fd = openSync(path, 0x1000004 | (expected.isSymbolicLink() ? 0x200000 : 0x100 | (expected.isDirectory() ? 0x100000 : 0)));
       try {
         const actual = fstatSync(fd, { bigint: true });
         if (actual.dev !== expected.dev || actual.ino !== expected.ino
