@@ -807,14 +807,15 @@ function homeOwnerRestoreRefusal(error: CodexHomeOwnerRefusal): CodexNativeResto
 }
 
 export function restoreNativeCodex(
-  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { skipHistory?: boolean; revalidateDesiredState?: boolean } = {},
 ): CodexNativeRestoreResult {
   if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return finishApprovedProviderRestore(restoreNativeCodexImpl(options), options.revalidateDesiredState);
+    const result = restoreNativeCodexImpl(options);
+    return guardedRestoreWrite(options, () => finishApprovedProviderRestore(result, options.revalidateDesiredState));
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     throw error;
@@ -822,11 +823,11 @@ export function restoreNativeCodex(
 }
 
 function restoreNativeCodexImpl(
-  options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { skipHistory?: boolean; revalidateDesiredState?: boolean } = {},
 ): CodexNativeRestoreResult {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
-    cleanExternalProviderJournal();
+    guardedRestoreWrite(options, () => cleanExternalProviderJournal());
     return externalProviderRestoreResult(activeProvider);
   }
   if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
@@ -841,11 +842,12 @@ function restoreNativeCodexImpl(
   const journaledCatalogPath = journaledInjectedCatalogPath() ?? readCodexCatalogPath();
   const config = restoreCodexConfigInline("sync", options);
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
+  guardedRestoreWrite(options, () => notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath }));
   // Same mid-transaction pagination re-check as the async path.
   const historyStoodDown = historyStandsDown
     || resolveRestoreHistoryDisposition(options.removeProviderTable).kind === "stand-down";
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath, options);
+  guardedRestoreWrite(options, () => {});
   // Design B (loopback) steady state: threads are already tagged openai, so prove the
   // no-op with a readonly probe instead of write-opening a DB the Codex app may hold
   // (Windows: WAL writer lock -> seconds of stalling + a false warning on every stop).

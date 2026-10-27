@@ -50,7 +50,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
 import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
-import { noteExplicitShutdownRequested } from "./management/system-restart";
+import { acquireExplicitShutdownIntent, noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
@@ -510,23 +510,26 @@ export async function handleManagementAPI(
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
-    // Mark the stop before the first await after acceptance, so an automatic restart draining
-    // concurrently cannot reach its handoff while teardown is still pending.
-    noteExplicitShutdownRequested();
-    const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
-    setTimeout(async () => {
-      let shutdownSucceeded = false;
-      try {
-        shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
-      } catch {
-        console.warn("[opencodex] shutdown drain failed");
-      }
-      // A drained proxy whose shared teardown failed did not finish the job. Exiting 0
-      // told a supervisor the stop was clean while native Codex or the Grok fence was
-      // still pointed at this process (#3008).
-      process.exit(shutdownSucceeded && teardown.success ? 0 : 1);
-    }, 200);
-    return jsonResponse(teardown);
+    // Block automatic handoff before awaiting teardown, without committing a refused stop.
+    const releaseStopIntent = acquireExplicitShutdownIntent();
+    try {
+      const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
+      if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
+      noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.
+      setTimeout(async () => {
+        let shutdownSucceeded = false;
+        try {
+          shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
+        } catch {
+          console.warn("[opencodex] shutdown drain failed");
+        }
+        // A drained proxy whose shared teardown failed did not finish the job. Exiting 0
+        // told a supervisor the stop was clean while native Codex or the Grok fence was
+        // still pointed at this process (#3008).
+        process.exit(shutdownSucceeded && teardown.success ? 0 : 1);
+      }, 200);
+      return jsonResponse(teardown);
+    } finally { releaseStopIntent(); }
   }
 
   if (url.pathname.startsWith("/api/native-main-profiles")) {

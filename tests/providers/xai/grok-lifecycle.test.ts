@@ -448,7 +448,8 @@ describe("POST /api/stop teardown", () => {
     expect(handler).toContain("performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt })");
     const teardownSource = readFileSync(repoPath("src", "server", "stop-teardown.ts"), "utf8");
     expect(teardownSource).toContain('await import("../grok/inject")');
-    expect(teardownSource).toContain("stripGrokConfig()");
+    expect(teardownSource).toContain("grok = guard.run(() => strip())");
+    expect(teardownSource).toContain("restoreNativeCodexAsync(options)");
   });
 
   test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {

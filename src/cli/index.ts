@@ -163,6 +163,7 @@ import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopRequestFetch } from "./stop-restore";
+import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -656,6 +657,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = preserveConnectedClientRoutingOnExit(decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE }));
+    const restoreGuard = stopRestoreWriteGuard();
     if (teardown.revertSystemEnv) {
       try { revertSystemEnv(); } catch { /* best-effort */ }
     }
@@ -664,15 +666,17 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (teardown.restoreNativeCodex) {
       try {
         if (!codexHomeIsAbsent(getCodexHome())) {
-          const restored = restoreNativeCodex();
+          const restored = restoreNativeCodex({ withWriteGuard: restoreGuard.run });
           if (!restored.success) {
             cleanupSucceeded = false;
             console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
           }
         }
       } catch (error) {
-        cleanupSucceeded = false;
-        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        if (restoreGuard.boundary() !== "hub-owned") {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
@@ -680,7 +684,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
     if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {
-      try { stripGrokConfig(); } catch { /* best-effort restore */ }
+      try { restoreGuard.run(() => stripGrokConfig()); }
+      catch { if (restoreGuard.boundary() !== "hub-owned") cleanupSucceeded = false; }
     }
     return cleanupSucceeded;
   };

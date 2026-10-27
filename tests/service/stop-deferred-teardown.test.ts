@@ -69,6 +69,7 @@ async function runParentStop(options: {
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
+  connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -379,6 +380,81 @@ describe("parent CLI shared teardown completion", () => {
       expect(result.grokCalls).toBe(0);
       expect(result.result.boundary).toBe(mode === "native-pending" ? "unproven" : "hub-owned");
       expect(result.marker).toBe(mode === "native-pending");
+    }, 20_000);
+  }
+  for (const transition of ["connectAfterExitInspection", "pendingAfterExitInspection"] as const) {
+    test(`R6 follow-up signal ${transition} protects shared writes`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
+        [transition]: true, response: null, restore: restoreResult(true) });
+      expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: 0 });
+      expect(outcome.exitCode, outcome.stderr).toBe(transition === "pendingAfterExitInspection" ? 1 : 0);
+    }, 20_000);
+  }
+  for (const transition of ["pendingAfterGrok", "receiptClearBusy"] as const) {
+    test(`R6 follow-up receipt ${transition} keeps the obligation`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "link", json: true,
+        [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+      expect(outcome.calls, outcome.stderr).toMatchObject({ native: 1, grok: 1, cleared: 0 });
+      expect(outcome.receiptExists).toBe(true);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, sharedTeardown: "refused" });
+      expect(outcome.exitCode).toBe(1);
+    }, 20_000);
+  }
+  for (const mode of ["api-native-hub", "api-file-hub", "api-native-pending", "late-catalog-hub", "late-history-hub"] as const) {
+    test(`R6 follow-up real writes (${mode}) preserve new ownership`, () => {
+      const codex = join(home, "codex"); mkdirSync(codex);
+      writeFileSync(join(home, "config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai", syncResumeHistory: false }));
+      const child = spawnSync(process.execPath, [fixturePath("stop-restore-writer-runner.ts"), mode], {
+        cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codex, GROK_HOME: join(home, "grok") },
+        encoding: "utf8", timeout: 20_000, windowsHide: true,
+      });
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      const result = JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+      expect(result.after).toEqual(result.before);
+      expect(result.grokCalls).toBe(0);
+      if (mode.startsWith("api-")) expect(result.result).toMatchObject({
+        success: mode !== "api-native-pending", sharedTeardown: mode === "api-native-pending" ? "refused" : "not-owned",
+      });
+      else expect(result.result.boundary).toBe("hub-owned");
+    }, 20_000);
+  }
+  test("R6 follow-up API pending ownership returns 409 and keeps serving", () => {
+    connectClient("link");
+    const codex = join(home, "codex"); mkdirSync(codex);
+    const child = spawnSync(process.execPath, [fixturePath("api-stop-exit-runner.ts"), "pending"], {
+      cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codex },
+      encoding: "utf8", timeout: 20_000, windowsHide: true,
+    });
+    expect(child.error, child.stderr).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(readFileSync(join(home, "api-stop-exit-result.json"), "utf8"));
+    expect(result).toMatchObject({ responseStatus: 409, refusedKeptServing: true, automaticRestarted: true, receiptState: "valid",
+      body: { success: false, sharedTeardown: "refused" },
+      calls: { apiNative: 0, apiGrok: 0, exitNative: 0, exitGrok: 0 } });
+  }, 20_000);
+  for (const mode of ["concurrent-refusals", "throws", "drain-refusal", "drain-throws", "deadline-refusal", "drain-deadline-refusal", "listener-deadline-refusal", "accepted-control", "signal-control"] as const) {
+    test(`${mode.endsWith("control") ? "stop intent control" : "R6 stop intent"} ${mode} retains the right restart authority`, () => {
+      const child = spawnSync(process.execPath, [fixturePath("stop-intent-runner.ts"), mode], {
+        cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home },
+        encoding: "utf8", timeout: 20_000, windowsHide: true,
+      });
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      const result = JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+      expect(result.probes).toEqual(mode === "concurrent-refusals" ? [0, 0, 1] : mode === "accepted-control" ? [0, 0, 0] : mode === "signal-control" ? [0, 0] : [0, 1]);
+      expect(result.scheduledStops).toBe(mode === "accepted-control" ? 1 : 0);
+      if (mode === "throws" || mode === "drain-throws") expect(result.outcomes).toEqual([{ error: "Error: fixture teardown error" }]);
+      else expect(result.outcomes.map((outcome: { status: number }) => outcome.status))
+        .toEqual(mode === "concurrent-refusals" ? [409, 409] : mode === "accepted-control" ? [200, 409] : [409]);
+      if (mode === "deadline-refusal") {
+        expect(result.drainBudgets).toEqual([0]);
+        expect(result.healthWaits).toEqual([false]);
+      }
+      if (mode === "drain-deadline-refusal" || mode === "listener-deadline-refusal") {
+        expect(result.drainBudgets).toEqual([60_000]);
+        expect(result.healthWaits).toEqual([false]);
+      }
     }, 20_000);
   }
   test("a busy client lifecycle lock at the restore boundary keeps the obligation instead of restoring", async () => {

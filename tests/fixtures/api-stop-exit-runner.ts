@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
-const query = process.argv[2] as "valid" | "foreign" | "missing" | "none";
+const query = process.argv[2] as "valid" | "foreign" | "missing" | "none" | "pending";
 const home = process.env.OPENCODEX_HOME;
 if (!home || !process.env.CODEX_HOME) throw new Error("isolated fixture homes required");
 delete process.env.OCX_SERVICE;
@@ -32,8 +32,9 @@ mock.module("../../src/grok/inject", () => ({ ...grok,
 const { claimPendingTeardown, readPendingTeardown } = await import("../../src/config/pending-teardown");
 const { isSharedTeardownDeferredOnExit } = await import("../../src/server/stop-teardown");
 const { preserveConnectedClientRoutingOnExit } = await import("../../src/cli/stop-restore");
+const { stopRestoreWriteGuard } = await import("../../src/cli/stop-restore-guard");
 const { decideStartExitTeardown } = await import("../../src/cli/dispatch");
-const { setServerRef, setServerStartupLifecycleReleaseForTests } = await import("../../src/server/lifecycle");
+const { setServerRef, setServerStartupLifecycleReleaseForTests, isRecyclingForExit, markRecyclingForExit } = await import("../../src/server/lifecycle");
 const { handleManagementAPI } = await import("../../src/server/management-api");
 const { directLocalHttpFetch } = await import("../../src/server/direct-local-http");
 const config = { port: 0, hostname: "127.0.0.1", providers: {}, defaultProvider: "openai", shutdownTimeoutMs: 0 };
@@ -59,10 +60,13 @@ const to = source.indexOf("\n  let shuttingDown", from);
 if (from < 0 || to < 0) throw new Error("CLI exit cleanup missing");
 const bindings = {
   catalogHealer: null, routingHealer: null, guardian: { stop() {} }, historyGuardian: null, healthSentinel: null,
-  siblingStart: false, isRecyclingForExit: () => false, decideStartExitTeardown, preserveConnectedClientRoutingOnExit,
+  siblingStart: false, isRecyclingForExit, decideStartExitTeardown, preserveConnectedClientRoutingOnExit, stopRestoreWriteGuard,
   revertSystemEnv() { calls.env++; }, removePid() { calls.pid++; }, removeRuntimePort() { calls.runtime++; },
   serviceEnvironmentOwnedHere: () => true, getCodexHome: () => process.env.CODEX_HOME!, codexHomeIsAbsent: () => false,
-  restoreNativeCodex: () => { calls.exitNative++; events.push("native-exit"); return restored; },
+  restoreNativeCodex: (options?: { withWriteGuard?: <T>(write: () => T) => T }) => {
+    const write = () => { calls.exitNative++; events.push("native-exit"); return restored; };
+    return options?.withWriteGuard ? options.withWriteGuard(write) : write();
+  },
   stripGrokConfig: () => { calls.exitGrok++; events.push("grok-exit"); return { ok: true, changed: true, message: "fixture stripped" }; },
 };
 const cleanup = new Function(...Object.keys(bindings),
@@ -70,21 +74,43 @@ const cleanup = new Function(...Object.keys(bindings),
 )(...Object.values(bindings)) as () => boolean;
 let responseStatus: number | undefined;
 let body: unknown;
+let refusedKeptServing = false;
+let automaticRestarted = false;
 process.on("exit", () => { events.push("exit-cleanup"); cleanup(); });
 process.on("exit", () => {
   writeFileSync(join(home, "api-stop-exit-result.json"), JSON.stringify({
     calls, events, responseStatus, body, port: config.port,
-    deferredOnExit: isSharedTeardownDeferredOnExit(), receiptState: readPendingTeardown(receipt.nonce).state,
+    deferredOnExit: isSharedTeardownDeferredOnExit(), receiptState: readPendingTeardown(receipt.nonce).state, refusedKeptServing, automaticRestarted,
   }));
 });
 
 const url = new URL("/api/stop", server.url);
+if (query === "pending") (await import("../../src/client/state")).markClientConnectPending("b".repeat(64));
 if (query !== "none") url.searchParams.set("deferSharedTeardown", "1");
 if (query === "valid") url.searchParams.set("teardownNonce", receipt.nonce);
 if (query === "foreign") url.searchParams.set("teardownNonce", "ffffffffffffffffffffffffffffffff");
 const response = await directLocalHttpFetch(url, { method: "POST", signal: AbortSignal.timeout(5_000) }, { timeoutMs: 5_000 });
 responseStatus = response.status;
 body = await response.json();
+if (query === "pending") {
+  await Bun.sleep(350); // An accepted stop would already have drained and exited.
+  const probe = await directLocalHttpFetch(new URL("/api/stop", server.url), { method: "GET", signal: AbortSignal.timeout(2000) }, { timeoutMs: 2000 });
+  refusedKeptServing = probe.status === 200;
+  await probe.body?.cancel();
+  (await import("../../src/client/state")).clearClientConnectPending("b".repeat(64));
+  let scheduled!: () => void | Promise<void>;
+  (await import("../../src/server/management/system-restart")).acceptSystemRestart({
+    isShutdownDraining: () => false, getActiveTurnCount: () => 0,
+    acquireTemporaryDrain: () => ({ release() {} }), beginShutdownDrain() {},
+    schedule: work => { scheduled = work; }, scheduleDeadline: () => () => {},
+    drainAndShutdown: async () => true, stopListener() {}, listenPort: () => config.port,
+    isDesktopSupervised: () => false, isSupervisedServiceChild: () => false,
+    spawnStart() { automaticRestarted = true; }, markRecycling: markRecyclingForExit, exitProcess() {},
+  }, { onAccepted() {}, beforeScheduledDrain: () => true });
+  await scheduled();
+  await server.stop(true);
+  process.exit(0);
+}
 if (response.status !== 200) {
   await server.stop(true);
   throw new Error(`unexpected API stop status: ${response.status}`);

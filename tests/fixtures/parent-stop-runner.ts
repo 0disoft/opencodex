@@ -36,6 +36,10 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   connectAfterBoundary?: boolean;
   pendingAfterBoundary?: boolean;
   connectDuringRestore?: boolean;
+  connectAfterExitInspection?: boolean;
+  pendingAfterExitInspection?: boolean;
+  pendingAfterGrok?: boolean;
+  receiptClearBusy?: boolean;
   /** #7423: run the stop the way an update that restarts the proxy runs it. */
   handover?: boolean;
   /** The runtime-port record is missing, so the stop can only record a guessed endpoint. */
@@ -62,6 +66,7 @@ if (options.proxyProbePort) {
   process.exit(0);
 }
 const home = process.env.OPENCODEX_HOME!;
+const publishPending = () => writeFileSync(join(home, "client-connect-pending"), "b".repeat(64) + "\n");
 function writeHubConnection(): void {
   const serverUrl = "https://hub.example.test";
   writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
@@ -79,13 +84,16 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
     calls.lifecycle += 1;
     const value = work(Object.freeze({}) as Parameters<typeof work>[0]);
     if (options.connectAfterBoundary) queueMicrotask(writeHubConnection);
-    if (options.pendingAfterBoundary) queueMicrotask(() => writeFileSync(join(home, "client-connect-pending"), "b".repeat(64) + "\n"));
+    if (options.pendingAfterBoundary) queueMicrotask(publishPending);
     return value;
   },
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
 const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0, lifecycle: 0 };
+let receiptBlocker: import("bun:sqlite").Database | undefined;
+const { Database } = await import("bun:sqlite");
+const { prepareConfigMutationDatabasePathForWrite } = await import("../../src/config");
 const urls: string[] = [];
 const probes: string[] = [];
 const transports: string[] = [];
@@ -120,6 +128,7 @@ mock.module("node:child_process", () => ({
 
 const receipts = await import("../../src/config/pending-teardown");
 process.on("exit", () => {
+  receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
     calls, urls, probes, transports, unexpectedIo, nonce,
     receiptExists: nonce !== undefined && existsSync(receipts.pendingTeardownPathFor(nonce)),
@@ -196,7 +205,15 @@ mock.module("../../src/codex/inject", () => ({
 const grok = await import("../../src/grok/inject");
 mock.module("../../src/grok/inject", () => ({
   ...grok,
-  stripGrokConfig: () => { calls.grok += 1; return { ok: true, changed: true, message: "Grok restored" }; },
+  stripGrokConfig: () => {
+    calls.grok += 1;
+    if (options.pendingAfterGrok) queueMicrotask(publishPending);
+    if (options.receiptClearBusy) queueMicrotask(() => {
+      receiptBlocker = new Database(prepareConfigMutationDatabasePathForWrite(), { readwrite: true, create: true });
+      receiptBlocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    });
+    return { ok: true, changed: true, message: "Grok restored" };
+  },
 }));
 const systemEnv = await import("../../src/server/system-env");
 mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
@@ -271,14 +288,23 @@ if (options.exitCleanup) {
   const bindings = {
     catalogHealer: null, routingHealer: null, guardian: { stop() {} }, historyGuardian: null, healthSentinel: null,
     siblingStart: false, isRecyclingForExit: () => false, decideStartExitTeardown: dispatch.decideStartExitTeardown,
-    preserveConnectedClientRoutingOnExit: (restore as Record<string, unknown>).preserveConnectedClientRoutingOnExit,
+    preserveConnectedClientRoutingOnExit: (teardown: Parameters<typeof restore.preserveConnectedClientRoutingOnExit>[0]) => {
+      const decision = restore.preserveConnectedClientRoutingOnExit(teardown);
+      if (options.connectAfterExitInspection) writeHubConnection();
+      if (options.pendingAfterExitInspection) publishPending();
+      return decision;
+    },
+    stopRestoreWriteGuard: (await import("../../src/cli/stop-restore-guard")).stopRestoreWriteGuard,
     revertSystemEnv() {}, removePid() {}, removeRuntimePort() {}, serviceEnvironmentOwnedHere: () => true,
     getCodexHome: () => "fixture", codexHomeIsAbsent: () => false,
-    restoreNativeCodex: () => { calls.native++; return options.restore; },
+    restoreNativeCodex: (restoreOptions?: { withWriteGuard?: <T>(write: () => T) => T }) => {
+      const write = () => { calls.native++; return options.restore; };
+      return restoreOptions?.withWriteGuard ? restoreOptions.withWriteGuard(write) : write();
+    },
     stripGrokConfig: () => { calls.grok++; return { ok: true, changed: true, message: "stripped" }; },
   };
   const cleanup = new Function(...Object.keys(bindings), "let cleaned = false; let cleanupSucceeded = true;\n" + source.slice(from, to) + "\nreturn syncCleanup();");
-  cleanup(...Object.values(bindings));
-  process.exit(0);
+  const succeeded = cleanup(...Object.values(bindings));
+  process.exit(succeeded ? 0 : 1);
 }
 await import("../../src/cli/index");

@@ -31,6 +31,23 @@ const history = await import("../../src/codex/history-job");
 mock.module("../../src/codex/history-job", () => ({ ...history, runCodexHistoryJob: async () => ({ kind: "skipped" }) }));
 const grok = await import("../../src/grok/inject");
 let grokCalls = 0;
+let lateSnapshot: string[] | undefined;
+const lateHistory = mode === "late-history-hub";
+const lateCatalog = mode === "late-catalog-hub";
+let historyArmed = false;
+let catalogArmed = false;
+if (lateHistory) mock.module("../../src/codex/history-job", () => ({ ...history, runCodexHistoryJob: async () => {
+  if (!historyArmed) return { kind: "skipped" };
+  await Promise.resolve(); publishHub(); lateSnapshot = snapshot(); return { kind: "skipped" };
+} }));
+const fileLocks = await import("../../src/codex/config-write-lock");
+const releaseFile = fileLocks.releaseConfigWriteLock;
+if (lateCatalog) mock.module("../../src/codex/config-write-lock", () => ({ ...fileLocks,
+  releaseConfigWriteLock: (held: Parameters<typeof releaseFile>[0]) => {
+    releaseFile(held);
+    if (catalogArmed) { catalogArmed = false; publishHub(); lateSnapshot = snapshot(); }
+  },
+}));
 mock.module("../../src/grok/inject", () => ({ ...grok, stripGrokConfig: () => { grokCalls++; return { ok: true, changed: false, message: "fixture" }; } }));
 const log = console.log;
 console.log = () => {};
@@ -46,16 +63,27 @@ try {
   // Keep lifecycle fixture admission local; N, C and the config-file lock below are real.
   const inspected = restoreBoundaryOwnership({ withLifecycle: work => work({} as never) });
   if (inspected !== "restore") throw new Error(`unexpected initial boundary: ${inspected}`);
-  if (mode === "file-hub") {
+  historyArmed = true;
+  catalogArmed = true;
+  const apiMode = mode.startsWith("api-");
+  if (mode.endsWith("file-hub")) {
     fileBlocker = await acquireConfigWriteLock(CODEX_CONFIG_PATH, { timeoutMs: 0 });
     if (!fileBlocker.ok) throw new Error("file blocker acquisition failed");
-  } else nativeBlocker = openCodexCoordinatorTransaction(coordinator);
+  } else if (!lateCatalog && !lateHistory) nativeBlocker = openCodexCoordinatorTransaction(coordinator);
   let completed = false;
-  const pending = restoreSharedClientStateAfterStop(() => {}).finally(() => { completed = true; });
+  const pending = (apiMode
+    ? (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"))
+    : restoreSharedClientStateAfterStop(() => {})).finally(() => { completed = true; });
+  if (lateCatalog || lateHistory) {
+    const result = await pending;
+    if (!lateSnapshot) throw new Error("late publication checkpoint was not reached");
+    log(JSON.stringify({ result, before: lateSnapshot, after: snapshot(), grokCalls, marker: false }));
+    process.exitCode = 0;
+  } else {
   // Observe the real restore waiting, before allowing the writer's publication to win.
   await Bun.sleep(100);
   if (completed) throw new Error("restore did not wait for the concurrent writer");
-  if (mode === "native-pending") withConfigMutationLockSync(() => markClientConnectPending("b".repeat(64)));
+  if (mode.endsWith("native-pending")) withConfigMutationLockSync(() => markClientConnectPending("b".repeat(64)));
   else publishHub();
   const before = snapshot();
   if (fileBlocker?.ok) releaseConfigWriteLock(fileBlocker.handle);
@@ -63,6 +91,7 @@ try {
   nativeBlocker?.rollback(); nativeBlocker?.close(); nativeBlocker = undefined;
   const result = await pending;
   log(JSON.stringify({ result, before, after: snapshot(), grokCalls, marker: existsSync(join(home, "client-connect-pending")) }));
+  }
 } finally {
   if (fileBlocker?.ok) releaseConfigWriteLock(fileBlocker.handle);
   nativeBlocker?.rollback(); nativeBlocker?.close();
