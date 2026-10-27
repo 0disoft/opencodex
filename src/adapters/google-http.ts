@@ -4,7 +4,7 @@ import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { debugProviderDiagnosticLazy } from "../lib/debug";
-import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { extractGoogleRetryAfterSeconds, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -13,6 +13,7 @@ import {
   abortError,
   cancelResponseBodyBestEffort,
   fetchWithAttemptDeadline,
+  RETRY_AFTER_CEILING_MS,
   retryBackoffDelayMs,
   sleepWithAbort,
   SendBudgetExhaustedError,
@@ -129,19 +130,34 @@ export async function fetchGoogleWithRetry(
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek)) {
-          return ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
+          if (ctx.returnRawErrors) return res;
+          const normalized = await normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
+          if (!normalized.headers.has("retry-after")) {
+            const retryAfter = extractGoogleRetryAfterSeconds(peek);
+            if (retryAfter) normalized.headers.set("retry-after", retryAfter);
+          }
+          return normalized;
         }
       }
-      pendingResponse = res;
-      recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
-      retryDelayMs = retryBackoffDelayMs(attempt, {
+      // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds
+      // only our own backoff; it must not shorten the provider's instruction into a send it
+      // already said it would refuse. An instruction past the shared wait deadline ends with
+      // this upstream answer, Retry-After intact, exactly as fetchWithTransientRetry does.
+      const delayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
         headers: res.headers,
+        retryAfterIsLowerBound: true,
       });
+      if (delayMs > RETRY_AFTER_CEILING_MS) {
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+      }
+      pendingResponse = res;
+      recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";
+      retryDelayMs = delayMs;
     } catch (err) {
       if (ctx.abortSignal?.aborted) throw err;
       if (err instanceof SendBudgetExhaustedError) {
