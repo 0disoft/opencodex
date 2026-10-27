@@ -101,9 +101,15 @@ const receipt = receipts.claimPendingTeardown({ hostname: "127.0.0.1", port: 101
 let heldHistory: Database | undefined;
 const grok = await import("../../src/grok/inject");
 if (ownership === "history-busy") {
+  // Let the real serialization owner create and harden the H database first. A file this
+  // fixture created itself would carry the umask mode, and on POSIX H refuses anything but
+  // 0600 as an unsafe path; that would exercise "unsafe-path", not the contention under test.
+  const { withHistoryWriteSerialization } = await import("../../src/codex/history-lock");
+  const prepared = withHistoryWriteSerialization(realpathSync.native(codex), canonicalDb, () => undefined);
+  if (prepared.kind !== "completed") throw new Error(`H preparation failed: ${prepared.reason}`);
   const identity = await import("../../src/codex/user-identity");
   const lockPath = identity.resolveCodexHistorySerializationDatabasePath(identity.resolveEffectiveUserIdentity(), realpathSync.native(codex), canonicalDb);
-  heldHistory = new Database(lockPath, { create: true });
+  heldHistory = new Database(lockPath);
   heldHistory.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
   mkdirSync(process.env.GROK_HOME!, { recursive: true });
   const seededGrok = grok.injectGrokConfig(10100, []);
