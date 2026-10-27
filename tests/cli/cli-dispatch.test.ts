@@ -182,7 +182,7 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]);
     } finally {
       sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
     }
@@ -610,7 +610,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const cleanup = slice("const syncCleanup = () => {", "let shuttingDown = false;");
     expect(cleanup).toContain("decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE })");
     expect(cleanup).toContain("if (teardown.revertSystemEnv) {");
-    expect(cleanup).toContain("if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {");
+    expect(cleanup).toContain("if (teardown.restoreNativeCodex) {");
     expect(cleanup).toContain("if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {");
     expect(cleanup).not.toContain("preserveRouting");
   });
@@ -622,15 +622,18 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // Read before the first stop can remove the record.
     expect(readAt).toBeLessThan(stop.indexOf("stopServiceIfInstalledDetailed()"));
     expect(stop).toContain("if (teardownNonce || stoppingSibling) return;");
-    expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
-    expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling) record.sharedTeardown = "performed-by-proxy";');
+    // #7563 adds a connected client to the same gate; the sibling term is unchanged.
+    expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
+    expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";');
+    expect(stop).toContain("fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,");
     // The system env was never the sibling's to set, so its stop does not roll it back either.
     expect(stop).toContain("if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }");
     expect(stop).not.toMatch(/\n {2}try \{ revertSystemEnv\(\); \}/);
     // A sibling never runs under a service manager, so an installed one is the live owner's. Asking
     // it failed the ownership check from the sibling's home: exit 1, and after a hard kill the
     // stale sibling records were never purged.
-    expect(stop).toContain(': stoppingSibling ? "absent" : stopServiceIfInstalledDetailed();');
+    // #7423: the non-sibling branch claims an update-handover receipt first; the sibling term is unchanged.
+    expect(stop).toContain(': stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());');
     // The only other caller is the guarded desktop step, which reaches the manager only when it
     // provably owns the approved pid; a sibling's pid never is.
     expect(stop.split("stopServiceIfInstalledDetailed()").length - 1).toBe(2);
@@ -1363,4 +1366,41 @@ describe("CLI usage recovery contracts", () => {
       } finally { err.mockRestore(); }
     },
   );
+});
+
+
+describe("explicit sync restart after a committed configuration change", () => {
+  for (const scenario of [
+    { changed: true, ok: true, requested: true, expected: 1 },
+    { changed: false, ok: true, requested: true, expected: 0 },
+    { changed: true, ok: false, requested: true, expected: 0 },
+    { changed: true, ok: true, requested: false, expected: 0 },
+  ]) test(JSON.stringify(scenario), async () => {
+    const state = await import("../../src/client/state");
+    const sync = await import("../../src/codex/sync");
+    const restart = await import("../../src/cli/restart-scope");
+    const aside = await import("../../src/cli/aside-profiles");
+    const stateSpy = spyOn(state, "readClientConnectionState").mockReturnValue({ kind: "disconnected" });
+    const syncSpy = spyOn(sync, "syncModelsToCodex").mockResolvedValue({
+      status: "applied", ok: scenario.ok, configChanged: scenario.changed,
+      added: 0, catalogPath: null, catalogExists: false, catalogWritten: false, cacheSynced: false, message: "fixture",
+    });
+    const restartSpy = spyOn(restart, "handleRestartScopeAfterWrite").mockResolvedValue({});
+    const asideSpy = spyOn(aside, "refreshAsideProfilesThroughServer").mockResolvedValue([]);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const network = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request"));
+    try {
+      const args = scenario.requested ? ["sync", "--restart-codex"] : ["sync"];
+      expect(await dispatchCommand({ kind: "command", command: "sync", args }, {
+        ...fakeDeps, args, findLiveProxy: async () => null,
+      })).toBe(scenario.ok ? 0 : 1);
+      expect(restartSpy).toHaveBeenCalledTimes(scenario.expected);
+      if (scenario.expected) expect(restartSpy.mock.calls[0]![0]).toEqual({ appServers: true, desktopApp: true });
+      expect(network).not.toHaveBeenCalled();
+    } finally {
+      stateSpy.mockRestore(); syncSpy.mockRestore(); restartSpy.mockRestore(); asideSpy.mockRestore();
+      log.mockRestore(); error.mockRestore(); network.mockRestore();
+    }
+  });
 });

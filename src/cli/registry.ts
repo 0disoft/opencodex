@@ -9,10 +9,16 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "codex-provider",
+    usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
+    summary: "Explicitly allow or revoke local routing management for a custom Codex provider.",
+    details: ["Consent is bound to the selected CODEX_HOME and provider ID. Only base_url is managed; transport settings and history are preserved."],
+  },
+  {
     name: "message",
-    usage: "ocx message <sessions|send> [options]",
-    summary: "Discover loaded local Codex sessions and submit one queued peer message.",
-    details: ["Local Unix transport only; starts no daemon. queued is submission, not processing; never replay an unknown send."],
+    usage: "ocx message <sessions|send|enable|disable|status|hosts|serve> [options]",
+    summary: "Discover loaded Codex sessions and queue messages locally or through explicit SSH peers.",
+    details: ["Remote listeners/tunnels require explicit foreground serve; no daemon start. queued is submission, not processing; never replay an unknown send."],
   },
   {
     name: "chatgpt",
@@ -44,7 +50,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "stop",
     usage: "ocx stop [--json]",
-    summary: "Stop the proxy and restore native Codex config.",
+    summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
@@ -144,7 +150,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -152,6 +158,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
       "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
@@ -174,13 +181,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
-      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
+      "--expect-link <linkId> syncs only when this machine is a connected Remote Link Child of that link (ocx connect status --json reports link.linkId); --expect-hub-key <apiKeyId> does the same for a hub client's key. The check runs under the lock that chooses the sync path.",
+      "Any other state (disconnected, another link or key, the other client kind, a pending key rotation, connect or disconnect) changes nothing, never syncs local providers, exits 5, and prints {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...} as the last stderr line. A malformed or repeated flag exits 2.",
     ],
   },
   {
@@ -226,9 +235,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "login",
-    usage: "ocx login <provider>",
+    usage: "ocx login <provider> [--headless]",
     summary: "OAuth or API-key login for a provider.",
     details: [
+      "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
@@ -336,6 +346,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "pool <provider>          Read/edit runtime-supported pool policy.",
       "credits openai ...       Explicit paid-credit-after-limit policy; separate from displaying balances.",
+      "use-remaining openai <id|main> <on|off|status>  Use included quota up to its limit.",
       "quota-activation openai  Enable/disable one account reset-window refresh policy.",
       "anthropic-reset-grants   Read grant status only; consumption remains in the dashboard.",
       "login supports explicit browser/add-account options only for applicable flows; human verification remains required.",
@@ -427,6 +438,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "fallback",
+    usage: "ocx fallback <status|off|on|clear|local> [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]",
+    summary: "Turn model and provider fallback off or on per scope, and record per-device local fallback.",
+    details: [
+      "A refused fallback answers fallback_refused with the status of the failure that triggered it, and names the command that allows it.",
+      "Precedence: a device set to off always refuses; otherwise route, then provider, then global; unset allows.",
+      "Rotation among the accounts or keys of one provider pool is not a fallback and is not governed here.",
+      "Live proxy only. On a Remote Link Child, status reads the Home; writes are refused. Run write commands on the Home.",
+    ],
+  },
+  {
     name: "agent",
     usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...",
     summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.",
@@ -444,11 +466,21 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone.",
     ],
   },
-  { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
+  {
+    name: "logs",
+    usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]; ocx logs history [selectors] [--cursor <token>] [--json|--jsonl]; ocx logs get <request-id> [--json]",
+    summary: "Read or follow request logs.",
+    details: [
+      "Default reads the recent ring. `history` pages the derived index with a resumable cursor; `get` reads one canonical row; `explain` is the route-decision view.",
+    ],
+  },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]; ocx usage compare [--range <today|1d|7d|30d>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
+    details: [
+      "`compare` reads the current named range and the previous equal window; `--range all` is refused.",
+    ],
   },
   {
     name: "storage",
@@ -486,13 +518,14 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <qoder|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder) wired to the running proxy.",
+    usage: "ocx export --client <qoder|qoder-cn|workbuddy|workbuddy-ai|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid|gentle-shell> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Gentle Shell) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",
       "Cline exports a two-document bundle: settings for providers.json and catalog for sibling models.json. Use integration client enable --client cline for a journaled write.",
       "Droid exports documented customModels for settings.json; use integration client enable --client droid for a journaled write.",
+      "Gentle Shell uses its persistent selected home; use integration client enable --client gentle-shell for a journaled write, or Pi for link/shared homes.",
       "The config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
     ],
@@ -516,14 +549,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "system",
     usage: "ocx system <status|health|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
-    summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
+    summary: "Manage headless runtime settings, health, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection and planning.",
     details: [
       "system update manages OpenCodex itself.",
       "system health reads authenticated service and spend-ledger diagnostics; root health remains liveness.",
       "ocx system codex-cli-update check [--json]",
       "ocx system codex-cli-update attest [--json]",
       "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
-      "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
+      "ocx system codex-cli-update plan [--channel latest] [--json]",
+      "check and attest make no package-registry request, do not execute Codex or npm, and write nothing. plan adds a registry query and a process-table read and mutates no application state (temporary isolated npm files only, removed best-effort).",
     ],
   },
   {

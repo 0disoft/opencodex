@@ -3,7 +3,10 @@ import { evaluateUsageRewrite } from "../../src/codex/desktop-compatibility/usag
 import { afterEach, describe, expect, test } from "bun:test";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { X509Certificate } from "node:crypto";
-import { createDesktopCompatibilityRuntime } from "../../src/codex/desktop-compatibility/runtime";
+import { createDesktopCompatibilityRuntime, type DesktopRuntimeIo } from "../../src/codex/desktop-compatibility/runtime";
+import { createInstalledBuildProbe, DESKTOP_COMPATIBILITY_ASSESSED_VERSION } from "../../src/codex/desktop-compatibility/installed-build";
+import type { DesktopPackageObservation as DesktopAppInstall } from "../../src/codex/desktop-compatibility/installed-build";
+import { desktopPackageObservation } from "../helpers/desktop-package-observation";
 import { UsageRelayController, type UsageIdentity } from "../../src/codex/desktop-compatibility/usage-controller";
 import { desktopCompatibilityRuntimeActive, readDesktopCompatibilityLaunch } from "../../src/codex/desktop-compatibility/runtime-ownership";
 import { captureWindowsCompatibilityContext, assertWindowsCompatibilityContext } from "../../src/codex/desktop-compatibility/windows-package-command";
@@ -171,14 +174,16 @@ describe("bounded compatibility usage controller", () => {
   });
 });
 
-function fixture(trusted = true, connectionStore?: DesktopConnectionStore, buildProbe?: () => boolean | Promise<boolean>) {
+function fixture(trusted = true, connectionStore?: DesktopConnectionStore, buildProbe?: () => boolean | Promise<boolean>,
+  probeFactory?: DesktopRuntimeIo["testOnlyBuildProbe"]) {
   const authority = createCertificateAuthority({ commonName: "runtime-fixture", validityDays: 1 });
   const cert = new X509Certificate(authority.certPem);
   const identity = { readCurrentIdentity: async () => account, verifyFreshIdentity: async () => account };
   const calls: { path: string; method: string; bytes: number; cookie: string | null }[] = [];
   let streamSequence = 0, cancelledStreams = 0, buildSupported = true, routingSupported = true;
   let connection: DesktopConnectionIdentity | null = null;
-  const runtime = createDesktopCompatibilityRuntime({ platform: "win32", testOnly: true, identity, buildSupported: () => buildProbe ? buildProbe() : buildSupported,
+  const runtimeIo: DesktopRuntimeIo = { platform: "win32", testOnly: true, identity,
+    ...(probeFactory ? { testOnlyBuildProbe: probeFactory } : { buildSupported: () => buildProbe ? buildProbe() : buildSupported }),
     routingSupported: () => routingSupported,
     connectionStore: connectionStore ?? { read: () => connection, publish: async value => (connection ??= value) },
     loadAuthority: async () => ({ authority, commonName: "runtime-fixture", fingerprint: cert.fingerprint256.replaceAll(":", ""),
@@ -195,12 +200,174 @@ function fixture(trusted = true, connectionStore?: DesktopConnectionStore, build
       }), { headers: { "content-type": "text/event-stream" } });
       return new Response(data, { headers: { "content-type": "application/octet-stream", "set-cookie": "fixture=kept; Secure" } });
     }) as typeof fetch,
-  });
+  };
+  const runtime = createDesktopCompatibilityRuntime(runtimeIo);
   stopped.push(() => runtime.stop());
-  return { runtime, authority, calls, cancelledStreams: () => cancelledStreams, setBuildSupported: (value: boolean) => { buildSupported = value; }, setRoutingSupported: (value: boolean) => { routingSupported = value; } };
+  return { runtime, runtimeIo, authority, calls, cancelledStreams: () => cancelledStreams, setBuildSupported: (value: boolean) => { buildSupported = value; }, setRoutingSupported: (value: boolean) => { routingSupported = value; } };
 }
 
 describe("optional native compatibility runtime", () => {
+  const assessedInstall = desktopPackageObservation;
+
+  for (const completion of ["success", "rejection"] as const) {
+    test(`late ${completion} from a replaced runtime cannot invalidate its successor`, async () => {
+      let hold = false, entered!: () => void, resolveOld!: (value: boolean) => void, rejectOld!: (error: Error) => void;
+      const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+      // The override isolates the runtime epoch fence: production probe.close() separately drains its child.
+      const io = fixture(true, undefined, () => {
+        if (!hold) return true;
+        entered(); return new Promise<boolean>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; });
+      });
+      const read = async () => {
+        const pac = await fetch(io.runtime.getPacUrl()!).then(response => response.text());
+        const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+        return fetch("https://chatgpt.com/backend-api/wham/usage", {
+          proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+        }).then(response => response.json());
+      };
+      await io.runtime.start(); await read(); hold = true;
+      const oldApply = io.runtime.apply(true).catch(error => error);
+      await enteredPromise;
+      try {
+        hold = false; await io.runtime.stop(); await io.runtime.start();
+        expect((await io.runtime.apply(true)).accepted).toBe(false);
+        expect(await read()).toEqual(usage);
+        expect((await io.runtime.apply(true)).accepted).toBe(true);
+        const generation = io.runtime.status().usage!.generation;
+        if (completion === "success") resolveOld(true); else rejectOld(new Error("old fixture proof rejected"));
+        expect(await oldApply).toBeInstanceOf(Error);
+        expect(io.runtime.status().contextFailure).toBeNull();
+        expect(io.runtime.status().usage).toMatchObject({ mode: "apply", generation });
+        expect((await read()).rate_limit.allowed).toBe(true);
+      } finally {
+        resolveOld(true); await oldApply; await io.runtime.stop();
+      }
+    }, 15_000);
+  }
+
+  for (const failure of ["same-version-replacement", "unverifiable", "ABA"] as const) {
+    test(`${failure} revokes package-bound trial consent before another corrected response`, async () => {
+      let current: DesktopAppInstall | null = assessedInstall();
+      let probe!: ReturnType<typeof createInstalledBuildProbe>;
+      const io = fixture(true, undefined, undefined, () => (probe = createInstalledBuildProbe(async () => current)));
+      await io.runtime.start();
+      const pac = await fetch(io.runtime.getPacUrl()!).then(res => res.text());
+      const port = /PROXY 127\.0\.0\.1:(\d+)/.exec(pac)![1];
+      const read = () => fetch("https://chatgpt.com/backend-api/wham/usage", {
+        proxy: `http://127.0.0.1:${port}`, tls: { ca: io.authority.certPem },
+      }).then(res => res.json());
+      await read(); expect((await io.runtime.apply(true)).accepted).toBe(true);
+      expect((await read()).rate_limit.allowed).toBe(true);
+      const generation = io.runtime.status().usage!.generation;
+      current = failure === "unverifiable" ? null
+        : { ...assessedInstall(), proof: { ...assessedInstall().proof!, executableIdentity: "1024:100:201" } };
+      if (failure === "ABA") {
+        expect(await probe.check()).toBe(true);
+        current = assessedInstall(); expect(await probe.check()).toBe(true);
+      }
+      expect(await read()).toEqual(usage);
+      expect(io.runtime.status().usage).toMatchObject({ mode: "observe", outputs: 0 });
+      expect(io.runtime.status().usage!.generation).toBeGreaterThan(generation);
+      if (failure === "unverifiable") {
+        current = assessedInstall();
+        // Recovery is another identity transition, not permission to revive consent.
+        await expect(io.runtime.apply(true)).rejects.toThrow("build_unverified");
+      }
+      expect((await io.runtime.apply(true)).accepted).toBe(false);
+      expect(await read()).toEqual(usage);
+      expect((await io.runtime.apply(false)).accepted).toBe(false);
+      expect((await io.runtime.apply(true)).accepted).toBe(true);
+      expect((await read()).rate_limit.allowed).toBe(true);
+      expect(JSON.stringify(io.runtime.status())).not.toContain("ChatGPT.exe");
+      expect(JSON.stringify(io.runtime.status())).not.toContain("manifestDigest");
+      await io.runtime.stop(); await io.runtime.start();
+      expect(io.runtime.status().usage?.mode).toBe("observe");
+      expect((await io.runtime.apply(true)).accepted).toBe(false);
+      await io.runtime.stop();
+    }, 15_000);
+  }
+
+  test("stop/start retains a completed assessment through routing failure and replacement probe pending", async () => {
+    let created = 0, queries = 0, hold = false, entered!: () => void, release!: (install: DesktopAppInstall | null) => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const io = fixture(true, undefined, undefined, () => {
+      created++;
+      return createInstalledBuildProbe(async () => {
+        queries++;
+        if (!hold) return assessedInstall();
+        entered(); return new Promise(resolve => { release = resolve; });
+      });
+    });
+    expect(io.runtime.status()).not.toHaveProperty("buildAssessment"); expect(created).toBe(0);
+    await io.runtime.start();
+    const completed = io.runtime.status().buildAssessment!;
+    expect(completed.verified).toBe(true);
+    await io.runtime.stop(); expect(io.runtime.status().buildAssessment).toEqual(completed);
+    io.setRoutingSupported(false);
+    await expect(io.runtime.start()).rejects.toThrow("native_routing_unverified");
+    expect(created).toBe(2); expect(queries).toBe(1);
+    expect(io.runtime.status().buildAssessment).toEqual(completed);
+    io.setRoutingSupported(true); hold = true;
+    const starting = io.runtime.start(); await waiting;
+    expect(created).toBe(3); expect(io.runtime.status().phase).toBe("starting");
+    expect(io.runtime.status().buildAssessment).toEqual(completed);
+    io.runtime.status().buildAssessment!.verified = false;
+    expect(io.runtime.status().buildAssessment).toEqual(completed);
+    release({ ...assessedInstall(), root: assessedInstall().root.replace(DESKTOP_COMPATIBILITY_ASSESSED_VERSION, "99.1.1.0") });
+    await expect(starting).rejects.toThrow("build_unverified");
+    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: "99.1.1.0", verified: false });
+    expect(io.runtime.status().phase).toBe("off");
+  });
+
+  test("completed failures replace prior observations and runtime stop abort preserves the latest completion", async () => {
+    let mode: "success" | "missing" | "throw" | "pending" = "success", aborted = false, created = 0;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const io = fixture(true, undefined, undefined, () => {
+      created++;
+      return createInstalledBuildProbe(async signal => {
+        if (mode === "throw") throw new Error("fixture query failed");
+        if (mode === "missing") return null;
+        if (mode === "success") return assessedInstall();
+        entered(); return new Promise(resolve => {
+          signal.addEventListener("abort", () => { aborted = true; resolve(null); }, { once: true });
+        });
+      });
+    });
+    await io.runtime.start(); await io.runtime.stop();
+    mode = "missing";
+    await expect(io.runtime.start()).rejects.toThrow("build_unverified");
+    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: null, verified: false });
+    mode = "success"; await io.runtime.start(); await io.runtime.stop();
+    mode = "throw";
+    await expect(io.runtime.start()).rejects.toThrow("build_unverified");
+    expect(io.runtime.status().buildAssessment).toMatchObject({ observedVersion: null, verified: false });
+    mode = "success"; await io.runtime.start();
+    const completed = io.runtime.status().buildAssessment!;
+    mode = "pending";
+    const applying = io.runtime.apply(true).catch(error => error as Error);
+    await waiting; expect(io.runtime.status().buildAssessment).toEqual(completed);
+    await io.runtime.stop();
+    expect(await applying).toBeInstanceOf(Error);
+    expect(((await applying) as Error).message).toContain("not_running");
+    expect(aborted).toBe(true); expect(created).toBe(5);
+    expect(io.runtime.status().buildAssessment).toEqual(completed);
+    expect(desktopCompatibilityRuntimeActive()).toBe(false);
+  });
+
+  test("fixture probe factory requires testOnly and every sandbox seam and cannot mix build overrides", async () => {
+    let created = 0;
+    const io = fixture(true, undefined, undefined, () => { created++; return createInstalledBuildProbe(async () => assessedInstall()); });
+    for (const key of ["testOnly", "identity", "loadAuthority", "trust", "connectionStore", "routingSupported"] as const) {
+      const runtime = createDesktopCompatibilityRuntime({ ...io.runtimeIo, [key]: undefined });
+      await expect(runtime.start()).rejects.toThrow("test_environment");
+      expect(runtime.status().phase).toBe("off");
+    }
+    const mixed = createDesktopCompatibilityRuntime({ ...io.runtimeIo, buildSupported: () => true });
+    await expect(mixed.start()).rejects.toThrow("test_environment");
+    expect(created).toBe(0); expect(desktopCompatibilityRuntimeActive()).toBe(false);
+  });
+
   test("only a serving runtime attests PAC preservation and stop/start invalidates the captured generation", async () => {
     const io = fixture();
     expect(readDesktopCompatibilityLaunch()).toBeNull();

@@ -22,6 +22,8 @@ export {
 export {
   advanceComboAfterFailure,
   clearComboSelectionState,
+  comboExclusionReasons,
+  comboTargetSkipTrigger,
   NoAvailableComboTargetsError,
   noteComboFailure,
   noteComboSuccess,

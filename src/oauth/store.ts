@@ -19,8 +19,11 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
+import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
+import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { assertNoCrossAnthropicRegistration, assertAnthropicCredentialSource, assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
@@ -201,6 +204,7 @@ export function peekOAuthRefreshIntent(provider: string, accountId: string): OAu
 }
 export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): OAuthRefreshIntent {
   const dir = getConfigDir();
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   hardenConfigDir();
   const intent: OAuthRefreshIntent = {
@@ -351,20 +355,26 @@ export function clearOAuthRefreshIntent(provider: string, accountId: string, gen
   });
 }
 export function credentialGeneration(cred: OAuthCredentials): string {
-  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires, ...(cred.workbuddy ? [cred.workbuddy] : [])])).digest("hex");
 }
 
+/** Load and normalize the OAuth auth store with hardened permissions, and hand the result to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
 function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   const path = getAuthStorePath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) return { store: {}, hadLegacy: false };
+  if (!existsSync(path)) { notifyAuthStoreLoaded({}); return { store: {}, hadLegacy: false }; }
+  let result: { store: AuthStore; hadLegacy: boolean };
   try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+    result = normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
   } catch {
     backupInvalidConfig(path);
+    notifyAuthStoreLoaded({});
     return { store: {}, hadLegacy: false };
   }
+  // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
+  notifyAuthStoreLoaded(result.store);
+  return result;
 }
 
 export function loadAuthStore(): AuthStore {
@@ -403,6 +413,7 @@ export function peekAuthStore(): AuthStore {
   return snapshot.kind === "ready" ? snapshot.store : {};
 }
 
+/** Atomically write the auth store with owner-only permissions, then hand it to the opt-in decision-quota slot. */
 function persist(store: AuthStore): void {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
@@ -413,6 +424,7 @@ function persist(store: AuthStore): void {
   }
   hardenConfigDir();
   atomicWriteFile(getAuthStorePath(), JSON.stringify(store, null, 2) + "\n");
+  notifyAuthStoreLoaded(store);
 }
 
 export class OAuthFileLockError extends Error { readonly code = "OAUTH_FILE_LOCK_UNAVAILABLE"; constructor(message: string, options?: { cause?: unknown }) { super(message, options); this.name = "OAuthFileLockError"; } }
@@ -537,6 +549,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   };
   if (typeof candidate.email === "string" && candidate.email.length > 0) normalized.email = candidate.email;
   if (typeof candidate.accountId === "string" && candidate.accountId.length > 0) normalized.accountId = candidate.accountId;
+  const workbuddy = normalizeWorkBuddyMetadata(candidate.workbuddy);
+  if (workbuddy) normalized.workbuddy = workbuddy;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
@@ -638,7 +652,12 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (candidate.refreshAttentionGeneration === credentialGeneration(credential)) {
     account.refreshAttentionGeneration = candidate.refreshAttentionGeneration;
   }
-  if (candidate.paused === true) account.paused = true;
+  if (candidate.paused === true) {
+    account.paused = true;
+    const details = accountPauseDetailsSchema.safeParse(candidate.pauseDetails);
+    if (details.success) account.pauseDetails = details.data;
+  }
+  if (typeof candidate.pauseRevision === "string") account.pauseRevision = candidate.pauseRevision;
   const threshold = parseAnthropicAccountThreshold(candidate.autoSwitchThresholdOverride);
   if (threshold !== null) account.autoSwitchThresholdOverride = threshold;
   if (candidate.needsReauth === true && candidate.needsReauthReason === "verify_account") {
@@ -801,7 +820,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void; withConfigLock?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
@@ -814,7 +833,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Only providers whose credentials this mutation actually removed leave the downgrade
     // backup; a no-op removal names none. The result decides, so it is read here.
     const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
-    options?.assertBeforePersist?.();
+    if (!options?.withConfigLock) options?.assertBeforePersist?.();
     const changedProviders: string[] = [];
     for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
       const before = selections.get(provider);
@@ -837,7 +856,8 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Receipt-producing mutations need the revision assigned by the bookkeeping above, not the
     // provisional value visible inside their callback. Finalization cannot await or mutate disk.
     options?.finalizeResult?.(result, store);
-    persist(store);
+    const publish = () => { if (options?.withConfigLock) options.assertBeforePersist?.(); persist(store); };
+    if (options?.withConfigLock) withConfigMutationLockSync(publish); else publish();
     if (scrubbedProviders.length > 0) scrubLegacyBackup(scrubbedProviders);
     // A committed observer may establish ordering before the generic selection
     // publication, but its failure can never turn a durable write into a reported failure.
@@ -1028,8 +1048,8 @@ export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
-): Promise<void> {
-  await saveCredentialWithReceipt(provider, cred, opts);
+): Promise<OAuthCredentialWriteReceipt | null> {
+  return await saveCredentialWithReceipt(provider, cred, opts);
 }
 
 /**
@@ -1136,7 +1156,7 @@ export async function upsertCredentialByIdentity(
       return Boolean(
         safe.email
         && account.credential.email
-        && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+        && account.credential.email.trim().toLowerCase() === safe.email.trim().toLowerCase(),
       );
     };
     const existing = safe.accountId
@@ -1234,23 +1254,29 @@ export function getAccountCredentialWithStatus(
   };
 }
 
-/** Persist an explicit login/reauth credential for one account; runtime rotations use mergeAccountCredential. */
+/**
+ * Persist an explicit login/reauth credential for one account; runtime rotations use
+ * mergeAccountCredential. Resolves false when nothing was written (the account is gone).
+ */
 export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
   opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
-  if (!safe) return;
+  if (!safe) return false;
+  let written = false;
   await mutateStore(store => {
+    written = false;
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
     account.credential = safe;
+    written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
     delete account.needsReauthReason;
@@ -1263,6 +1289,7 @@ export async function saveAccountCredential(
       set.selectionRevision = randomUUID();
     }
   }, [provider, accountId, safe], { assertBeforePersist: registrationPersistGuard(provider, opts.assertBeforePersist) });
+  return written;
 }
 
 function accountSelection(set: ProviderAccountSet): OAuthAccountSelection {
@@ -1381,17 +1408,23 @@ export async function setAccountPaused(
   provider: string,
   accountId: string,
   paused: boolean,
+  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
 ): Promise<SetAccountPausedResult> {
   const result = await mutateStore(store => {
     const set = store[provider];
     const account = set?.accounts.find(candidate => candidate.id === accountId);
     if (!set || !account) return { status: "not-found" } as const;
-    if ((account.paused === true) === paused) {
+    if (automatic && (automatic.isCurrent?.() === false || credentialGeneration(account.credential) !== automatic.generation
+      || account.pauseRevision !== automatic.pauseRevision)) return { status: "not-found" } as const;
+    if (paused && account.paused === true) {
       return { status: "unchanged", activeAccountId: set.activeAccountId, activeAccountChanged: false } as const;
     }
 
     if (paused) account.paused = true;
     else delete account.paused;
+    account.pauseRevision = randomUUID();
+    if (automatic) account.pauseDetails = automatic.details;
+    else delete account.pauseDetails;
     // Pause is part of selection eligibility even when the operator changes a non-active
     // account. Bump the provider selection revision so observers receive the existing
     // post-persistence roster invalidation and stale automatic proposals cannot commit.
@@ -1425,7 +1458,10 @@ export async function setAccountPaused(
       activeAccountId: set.activeAccountId,
       activeAccountChanged,
     } as const;
-  }, [provider, accountId, paused]);
+  }, [provider, accountId, paused], { withConfigLock: !!automatic, assertBeforePersist: () => {
+    automatic?.assertPolicyBeforePersist?.();
+    if (automatic?.isCurrent?.() === false) throw new Error("Account auto-pause policy changed before persistence");
+  } });
   if (result.status === "updated") publishOAuthAccountPauseChange(provider);
   return result;
 }
@@ -1478,6 +1514,8 @@ export async function replaceProviderAccountSet(
         ...(account.needsReauth ? { needsReauth: true } : {}),
         ...(account.refreshAttentionGeneration ? { refreshAttentionGeneration: account.refreshAttentionGeneration } : {}),
         ...(account.paused ? { paused: true } : {}),
+        ...(account.pauseDetails ? { pauseDetails: account.pauseDetails } : {}),
+        ...(account.pauseRevision ? { pauseRevision: account.pauseRevision } : {}),
         ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
         ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason } : {}),
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),

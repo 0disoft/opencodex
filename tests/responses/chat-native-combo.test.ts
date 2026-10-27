@@ -17,12 +17,14 @@ import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/c
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { chatErrorStream, chatStream, responsesSuccess } from "../helpers/combo-failover-upstream";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 type Rec = Record<string, unknown>;
@@ -50,6 +52,7 @@ beforeEach(() => {
   clearComboTargetCooldowns();
   clearKeyCooldowns();
   clearResponseStateForTests();
+  clearReasoningReplayCacheForTests();
 });
 
 afterEach(async () => {
@@ -66,6 +69,7 @@ afterEach(async () => {
   clearComboTargetCooldowns();
   clearKeyCooldowns();
   resetProviderRequestPacingForTest();
+  clearReasoningReplayCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -74,7 +78,7 @@ afterEach(async () => {
 });
 
 /** A loopback upstream that records every body it receives. */
-function upstream(answer: (body: Rec, hit: number) => Response | Promise<Response>) {
+function upstream(answer: (body: Rec, hit: number, headers: Headers) => Response | Promise<Response>) {
   const bodies: Rec[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -82,7 +86,7 @@ function upstream(answer: (body: Rec, hit: number) => Response | Promise<Respons
     async fetch(request) {
       const body = await request.json() as Rec;
       bodies.push(body);
-      return answer(body, bodies.length);
+      return answer(body, bodies.length, request.headers);
     },
   });
   servers.push(server);
@@ -135,19 +139,46 @@ function comboConfig(
 
 const NATIVE_ON: OcxConfig["protocols"] = { rollout: { nativeChatCombos: true } };
 
-async function send(config: OcxConfig, body: Rec) {
+async function send(config: OcxConfig, body: Rec, options: {
+  headers?: Record<string, string>;
+  admission?: DataPlaneAdmission;
+} = {}) {
   const requestId = `pf07-${crypto.randomUUID()}`;
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...options.headers },
     body: JSON.stringify({ model: "combo/pair", messages: MESSAGES, ...body }),
-  }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+  }), config, { model: "", provider: "" }, {
+    requestId,
+    start: Date.now(),
+    // What the listener resolved; a loopback bind carries no caller identity of its own.
+    ...(options.admission ? { admission: options.admission } : {}),
+  });
   const text = await response.text();
   const rows = getRequestLogEntries().filter(entry => entry.requestId === requestId);
   return { response, text, rows };
 }
 
 describe("native Chat candidates in a combo", () => {
+  test("distributed 401 recovery stays bounded and avoids the failed key on subsequent requests", async () => {
+    const keys: string[] = [];
+    const a = upstream((_body, hit, headers) => {
+      keys.push(headers.get("authorization")!);
+      return hit === 1 ? Response.json({ error: { message: "invalid key" } }, { status: 401 }) : twoChoiceCompletion();
+    });
+    const row = provider("openai-chat", a.baseUrl, { apiKey: "synthetic-first",
+      apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+      requestPacing: { enabled: true, keySelection: "round-robin" } });
+    const config = comboConfig({ a: row }, [{ provider: "a", model: "m1" }], NATIVE_ON);
+    const first = await send(config, { stream: false });
+    expect(first.response.status).toBe(200);
+    expect(a.bodies).toHaveLength(2);
+    const second = await send(config, { stream: false });
+    expect(second.response.status).toBe(200);
+    expect(a.bodies).toHaveLength(3);
+    expect(keys).toEqual(["Bearer synthetic-first", "Bearer synthetic-second", "Bearer synthetic-second"]);
+    expect(config.providers.a!.apiKey).toBe("synthetic-first");
+  });
   test("a native candidate receives the caller's own Chat body, n and logprobs included", async () => {
     const a = upstream(() => twoChoiceCompletion());
     const b = upstream(() => responsesStream("bridge"));
@@ -174,6 +205,63 @@ describe("native Chat candidates in a combo", () => {
       inbound: "chat", mode: "native", requestPath: ["chat", "chat"],
       attempts: [{ ordinal: 1, mode: "native", requestPath: ["chat", "chat"] }],
     });
+  });
+
+  test("native combo plaintext reasoning replay follows admission without changing parent callbacks", async () => {
+    const a = upstream((_body, hit) => Response.json({
+      id: `chatcmpl-replay-${hit}`,
+      object: "chat.completion",
+      model: "m1",
+      choices: [{
+        index: 0,
+        message: hit === 1
+          ? { role: "assistant", content: null, reasoning_content: "private reasoning", tool_calls: [
+            { id: "call_replay", type: "function", function: { name: "inspect", arguments: "{}" } },
+          ] }
+          : { role: "assistant", content: "continued" },
+        finish_reason: hit === 1 ? "tool_calls" : "stop",
+      }],
+    }));
+    const config = comboConfig(
+      { a: provider("openai-chat", a.baseUrl) },
+      [{ provider: "a", model: "deepseek-v4.1-flash" }],
+      NATIVE_ON,
+    );
+    const owner: DataPlaneAdmission = {
+      kind: "configured", keyId: "fixture-owner", source: "dedicated", contextPrincipalId: "principal-owner",
+    };
+    const foreign: DataPlaneAdmission = {
+      kind: "configured", keyId: "fixture-foreign", source: "dedicated", contextPrincipalId: "principal-foreign",
+    };
+    const thread = { "thread-id": "combo-replay-thread" };
+    const first = await send(config, { stream: false }, { headers: thread, admission: owner });
+    expect(first.response.status).toBe(200);
+    expect(first.rows).toHaveLength(1);
+    expect(first.rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
+
+    const history: Rec[] = [
+      { role: "user", content: "fixture" },
+      { role: "assistant", content: null, tool_calls: [
+        { id: "call_replay", type: "function", function: { name: "inspect", arguments: "{}" } },
+      ] },
+      { role: "tool", tool_call_id: "call_replay", content: "done" },
+      { role: "user", content: "continue" },
+    ];
+    const samePrincipal = await send(config, { stream: false, messages: history }, { headers: thread, admission: owner });
+    expect(samePrincipal.response.status).toBe(200);
+    expect(a.bodies[1]!.messages[1]!.reasoning_content).toBe("private reasoning");
+
+    const foreignPrincipal = await send(config, { stream: false, messages: history }, { headers: thread, admission: foreign });
+    expect(foreignPrincipal.response.status).toBe(200);
+    expect(a.bodies[2]!.messages[1]!.reasoning_content).toBe(" ");
+
+    const keyless = await send(config, { stream: false, messages: history }, { headers: thread });
+    expect(keyless.response.status).toBe(200);
+    expect(a.bodies[3]!.messages[1]!.reasoning_content).toBe(" ");
+    // Native children remain on the combo's parent row and retain its send accounting.
+    expect(keyless.rows).toHaveLength(1);
+    expect(keyless.rows[0]!.provider).toBe("combo");
+    expect(keyless.rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
   });
 
   test.each([

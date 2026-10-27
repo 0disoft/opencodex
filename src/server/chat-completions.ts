@@ -40,6 +40,9 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
 import {
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   getOrAllocateRequestSessionLane,
   linkRequestSessionLane,
 } from "./request-log-conversation";
@@ -54,6 +57,7 @@ import {
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
 import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
+import { attachAdvisorReasoning } from "./inference/advisor-diagnostics";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
@@ -68,7 +72,7 @@ import {
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
 } from "./admission-model-scope";
-import type { DataPlaneAdmission } from "./auth-cors";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
 import {
   createTranslatorBudget,
@@ -80,6 +84,7 @@ import { createNativeChatComboSource, handleNativeChatCompletions, nativeChatDec
 import { upstreamWireForAdapter, type ProtocolReasonCode } from "../protocols/contract";
 import { createProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromChatBody } from "../protocols/features";
+import { credentialDomainFor } from "../protocols/opaque-state";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveProtocolSettings } from "../protocols/settings";
@@ -112,10 +117,16 @@ export async function handleChatCompletions(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
+  // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
+  // fallback, so a native id resolved later on the Responses bridge still replaces it.
+  assignNativeLogConversationId(logCtx, nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
   const translatorBudget = createTranslatorBudget();
   try {
+    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
+    if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
-      await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
+      response,
       translatorBudget,
       req.signal,
     );
@@ -339,9 +350,22 @@ async function handleChatCompletionsWithBudget(
     // and sends the core only the request settings.
     if (directRoute) {
       directConversation = chatConversationToIr(chatBody, chatBody.model as string);
+      // Unlike the bridge body below, the settings-only projection does not contain the
+      // conversation. Account for the retained IR itself before an adapter materializes it
+      // again; reasoning placeholders can be larger than the source Chat message.
+      translatorBudget.chargeRetained(
+        Buffer.byteLength(JSON.stringify(directConversation), "utf8"),
+        { kind: "request_copies" },
+      );
       internalBody = chatSettingsBody(chatBody);
     } else {
-      internalBody = chatToResponsesBody(chatBody);
+      internalBody = chatToResponsesBody(chatBody, {
+        // #7429: only a route that is and stays first-party Anthropic may receive signed thinking
+        // a Chat client returns; a combo, policy or rewritten route resolves its target later.
+        acceptAnthropicReasoningSignatures: settledRoute !== null && !routeMayChangeCredentialDomain
+          && settledRoute.provider.adapter === "anthropic"
+          && credentialDomainFor(settledRoute.provider)?.firstPartyAnthropic === true,
+      });
     }
     if (effortRow) {
       internalBody.reasoning = {
@@ -410,6 +434,7 @@ async function handleChatCompletionsWithBudget(
   // Unresolved combos are checked after their concrete child route is selected in Responses.
   if (settledRoute && !settledRoute.combo && isCanonicalOpenAiForwardProvider(settledRoute.provider)
     && isCodexReserveHelperUnsupported(config, settledRoute.modelId, logIds?.admission, visionDescribeTerminal)) {
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(400, CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, "invalid_request_error");
   }
   const nativeCallerAuth = captureExplicitOpenAiCallerAuth(req.headers, config);
@@ -488,6 +513,8 @@ async function handleChatCompletionsWithBudget(
     // #1686: the Chat surface translates its body and replays here, so the admission fact has
     // to ride along or a bearer-admitted Chat caller would still be refused by Direct.
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    // The bridge request carries no caller credential, so resolve the replay principal here.
+    replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
@@ -502,6 +529,9 @@ async function handleChatCompletionsWithBudget(
     ...(envelope && nativeChatCombos ? {
       protocolSource: createNativeChatComboSource({
         req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+        // Children run without logIds; the request's admission rides the source so their
+        // replay scope resolves the same caller principal as every other surface.
+        ...(logIds?.admission ? { admission: logIds.admission } : {}),
       }),
     } : {}),
     // Terminal vision-describe marker (roadmap 180): the bridge rebuilds
@@ -601,6 +631,9 @@ async function handleChatCompletionsWithBudget(
       // below could never restore this one -- the translated client was told the provider
       // throttled the turn, and handed a two-second wait to send it again.
       classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (upstreamCode === "claude_subscription_cooldown") {
+      classified.code = "claude_subscription_cooldown";
+      classified.type = "rate_limit_error";
     } else if (upstreamCode === "model_not_found") {
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";

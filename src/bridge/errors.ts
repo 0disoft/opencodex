@@ -12,18 +12,40 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  isModelNotInPlanRefusal,
+  markVerifiedModelNotInPlanResponse,
+  MODEL_NOT_IN_PLAN_CODE,
+  REQUIRED_TOOL_CONTRACT_CODE,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
   type OcxErrorPayload,
 } from "../lib/errors";
 
+const PINNED_VERDICT_CODES = new Set([CYBER_POLICY_ERROR_CODE, "client_closed_request"]);
+
 export function formatErrorResponse(
   status: number,
   type: string,
   message: string,
-  options?: { code?: string | null; retryAfter?: string | null },
+  options?: { code?: string | null; retryAfter?: string | null; classified?: boolean },
 ): Response {
   const error = classifyError(status, type, message);
+  // A combo child holding an adapterFailureFromEvent verdict has already classified this
+  // failure. Re-deriving it from the status folded insufficient_quota into rate_limit_exceeded
+  // and a 400 modality refusal into invalid_request_error, so the combo loop cooled and hopped
+  // on the wrong evidence. The child body reaches only that loop, whose consumer re-applies
+  // this formatter's allowlist before anything reaches a client. The overrides below still win.
+  // The caller's code fills in only where its type and message add nothing to what the status
+  // alone says. A verdict read from the full message (quota, credentials, cyber policy, context
+  // overflow, catalog size) outranks a generic adapter code: the consumer sees only the first
+  // 500 characters, so replacing it turned a late cyber refusal into a hop and spent quota into a
+  // target cooldown. The baseline uses a neutral type because an untyped adapter event arrives
+  // with a type adapterFailureFromEvent already inferred from that same message.
+  const messageVerdict = error.code !== classifyError(status, "upstream_error", "").code;
+  if (options?.classified && options.code && !messageVerdict && !PINNED_VERDICT_CODES.has(error.code ?? "")) {
+    error.type = type;
+    error.code = options.code;
+  }
   if (options?.code === SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE) {
     error.type = "server_error";
     error.code = SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE;
@@ -36,6 +58,11 @@ export function formatErrorResponse(
   // survives so the Anthropic translator can classify it instead of folding it into a
   // retryable overload (and so clients see the SSE path's rejection identity).
   if (options?.code === UNDECLARED_TOOL_CALL_ERROR_CODE) error.code = options.code;
+  if (options?.code === REQUIRED_TOOL_CONTRACT_CODE && error.code !== CYBER_POLICY_ERROR_CODE) error.code = options.code;
+  // A plan refusal keeps its wire code so clients can branch on it. The code is not provenance:
+  // run-turn combo children pass an adapter event's own code here, so only the boundary that
+  // verified the refusal marks the envelope (`markVerifiedModelNotInPlanResponse`).
+  if (options?.code === MODEL_NOT_IN_PLAN_CODE) error.code = options.code;
   // Only the allowlisted transport verdicts survive this formatter. Do not forward
   // arbitrary provider codes, and preserve the existing cyber-policy precedence.
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE
@@ -62,6 +89,7 @@ export function formatErrorResponse(
   // and no wait of its own does not stop a client that retries every 429 by default.
   const refusal = isReplayRefusalCode(error.code) && replayBlocked;
   if (refusal) applyReplayRefusalClientHeaders(headers);
+  if (error.code === REQUIRED_TOOL_CONTRACT_CODE && finalStatus === 400) applyReplayRefusalClientHeaders(headers);
   const response = new Response(JSON.stringify({ error }), {
     status: finalStatus,
     headers,
@@ -72,6 +100,23 @@ export function formatErrorResponse(
   // recorder that no upstream produced this status. Carry the narrower marker across too.
   if (refusal) retainReplayRefusal(response);
   return response;
+}
+
+/**
+ * `formatErrorResponse` for an upstream failure that may be the adapter-normalized plan refusal
+ * (#7684). Only a verified refusal (`isModelNotInPlanRefusal` on the response the adapter marked)
+ * keeps `model_not_in_plan` and carries the in-memory mark policy fallback reads; the wire code
+ * alone is never provenance. Every other failure formats exactly as `formatErrorResponse` does.
+ */
+export function formatUpstreamFailureResponse(
+  source: Response,
+  sourceCode: string | undefined,
+  ...[status, type, message, options]: Parameters<typeof formatErrorResponse>
+): Response {
+  if (!isModelNotInPlanRefusal(source, sourceCode)) return formatErrorResponse(status, type, message, options);
+  const failure = formatErrorResponse(status, type, message, { ...options, code: MODEL_NOT_IN_PLAN_CODE });
+  markVerifiedModelNotInPlanResponse(failure);
+  return failure;
 }
 
 /**

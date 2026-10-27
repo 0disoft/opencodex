@@ -59,6 +59,7 @@ import { applySystemEnvToggle } from "./system-env";
 
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
+import { handleNativeReasoningRetentionRoutes } from "./management/native-reasoning-retention-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleStorageLogGuardRoutes } from "./management/storage-log-guard-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
@@ -158,6 +159,20 @@ async function handleLowQuotaRoutesOnDemand(ctx: ManagementContext): Promise<Res
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/codex-auth/low-quota-events", false)) return null;
   const { handleLowQuotaRoutes } = await import("./management/low-quota-routes");
   return handleLowQuotaRoutes(ctx);
+}
+
+/** Lazy for the same reason: the quota-pool assembler pulls every quota cache reader. */
+async function handleQuotaPoolRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/quota-pool", false)) return null;
+  const { handleQuotaPoolRoutes } = await import("./management/quota-pool-routes");
+  return handleQuotaPoolRoutes(ctx);
+}
+
+/** Lazy: the OCX-11 fallback state view and its write live off the dashboard's common path. */
+async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/fallback", false)) return null;
+  const { handleFallbackRoutes } = await import("./management/fallback-routes");
+  return handleFallbackRoutes(ctx);
 }
 
 /**
@@ -344,11 +359,14 @@ export async function handleManagementAPI(
     ??     (await handleLinkRoutesOnDemand(ctx))
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
+    ??     (await handleNativeReasoningRetentionRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
+    ??     (await handleQuotaPoolRoutesOnDemand(ctx))
+    ??     (await handleFallbackRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))
@@ -393,6 +411,11 @@ export async function handleManagementAPI(
   }
   if (routed) return routed;
 
+  if (url.pathname === "/api/stop" && req.method === "GET") {
+    const response = jsonResponse((await import("./stop-teardown")).stopCapabilities(), 200, req, config);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
   if (url.pathname === "/api/stop" && req.method === "POST") {
     const { installedServiceRespawnRisk, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
@@ -519,7 +542,7 @@ export async function handleManagementAPI(
       const { handleMainDeviceReauthAPI } = await import("../codex/main-device-reauth-api");
       return handleMainDeviceReauthAPI(req, url, config);
     }
-    const { handleCodexAuthAPI } = await import("../codex/auth-api");
+    const { handleCodexAuthAPI } = await import("../codex/auth-api/routes");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {

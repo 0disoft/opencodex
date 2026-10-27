@@ -257,12 +257,28 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
-With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+Only when the effective strategy is JEV (`--strategy jev`, or a stored JEV Combo when `--strategy` is omitted), the decision method is chosen by one of two mutually exclusive flags.
 `--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
-this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+this combo or any JEV combo. A new JEV Combo that omits both uses TypeSafe; an existing JEV Combo keeps
+its stored decision method until one of the flags changes it. `--decision-timeout <ms|->` sets the
 decision deadline (1000–120000, default 4000); `-` clears any of the three.
+
+`ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
+`--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
+Both are JEV-only. Omitted policy survives `--targets-file` or `--targets` replacement and rename. Without
+`--strategy`, replacing the targets of an existing Combo keeps its stored strategy, so a JEV Combo stays JEV with
+its decision method, quota settings and session pin; a new Combo defaults to failover. If the kept JEV
+policy rejects the new targets, the command fails, names that policy, and saves nothing. Off retains thresholds;
+switching away from JEV removes both settings. This adds quota data to the selected decision
+backend, not probes, new account selection or hard exclusions. See
+[quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
+
+`ocx combo set <id> --session-pin <duration|->` (JEV only) keeps each client session on the target
+JEV chose for it while the session stays active, so the provider prompt cache stays warm. The
+duration is the idle window: `90s`, `20m`, `1h` or milliseconds, from 1 minute to 24 hours; `-`
+turns it off. See [Session pin for JEV](/guides/combos/#session-pin-for-jev).
 
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
@@ -302,6 +318,7 @@ explicit `lastResort: false`. `--image-input auto|disabled` and
 `--reasoning-effort-mode strict|adaptive` preserve omission, while explicit `auto`
 and `strict` override saved disabled/adaptive values. Reasoning-effort mode is
 separate from `--effort-mode fallback|force`, which governs the default effort.
+`--allow-metered-targets on|off` grants or clears operator consent for marked combo targets on a loopback-only proxy; public and linked callers still need configured-key consent.
 `--native-alias on|off` preserves explicit false; the legacy bare flag means true.
 Turning it off may require the intended alias clear, `--native-alias off --alias -`,
 to avoid retaining an incompatible native alias. Set/rename is an upsert without
@@ -325,6 +342,25 @@ counts and snapshot-window boundaries. Zero observations do not prove success.
 There is no monetary cost or comparative savings field in this report.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
+
+## Fallback off
+
+### `ocx fallback <status|off|on|clear|local> ...`
+
+```bash
+ocx fallback status --json
+ocx fallback off --kind provider
+ocx fallback on --route combo/coding
+ocx fallback clear --provider anthropic --kind model
+ocx fallback local on --device mac-studio
+```
+
+`off`, `on` and `clear` take `--kind model|provider|all` (default `all`) and at most one scope:
+`--provider <name>`, `--route <selector>` or `--device <id|alias>`; with none they set the global switch.
+A device set to off always refuses; otherwise route beats provider beats global. `local` records whether a
+device may use its own providers while the Home is unreachable, a permission GOAT reads; OpenCodex itself
+still answers `home_unreachable` there. The commands talk to the live proxy; on a Remote Link Child,
+`status` reads the Home and writes are refused. See [Fallback off](/guides/fallback-off/).
 
 ## Routing profiles
 
@@ -415,7 +451,8 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
+| `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -449,6 +486,43 @@ When some usage records cannot be included, human output warns, including when t
 Any displayed totals reflect readable records only. If a filter has no readable matches, the output shows
 the warning and guidance instead of total lines; skipped records may contain matches.
 `--json` preserves the response-level `usageIncomplete` diagnostic and reason.
+
+### Compare a range with the previous equal window
+
+```bash
+ocx usage compare --range today --json
+ocx usage compare --range 7d --provider xai
+```
+
+`ocx observe usage compare` is the equivalent family form. The command reads `GET /api/usage`
+twice: the named range ending now, then the same range evaluated one equal window earlier
+(one local day for `today`/`1d`, seven for `7d`, thirty for `30d`). Default range is `30d`.
+`--range all` is refused because open history has no previous equal window. `--since` and
+`--until` are not accepted; the windows are derived. Surface, provider, model, and API-key
+filters apply to both reads. Human output prints current, previous, signed delta, and percent
+change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
+reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
+match the requested window. Both reads use the same connection and credential. If the
+connection, account, or credential changes during the command, it reports an owner
+mismatch and asks you to retry instead of printing a comparison.
+
+### Page indexed request history
+
+```bash
+ocx logs history --provider xai --status 200 --limit 50 --json
+ocx logs history --cursor '<nextCursor>' --json
+ocx logs get <request-id> --json
+```
+
+`ocx observe logs history` and `ocx observe logs get` are the equivalent family
+forms. These read the derived request-history index, not the recent `ocx logs`
+ring. `--limit` is 1–100 (default 50). `--from` and `--to` accept epoch
+milliseconds or full ISO datetimes with a timezone and are inclusive. `--json`
+returns `{entries,hasMore,nextCursor,index}`. `--jsonl` emits rows only; when
+more pages exist, `nextCursor=…` is printed on stderr so a caller can resume
+without mixing the token into the row stream. Empty matches succeed. `get`
+returns one canonical row by request ID; `ocx logs explain` remains the
+route-decision view for that same ID.
 
 ### Filter a bounded log snapshot
 
@@ -489,7 +563,7 @@ ocx usage --range 7d --search 'model-a' --json
 
 `--search` matches a trimmed case-insensitive substring in model, provider or
 resolved model after reading the report. It sorts model rows by descending total
-tokens with stable ties and keeps up to 100. JSON adds
+tokens with stable ties and keeps up to 100 by default. JSON adds
 `modelView:{query,matchedModelCount,returnedModelCount,limit:100,truncated}`;
 human output labels the view and shows its selected model rows. Report totals,
 provider/day/account rows, exact filters and incomplete/window metadata remain
@@ -499,6 +573,8 @@ An explicit blank query (`--search=`) selects the top-100 view; omitting search
 preserves the existing output. Exact `--provider`/`--model` still scope the
 underlying report. Search does not broaden selected-key or connected-client
 self scope and is never sent as a new Hub API query parameter.
+
+`ocx usage --top 25` (also `ocx observe usage --top 25`) sets the human model table limit to an integer from 1 to 1000. The default is 10, or 100 with `--search`; the limit applies after search filtering. It changes local display only: report totals, provider/account rows and API parameters stay unchanged. With `--json`, a valid `--top` is ignored; JSON retains its existing full report or 100-row search view. Invalid limits return exit 2 before fetching.
 
 ### Saved companion usage totals
 
@@ -1020,10 +1096,15 @@ the CLI, the API, and the GUI use the same bytes.
 
 Manage headless runtime settings, startup, sync, diagnostics, and updates.
 
-`ocx system codex-restart --yes` restarts Codex app-servers and fully quits and relaunches the
-Codex desktop app, through the same module as `ocx sync --restart-codex`. When the proxy itself
-is running inside the Codex app, the command refuses with an actionable message instead of
-promising a handoff it cannot complete.
+`ocx system codex-restart --yes` restarts Codex app-servers through the same module as
+`ocx sync --restart-codex`. It quits and relaunches the Codex desktop app when the app launched before the current model catalog was written or this request changed
+its `model_catalog_json` binding, because the model picker is built at
+launch. Otherwise the app stays open, respawns its own app-server, and keeps unsaved drafts and
+pending approvals. If the app or catalog state cannot be read, it takes the full restart. When
+the proxy itself is running inside the Codex app, the desktop restart refuses with an actionable
+message instead of promising a handoff it cannot complete.
+
+A `model_catalog_json` binding changed by this request also forces the desktop restart, even when the shell started after the catalog file was written.
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -1077,9 +1158,9 @@ ocx system codex-cli-update check --json
 
 `check` makes no package-registry request and inspects bounded configured-candidate provenance evidence,
 including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
-the candidate snapshot, not successful Codex execution. Because this one-shot command never executes Codex,
-environment and persisted candidates remain report-only (`managed: false`, normally `selection_unattested`);
-`selectionAttested` remains `false`. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+the candidate snapshot, not successful Codex execution. On POSIX, selection is attested only when the runtime
+resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest
+can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
@@ -1093,6 +1174,26 @@ version-manager, unverified standalone, and ambiguous shim states are reported a
 and are never classified as managed.
 
 On Windows, a captured bare command such as `CODEX_CLI_PATH=codex`, a remote path, or a device path reports `candidate_path_unavailable` instead. Those cases have a captured candidate; its path is not eligible for this inspection.
+
+#### Read-only Codex CLI update plan
+
+```bash
+ocx system codex-cli-update plan --channel latest --json
+```
+
+Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
+The plan requires an attested POSIX npm-global installation and a linked package manifest version.
+It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
+using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
+settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
+
+An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
+installation-root digest, installed version, channel and target version/integrity. The plan is never
+persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
+process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
+A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
+command installs nothing, changes no application state and never signals a session. No apply command
+is exposed, and a plan ID is not installation authorization.
 
 #### Explicit installation observation on Windows x64
 

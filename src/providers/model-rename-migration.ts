@@ -19,6 +19,7 @@
 // Everything else in the row is left alone.
 
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
+import { MINIMAX_M31_FLASH, MINIMAX_M31_FLASH_PREVIEW_RETIRED } from "./registry/model-seeds";
 import { MODEL_KEYED_RECORDS, MODEL_ID_LISTS, MODEL_ID_SCALARS, MODEL_NESTED_RECORDS } from "./model-rename-fields";
 import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -137,6 +138,15 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
     // The retired Flash tiers were wire ids, so any saved per-model record keyed by one
     // may also hold one as a value. 3.8 resolves tiers from its own suffix ladder instead.
     dropReasoningEffortMap: true,
+  })),
+  // MiniMax shipped M3.1-Flash as generally available on 2026-10-19 and retired the preview
+  // id, so a saved MiniMax-M3.1-Flash-Preview selection would answer model-not-found. The
+  // stale-roster refresh only matches exact old seeds; this repairs the preview id itself.
+  ...(["minimax", "minimax-cn"] as const).map(provider => ({
+    provider,
+    from: MINIMAX_M31_FLASH_PREVIEW_RETIRED,
+    to: MINIMAX_M31_FLASH,
+    reason: "MiniMax shipped M3.1-Flash as generally available and retired the preview id",
   })),
 ];
 
@@ -292,8 +302,8 @@ function publishes(container: unknown, id: string): boolean {
  *
  * Under those two conditions the rewrite is worse than a no-op, because it never converges.
  * `startServer` runs this migration and then `reconcileOAuthProviders`, and
- * `applyOAuthPresetCatalog` copies the preset’s record over the saved one whenever the two
- * differ. The deletion is undone inside the same boot, the config is written twice, and the user
+ * `applyOAuthPresetCatalog` fills missing preset keys into the saved metadata maps.
+ * The deletion is undone inside the same boot, the config is written twice, and the user
  * is told about a rename that never sticks on every single start. Issue #5066 is exactly that:
  * `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS` derives a window for every compatibility alias, so
  * `modelContextWindows` holds a key for all nine retired Flash ids beside the live ones — the

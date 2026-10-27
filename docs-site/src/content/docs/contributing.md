@@ -45,9 +45,11 @@ bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
-The suite uses Bun 1.4.3 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.2.
-`scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
+The suite uses Bun 1.4.4 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.4.
+`scripts/test.ts` finds a 1.4.4 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
 Install that version locally if it is missing; the resolver never downloads it.
+The roles remain independently checked even when their versions match. Promotion requires
+a successful full cross-platform `lane=all` run on the candidate head.
 
 Run `bun run test` by default. If a full run is disproportionately expensive for the task size,
 available machine resources, or concurrent worktrees, you must at least run focused regression tests
@@ -263,6 +265,11 @@ Use one of the versioned dispositions: `passthrough`, `translated`, `degraded`, 
 Every non-passthrough claim must state its limitation, and every fixture-backed claim must name the
 exact assertion ids that prove it. Add the secret-free request vector under
 `tests/fixtures/compatibility/` and execute it against the production adapter in a focused test.
+A `passthrough` claim may only cite `equals` assertions whose expected value is the caller's own
+value at the same place, on a selector bound to that feature in the manifest test, so a removed,
+rewritten, or unrelated field cannot be labeled lossless. Keep related
+aspects as separate claims when a route can preserve one and lose the other, such as a custom tool
+and its grammar.
 Compatibility manifests are passive data: the ordinary router, Responses handler, and server
 startup path must not import the manifest catalog or activate Compatibility Lab.
 

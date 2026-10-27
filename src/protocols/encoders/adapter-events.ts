@@ -28,7 +28,7 @@
  * completed-response effects belong to the caller, which folds the same events with
  * `buildResponseJSON` at the terminal through `beforeTerminal`.
  */
-import type { AdapterEvent, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, AnthropicServerBlocks, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "../../types";
 import { normalizeDeclaredToolName } from "../../types";
 import { coerceIntegerToolArguments } from "../../lib/tool-argument-integers";
 import { classifyError, isCyberPolicyCode, type OcxErrorPayload } from "../../lib/errors";
@@ -61,6 +61,7 @@ export interface ClientWebSearch {
   status: "completed" | "failed";
   queries: string[];
   sources: { url: string; title?: string }[];
+  anthropic?: AnthropicServerBlocks;
 }
 
 /**
@@ -108,7 +109,13 @@ export interface ClientWireWriter {
   text(delta: string): void;
   messageDone(): void;
   reasoning(delta: string, itemId: string, channel: "summary" | "raw"): void;
-  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[] }): void;
+  /** `hidden`: the signature covers thinking text the client was not shown (the bridge's `txt`). */
+  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[]; hidden?: true }): void;
+  /**
+   * An Anthropic progress update: `text` is shown as content and is also the signed thinking
+   * block's text. Optional — a writer without it renders the update as ordinary text.
+   */
+  progressThinking?(text: string, signature: string): void;
   toolStart(call: ClientToolCall): void;
   toolArgsDelta(itemId: string, delta: string): void;
   toolArgsDone(itemId: string, args: string): void;
@@ -330,6 +337,8 @@ export function encodeAdapterEventStream(
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
   let pendingRedacted: string[] = [];
+  // The bridge's hiddenThinking: non-empty thinking text suppressed by hideThinkingSummary.
+  let hiddenThinkingSeen = false;
   let hiddenRawBytes = 0;
   let pendingKiroRedacted: string | undefined;
   let currentToolCall: OpenToolCall | null = null;
@@ -366,9 +375,11 @@ export function encodeAdapterEventStream(
   };
   // hideThinkingSummary: a signed or redacted block still round-trips as an envelope-only item.
   const flushHiddenReasoningEnvelope = () => {
+    const hidden = hiddenThinkingSeen;
+    hiddenThinkingSeen = false;
     const envelope = takeReasoningEnvelope();
     if (!envelope) return;
-    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope });
+    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope, ...(hidden ? { hidden: true as const } : {}) });
   };
   const flushHiddenRawReasoning = () => {
     if (hiddenRawBytes === 0) return;
@@ -411,9 +422,9 @@ export function encodeAdapterEventStream(
     budget.closeCall(call.callId);
     currentToolCall = null;
   };
-  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[]) => {
+  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[], anthropic?: AnthropicServerBlocks) => {
     if (!currentWebSearch) return;
-    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [] });
+    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [], ...(anthropic ? { anthropic } : {}) });
     currentWebSearch = null;
   };
   const appendToolArgs = (call: OpenToolCall, fragment: string) => {
@@ -569,6 +580,19 @@ export function encodeAdapterEventStream(
             break;
           }
           case "text_delta": {
+            if (event.anthropicThinkingSignature && writer.progressThinking) {
+              // The bridge's progress items: close everything, the carrier, then the visible copy.
+              if (currentMsg) closeCurrentMessage();
+              if (currentReasoning) closeCurrentReasoning();
+              if (currentRawReasoning) closeCurrentRawReasoning();
+              flushHiddenRawReasoning();
+              flushHiddenReasoningEnvelope();
+              if (currentToolCall) closeCurrentToolCall();
+              writer.progressThinking(event.text, event.anthropicThinkingSignature);
+              writer.text(event.text);
+              writer.messageDone();
+              break;
+            }
             if (currentReasoning) closeCurrentReasoning();
             if (currentRawReasoning) closeCurrentRawReasoning();
             flushHiddenRawReasoning();
@@ -584,6 +608,7 @@ export function encodeAdapterEventStream(
           }
           case "thinking_delta": {
             if (options.hideThinkingSummary) {
+              if (event.thinking.length > 0) hiddenThinkingSeen = true;
               flushHiddenRawReasoning();
               break;
             }
@@ -688,7 +713,7 @@ export function encodeAdapterEventStream(
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
               currentWebSearch = { itemId: `ws_${uuid()}`, eventId: event.id };
             }
-            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources));
+            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources), event.anthropic);
             break;
           }
           case "done": {
@@ -729,7 +754,7 @@ export function encodeAdapterEventStream(
             terminal = {
               status: "incomplete",
               incomplete: {
-                reason: event.reason,
+                reason: truncationReasonFor(event.reason) ?? event.reason,
                 ...(event.message ? { message: event.message } : {}),
                 ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
               },

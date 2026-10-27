@@ -64,6 +64,17 @@ describe("management route registry reconciliation", () => {
       .toMatchObject({ module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only" } });
   });
 
+  test("the constant-backed Hermes profile list is explicitly declared", () => {
+    expect(MANAGEMENT_ROUTES.find(route =>
+      route.method === "GET" && route.path === "/api/client-integrations/hermes/profiles"))
+      .toMatchObject({
+        module: "server/management/hermes-profile-routes",
+        mutates: false,
+        mechanism: "path-constant",
+        exempt: { reason: "gui-only" },
+      });
+  });
+
   test("every route resolvable from source is declared in the registry", () => {
     const declared = new Set(MANAGEMENT_ROUTES.map(r => key(r.method, r.path)));
     const undeclared: string[] = [];
@@ -256,13 +267,15 @@ describe("route exemptions stay honest", () => {
     });
   });
 
-  test("account-switch routes remain ordinary management mutations", () => {
+  test("account-switch and key pause routes remain ordinary management mutations", () => {
     for (const path of [
       "/api/codex-auth/active", "/api/oauth/accounts/active", "/api/providers/keys/active",
+      "/api/providers/keys/pause",
     ]) {
       const row = MANAGEMENT_ROUTES.find(r => r.method === "PUT" && r.path === path);
       expect(row?.mutates, path).toBe(true);
       expect(row?.exempt, path).toBeUndefined();
+      if (path === "/api/providers/keys/pause") expect(row?.module).toBe("server/management/oauth-account-routes");
     }
   });
 

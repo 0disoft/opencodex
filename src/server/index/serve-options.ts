@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
 import {
@@ -203,10 +204,13 @@ import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
+import { homeInstanceId, stampServedBy } from "../../remote/served-by";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
+import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
+import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -368,6 +372,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
           ? loopbackPolicy()
           : config;
+      // Codex runtime agent assertion_only (Authorization: AgentAssertion) is refused before
+      // admission or routing: it is never a bearer, never an admission secret, and no pool or
+      // routed credential may stand in for it.
+      if (hasAgentAssertionAuthorization(req.headers)) return withCors(agentAssertionUnsupportedResponse(), req, policy);
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -378,7 +386,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
           const { handleLinkManagementRequest } = await import("./link-management");
-          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+          return withCors(await handleLinkManagementRequest(
+            req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
+            admission.kind === "configured" ? admission.keyId : undefined,
+          ), req, policy);
         }
       }
       const url = requestUrl;
@@ -406,11 +417,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
         const fencedHealth = url.pathname === "/healthz";
+        const fencedInstanceId = fencedHealth ? homeInstanceId() : undefined;
         const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
+              ...(fencedInstanceId ? { instanceId: fencedInstanceId } : {}),
               uptime: process.uptime(),
               pid: process.pid,
               port: fencedPort,
@@ -621,10 +634,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = ctx.server.port ?? listenPort;
+        // Opaque Home instance id (src/remote/served-by.ts); omitted until the identity exists.
+        const instanceId = homeInstanceId();
         const response = jsonResponse({
           status: "ok",
           service: "opencodex",
           version: VERSION,
+          ...(instanceId ? { instanceId } : {}),
           uptime: process.uptime(),
           pid: process.pid,
           port: healthPort,
@@ -1252,6 +1268,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
+        const promoteAliasId = modelAliasIdPromoter(config);
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
           .map(async m => {
@@ -1269,8 +1286,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 knownModelIdsForProvider(m.provider, provider, config),
               ).get(m.id)
             : undefined;
+          const effectiveId = !isCombo && !fastModelId && effective
+            ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
+            : publicId;
           const row = {
-            id: publicId,
+            id: effectiveId,
             object: "model",
             created: 0,
             // This endpoint is an OpenAI-compatible inbound contract. Some clients use
@@ -1279,11 +1299,15 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
             ...(isCombo ? { is_combo: true } : {}),
             ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+            // When preferModelAliasIds promotes the alias to `id`, retain the original
+            // provider/nativeId so clients that need the upstream identity can read it.
+            ...(effectiveId !== publicId ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
+              supportsReasoning: m.supportsReasoning, supportsReasoningEffort: m.supportsReasoningEffort,
+              supportsThinkingToggle: m.supportsThinkingToggle, defaultThinkingEnabled: m.defaultThinkingEnabled,
               reasoningEfforts: m.reasoningEfforts,
-              // contextWindow is already the post-cap effective value; contextCap is the raw
-              // operator knob and over-reports models whose real window sits below it.
+              // Use the post-cap window; the raw contextCap can exceed a model's real window.
               contextWindow: m.contextWindow,
               maxOutputTokens: m.maxOutputTokens,
               inputModalities: m.inputModalities,
@@ -1339,8 +1363,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
-          } catch {
-            response = formatErrorResponse(500, "server_error", "Unexpected compact request failure");
+          } catch (error) {
+            response = reasoningArchiveErrorResponse(error)
+              ?? formatErrorResponse(500, "server_error", "Unexpected compact request failure");
           }
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
@@ -1511,6 +1536,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               },
             });
           } catch (error) {
+            const archiveError = reasoningArchiveErrorResponse(error);
+            if (archiveError) return withRequestLogId(
+              withCors(responseWithDeferredRequestLog(archiveError, requestId, start, logCtx), req, policy), requestId,
+            );
             // A bounded upstream body can fail before handleResponses returns a client response.
             // Finalize before rethrow so accounting observes the physical send while the caller
             // retains the existing reset/rejection instead of receiving a synthesized response.
@@ -1610,11 +1639,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
         // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
         const sessionReq = withCallerSessionIdentity(req, admission);
-        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
-          req,
-          policy,
-        ), { requestId, start, logCtx });
+        // Only expose an id when the handler or a logged refusal owns its history row.
+        let ownsRequestLog = false;
+        const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
+          ownsRequestLog = true;
+          return withCors(
+            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            req,
+            policy,
+          );
+        }, { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        return ownsRequestLog ? withRequestLogId(response, requestId) : response;
       }
 
       if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {
@@ -1732,7 +1767,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal); // detached at the dial; then close/CLOSED owns release
         const releaseAcquisition = () => {
           detachClientAbort();
           acquisition?.clear();
@@ -1785,6 +1820,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
+        detachClientAbort();
         const upstreamHandshake = await openLiveSidebandUpstream(
           resolved.upstreamWsUrl,
           resolved.headers,
@@ -1853,7 +1889,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
-          detachClientAbort();
           acquisition?.clear();
           finalizeLiveRequest(101);
           return undefined as unknown as Response;
@@ -1957,5 +1992,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     },
     websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
-  return serveOptions;
+  const routeFetch = serveOptions.fetch;
+  // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
+  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
 }

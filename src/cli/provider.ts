@@ -8,13 +8,15 @@
  *   show <name>   Show provider config details (secrets masked)
  *   set-default <name>  Change the default provider
  */
-import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, readConfigAdmissionSnapshot, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
+import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
+import { providerCredentialInputError } from "../providers/api-keys";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
@@ -26,6 +28,8 @@ import type { RuntimeApiDeps } from "./runtime-api";
 import { redactSecretArgs } from "./secret-args";
 import { projectLocalSyncResult, type LocalSyncResult } from "./local-sync-result";
 import { providerManagementConfigError } from "../server/auth-cors";
+import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { SENSITIVE_KEY_PATTERN } from "../lib/redact";
 
 export interface ProviderCommandDeps extends RuntimeApiDeps {
   syncModels?: typeof syncModelsToCodex;
@@ -100,7 +104,46 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
 // provider list
 // ---------------------------------------------------------------------------
 
-function handleList(args: string[]): void {
+/**
+ * Does this device's own provider config serve requests? A device linked to a Home — a Remote
+ * Link Child or a Hub-mode client — routes through the Home, so its local rows are shadowed.
+ * A standalone device and a Hub serve their own rows. An unreadable or inconsistent client
+ * state is not a link, the same reading `readLinkChildContext` takes.
+ */
+export function localProvidersActive(read: () => ClientConnectionState = readClientConnectionState): boolean {
+  try {
+    return read().kind !== "connected";
+  } catch {
+    return true;
+  }
+}
+
+const SENSITIVE_QUERY_KEY = /key|token|secret|password|passwd|signature|^sig$|auth|credential/i;
+
+/**
+ * The baseUrl as `provider list` prints it. Validation already rejects embedded credentials;
+ * this also covers a hand-edited config, dropping userinfo and masking credential-shaped query
+ * values while keeping ordinary parameters such as `api-version`.
+ */
+export function providerListBaseUrl(baseUrl: string): string {
+  let parsed: URL;
+  try { parsed = new URL(baseUrl); } catch { return baseUrl; }
+  let changed = false;
+  if (parsed.username || parsed.password) {
+    parsed.username = "";
+    parsed.password = "";
+    changed = true;
+  }
+  for (const key of [...new Set(parsed.searchParams.keys())]) {
+    if (SENSITIVE_KEY_PATTERN.test(key) || SENSITIVE_QUERY_KEY.test(key)) {
+      parsed.searchParams.set(key, "redacted");
+      changed = true;
+    }
+  }
+  return changed ? parsed.toString() : baseUrl;
+}
+
+function handleList(args: string[], active: boolean = localProvidersActive()): void {
   const wantsJson = consumeFlag(args, "--json");
   const wantsJsonl = consumeFlag(args, "--jsonl");
   rejectUnknownArgs(args, "Usage: ocx provider list [--json|--jsonl]");
@@ -118,12 +161,13 @@ function handleList(args: string[]): void {
     return {
       name,
       adapter: prov.adapter,
-      baseUrl: prov.baseUrl,
+      baseUrl: providerListBaseUrl(prov.baseUrl),
       authMode: prov.authMode ?? "key",
       defaultModel: prov.defaultModel ?? null,
       isDefault: name === config.defaultProvider,
       source: registryEntry ? "registry" : "custom",
       models: prov.models ?? [],
+      active,
     };
   });
 
@@ -147,7 +191,7 @@ function handleList(args: string[]): void {
     console.log(`  ${name}${isDefault}${source}  adapter=${prov.adapter}${model}`);
   }
 
-  const available = PROVIDER_REGISTRY.filter(e => !configured.includes(e.id));
+  const available = PROVIDER_REGISTRY.filter(e => !e.deprecated && !configured.includes(e.id));
   if (available.length > 0) {
     console.log(`\nAvailable from registry (${available.length}):\n`);
     for (const entry of available) {
@@ -221,8 +265,15 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   const registryEntry = getProviderRegistryEntry(name);
 
   if (registryEntry) {
+    if (registryEntry.deprecated) console.warn(`Warning: provider "${name}" is deprecated: ${registryEntry.deprecated}`);
     provConfig = providerConfigSeed(registryEntry);
     if (apiKey) {
+      const candidateError = providerCredentialInputError({ apiKey });
+      if (candidateError) {
+        console.error(`Error: ${candidateError}`);
+        process.exitCode = 2;
+        return;
+      }
       if ((authMode ?? registryEntry.authKind) === "forward") {
         console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
       } else if ((authMode ?? registryEntry.authKind) === "oauth") {
@@ -249,6 +300,12 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   }
 
   if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
+  const credentialError = providerCredentialInputError(provConfig);
+  if (credentialError) {
+    console.error(`Error: ${credentialError}`);
+    process.exitCode = 2;
+    return;
+  }
   if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
   if (name === "anthropic2") {
     if (provConfig.adapter !== "anthropic" || provConfig.authMode !== "oauth") delete provConfig.anthropicOAuthInstance;
@@ -328,12 +385,17 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   }
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
   let markerCollision = false;
+  let removedCredentials: string[] = [];
   withConfigMutationLockSync(() => {
     if (provConfig.anthropicOAuthInstance) {
       try { assertAnthropicInstanceLoginConfig(config, name); }
       catch { markerCollision = true; return; }
     }
     initializeProviderModelSelection(name, provConfig, existingProvider, config);
+    const durable = readConfigAdmissionSnapshot();
+    const durableProvider = durable.kind === "read" && durable.diagnostics.source === "file"
+      && durable.diagnostics.error === null ? durable.diagnostics.config.providers[name] : undefined;
+    removedCredentials = [config.providers[name], durableProvider].flatMap(provider => provider ? providerGcpCredentialMarkers(provider) : []);
     config.providers[name] = provConfig;
     if (setDefault) config.defaultProvider = name;
     validateAndSave(config);
@@ -344,6 +406,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
     return;
   }
 
+  cleanupRemovedGcpCredentials(removedCredentials);
   let sync: LocalSyncResult | undefined;
   if (wantsSync) {
     try {
@@ -440,10 +503,12 @@ function handleRemove(args: string[]): void {
     process.exit(1);
   }
 
-  delete config.providers[name];
-  const droppedCustomModels = dropProviderCustomModels(config, name);
-  validateAndSave(config);
-
+  const droppedCustomModels = commitProviderGcpCredentialRemoval(config, name, () => {
+    delete config.providers[name];
+    const dropped = dropProviderCustomModels(config, name);
+    validateAndSave(config);
+    return dropped;
+  });
 
   if (wantsJson) {
     console.log(JSON.stringify({

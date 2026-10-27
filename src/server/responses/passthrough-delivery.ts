@@ -1,4 +1,7 @@
+import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { isNativeControlResponse } from "./native-response-control";
+import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
+import { attachResponseToolOwnership } from "./response-tool-ownership";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -36,6 +39,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
+import { codexFailureWindowOutcomeMeta } from "../../codex/routing/failure-window";
 import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
@@ -58,6 +62,7 @@ import {
   hasResponsesSnapshotRepair,
   createResponsesSnapshotBlockRewrite,
 } from "../responses-snapshot-repair";
+import { rewriteResponsesIncompleteReasonJson } from "../../responses/incomplete-reason";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import { createImageGenCallRestoreRewrite, restoreImageGenCallsInJson } from "../responses-image-gen-repair";
 import {
@@ -77,6 +82,7 @@ import {
   createResponsesItemIdPayloadRewrite,
   repairResponsesJsonItemIds,
 } from "../responses-item-id-repair";
+import { createResponsesPhaseInferenceBlockRewrite } from "../responses-phase-inference";
 import {
   payloadRewriteAsBlockRewrite,
   composeSsePayloadRewrites,
@@ -144,6 +150,8 @@ import {
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
   noteUpstreamRequestId,
+  recordKeyWireAttemptUsage,
+  usageFromResponsesPayload,
 } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
@@ -443,6 +451,15 @@ export async function deliverPassthroughResponse(
   const { requestBindings } = transportState;
 
   let upstreamResponse = nativeExchange.upstreamResponse;
+  // Judge the restored native payload before display projection can erase hosted-call evidence.
+  const requiredToolFailure = async (text: string): Promise<Response | undefined> => {
+    if (!options.comboAttempt || clientRequestedStream === true || isNonReplayableResponse(upstreamResponse)) return;
+    const candidate = attachResponseToolOwnership(new Response(text, {
+      status: upstreamResponse.status, headers: { "content-type": "application/json" },
+    }), providerExecutedCallTypes);
+    const verdict = await guardBufferedComboRequiredTool(candidate, parsed._rawBody, route.provider.adapter);
+    return verdict.ok ? undefined : verdict;
+  };
   const canonicalBufferedJson = clientRequestedStream !== true
     && isCanonicalOpenAiForwardProvider(route.provider);
   const originalContentType = upstreamResponse.headers.get("content-type");
@@ -526,13 +543,14 @@ export async function deliverPassthroughResponse(
       } else if (!shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
-      ) && !isReplayRefusalResponse(upstreamResponse)) {
+      ) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
         // A refusal this proxy made is not evidence about the account. Recording it would
         // classify the synthetic 429 as quota exhaustion and write a default cooldown against
         // a credential the request may never have reached, and that false signal outlives the
         // request. The sibling recorders on this path already decline: the terminal recorder
         // needs an ok streaming body, and the quota-header snapshot finds no quota headers.
         recordCodexUpstreamOutcome(config, admissionState.authCtx.accountId, upstreamResponse.status, {
+          ...codexFailureWindowOutcomeMeta(admissionState.authCtx),
           ...quotaMeta,
           threadId: admissionState.authCtx.affinityKey,
           fixedAccount: admissionState.authCtx.fixedAccount,
@@ -571,7 +589,7 @@ export async function deliverPassthroughResponse(
     // through sanitizePassthroughHeaders) so a redirect to a dead host can never
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
-    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse)) {
+    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
       return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
@@ -768,6 +786,7 @@ export async function deliverPassthroughResponse(
         : undefined;
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
+        rewriteResponsesIncompleteReasonJson,
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
         createSelfNamedToolCallNamespaceScrubRewrite(selfNamedNamespaceScrubAuthorization),
@@ -846,6 +865,9 @@ export async function deliverPassthroughResponse(
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
           : undefined,
+        route.provider.messagePhaseInference === true
+          ? createResponsesPhaseInferenceBlockRewrite(translatorBudget)
+          : undefined,
         responseEffects.plaintextV2AgentMessageToolNames.size > 0
           ? payloadRewriteAsBlockRewrite(createPlaintextV2AgentMessageCallRestoreRewrite(
             responseEffects.plaintextV2AgentMessageToolNames, responseEffects.plaintextV2AgentMessageAliasedToolNames,
@@ -878,7 +900,7 @@ export async function deliverPassthroughResponse(
         createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
-        isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
+        (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -1021,6 +1043,29 @@ export async function deliverPassthroughResponse(
         };
         if (signal.aborted) return cancelAfterValidation();
 
+        const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
+        if (requiredFailure) {
+          const usage = usageFromResponsesPayload(client.terminal.response.usage);
+          if (usage && !logCtx.usageFromBridge) {
+            if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+              logCtx.usage = usage;
+              if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+            }
+            logCtx.usageWireParsed = true;
+          }
+          return requiredFailure;
+        }
+        if (signal.aborted) return cancelAfterValidation();
+        let clientJson = JSON.stringify(client.terminal.response);
+        if (options.comboAttempt && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)) {
+          const display = createHostedImageDisplayRewrite();
+          try { clientJson = display.json(clientJson); }
+          catch (error) {
+            if (error instanceof RangeError) return formatErrorResponse(502, "upstream_error", "hosted image result exceeds local display limits");
+            throw error;
+          } finally { display.dispose?.(); }
+        }
+
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
@@ -1077,7 +1122,7 @@ export async function deliverPassthroughResponse(
 
         const jsonHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
         jsonHeaders.set("content-type", "application/json");
-        return markPreinspectedJsonResponse(new Response(JSON.stringify(client.terminal.response), {
+        return markPreinspectedJsonResponse(new Response(clientJson, {
           status: upstreamResponse.status,
           statusText: upstreamResponse.statusText,
           headers: jsonHeaders,
@@ -1317,7 +1362,7 @@ export async function deliverPassthroughResponse(
         const modelRewritten = parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId
           ? rewriteResponsesModelJson(repaired, parsed._responseModelId)
           : repaired;
-        return modelRewritten;
+        return rewriteResponsesIncompleteReasonJson(modelRewritten);
       })();
       if (plaintextV2RestoreFailed) {
         return formatErrorResponse(502, "upstream_error", PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
@@ -1356,6 +1401,8 @@ export async function deliverPassthroughResponse(
           declaredBareWireToolNames,
         );
       }
+      const requiredFailure = await requiredToolFailure(clientJson);
+      if (requiredFailure) return requiredFailure;
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
       try {
         rememberPassthroughResponseChecked(

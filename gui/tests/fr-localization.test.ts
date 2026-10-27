@@ -125,6 +125,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.cursor.baseUrl",
   "integrations.tab.opencode",
   "integrations.tab.pi",
+  "integrations.tab.gentleShell", // Product name, retained in the original spelling.
   "integrations.tab.omp",
   "integrations.tab.hermes",
   "integrations.tab.openclaw",
@@ -167,6 +168,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Qoder is a product name, identical in every locale.
   "integrations.tab.qoder",
   "api.clientConfig.clientQoder",
+  // Qoder CN and the two WorkBuddy editions are product names too.
+  "integrations.tab.qoderCn",
+  "integrations.tab.workbuddy",
+  "integrations.tab.workbuddyAi",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "models.reasoningEffort.ultra",

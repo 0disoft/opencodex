@@ -16,6 +16,8 @@ const report: CodexCliInstallReport = {
   selectionAttested: false,
   versionEvidence: { kind: "unavailable" },
   provenance: "unknown", managed: false, reason: "candidate_unavailable", location: null,
+  installDigest: null,
+  installContentDigest: null,
   packageVersion: null,
   shim: { status: "not-tracked", backingKind: null }, evidence: [],
 };
@@ -198,9 +200,9 @@ describe("Codex CLI update CLI", () => {
   });
 
   test("parses the shared JSON flag spellings within the exact check grammar", () => {
-    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ json: false });
+    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ action: "check", json: false });
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ action: "check", json: true });
     }
     for (const args of [
       ["check", "--channel", "latest"],
@@ -217,7 +219,7 @@ describe("Codex CLI update CLI", () => {
    */
   test("the JSON flag is accepted before the check action", () => {
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ action: "check", json: true });
     }
     // Duplicate detection and positional validation still hold in that order.
     expect(() => parseCodexCliUpdateArgs(["--json", "check", "--json"])).toThrow();
@@ -237,14 +239,19 @@ describe("Codex CLI update CLI", () => {
 
   test("check inspects exactly once", async () => {
     let inspectedCalls = 0;
+    let received: CodexCliInstallProvenanceDeps | null = null;
     expect(await handleCodexCliUpdateCommand(["check", "--json"], {
-      inspectInstall: async () => { inspectedCalls += 1; return report; },
+      inspectInstall: async deps => { inspectedCalls += 1; received = deps; return report; },
     })).toBe(0);
     expect(inspectedCalls).toBe(1);
+    // A bare check answers ownership only; the bounded content read is reserved
+    // for the plan path whose planId binds the digest.
+    expect(received?.observeInstallContent).not.toBe(true);
   });
 
   test("passes only proof-bound manager roots into production provenance inspection", async () => {
     const proof = "M".repeat(43);
+    const configDir = process.platform === "win32" ? "C:\\opencodex" : "/opencodex";
     const env: NodeJS.ProcessEnv = {
       [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({
         version: 1,
@@ -254,8 +261,10 @@ describe("Codex CLI update CLI", () => {
           codexCliPath: "C:\\managed\\codex.cmd",
           path: "C:\\managed",
           pathExt: ".CMD",
+          home: "C:\\managed-home",
+          nodePath: "C:\\managed-modules",
           managerRoots: { FNM_DIR: "C:\\custom-manager" },
-          configDir: "C:\\opencodex",
+          configDir,
         },
       }),
     };
@@ -267,14 +276,23 @@ describe("Codex CLI update CLI", () => {
           received = deps;
           return report;
         },
+        // The command asks the resolver which executable it would select; the
+        // inspector then requires it to match the attested candidate.
+        resolveSelectedRuntime: () => ({
+          runtime: { command: "C:\\managed\\codex.cmd", version: null, source: "environment" },
+          failures: [],
+        }),
       })).toBe(0);
       expect(received?.env).toEqual({
         FNM_DIR: "C:\\custom-manager",
         CODEX_CLI_PATH: "C:\\managed\\codex.cmd",
         PATH: "C:\\managed",
         PATHEXT: ".CMD",
+        HOME: "C:\\managed-home",
+        NODE_PATH: "C:\\managed-modules",
       });
-      expect(received?.configDir).toBe("C:\\opencodex");
+      expect(received?.configDir).toBe(configDir);
+      expect(received?.selectedCommand).toBe(process.platform === "win32" ? null : "C:\\managed\\codex.cmd");
     } finally {
       initializeNodeLauncherContext(["bun", "cli"], {});
     }
@@ -374,5 +392,44 @@ describe("Codex CLI update CLI", () => {
     } finally {
       console.log = oldLog;
     }
+  });
+});
+
+/**
+ * Phase 2 verb. The dry-run plan is the entire surface added here: it resolves an exact
+ * registry target and reports the decision, and this slice deliberately adds no apply.
+ */
+describe("Codex CLI update plan grammar", () => {
+  test("plan defaults to the stable channel and accepts both option spellings", () => {
+    expect(parseCodexCliUpdateArgs(["plan"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel", "latest"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel=latest", "--json"])).toEqual({ action: "plan", json: true, channel: "latest" });
+  });
+
+  test("unsupported actions and plan arguments are rejected", () => {
+    for (const args of [
+      ["apply", "--plan", "0".repeat(32)],
+      ["plan", "--plan", "0".repeat(32)],
+      ["plan", "--channel", "preview"],
+      ["plan", "extra"],
+    ]) expect(() => parseCodexCliUpdateArgs(args)).toThrow();
+  });
+
+  test("a refused dry-run is a normal answer and still exits 0", async () => {
+    let inspected = 0;
+    const code = await handleCodexCliUpdateCommand(["plan", "--json"], {
+      inspectInstall: async () => { inspected += 1; return report; },
+      createPlan: async () => ({
+        schemaVersion: 1, package: "@openai/codex", channel: "latest",
+        applicable: false, refusal: "not_managed", planId: null,
+        provenance: "app-bundle", managed: false, installedVersion: null,
+        versionEvidence: "unavailable", location: null,
+        targetVersion: null, targetIntegrity: null,
+        session: { state: "not-evaluated", matches: null }, command: null,
+      }),
+    });
+    expect(code).toBe(0);
+    // The plan engine owns inspection; the command must not run a second one.
+    expect(inspected).toBe(0);
   });
 });

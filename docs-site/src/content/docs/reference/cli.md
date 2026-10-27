@@ -146,8 +146,9 @@ proxy.
 `ocx system codex-cli-update check` needs no live proxy and makes no package-registry request. It
 inspects bounded provenance metadata for the configured install candidate, including its redacted
 executable location and ownership evidence. Trusted published-launcher context authenticates that candidate snapshot,
-not a successful Codex execution. Because this one-shot command never executes Codex, environment and persisted candidates
-remain report-only (`managed: false`, normally `selection_unattested`) and `selectionAttested` remains `false`.
+not a successful Codex execution. On POSIX, `selectionAttested` can be `true` when the runtime resolver
+selects the same canonical environment candidate without executing it. A linked npm-global package
+manifest can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested.
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
@@ -155,6 +156,13 @@ a direct Bun/source launch has no such proof, ignores ambient and persisted cand
 only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
 every other Windows candidate fails closed. The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
+
+`ocx system codex-cli-update plan --json` adds a read-only update decision for an attested POSIX
+npm-global installation. It resolves `latest` through the official npm registry, validates the
+exact version and SHA-512 integrity, and refuses active sessions or incomplete process observation.
+Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
+No software is installed and no process is signalled. Windows returns `windows_inspection_deferred`.
+See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
@@ -255,6 +263,8 @@ version mismatch. `unknown` does not confirm matching builds. Offline help,
 local configuration and local Lab inspection do not require startup.
 
 `ocx status --json` includes `cliCommand`: configured Desktop intent, the expected executable, observed PATH candidates, `pathFirst`, `desktopFirstOnPath`, issue codes, and `shellResolution: "unobserved"`. The human status report prints one command-selection line. `ocx doctor` adds an “ocx command selection” section: invalid, unsafe (`record-unsafe`) or enabled-pending records and missing/unusable Desktop targets fail the check, while disabled cleanup-pending records, PATH ordering conflicts and incomplete scans warn. `OCX_NO_DESKTOP_HANDOFF=1` suppresses package-launcher handoff for one invocation; it leaves the Desktop shim and PATH configuration in place. These read-only observations do not execute candidates, resolve parent-shell aliases/functions, or identify the proxy’s runtime owner. On Windows, package-launcher handoff is disabled; user `Path` order selects the Desktop `ocx.exe`. Status and doctor still read the record and report the first PATH candidate. A possible cmd current-directory candidate is reported separately from PATH order.
+
+`ocx status --json` also includes `install`: how this `ocx` was installed, using the same detector `ocx update` acts on. `install.method` is `bun`, `npm`, `pnpm`, `mise`, `source`, `standalone` (the compiled desktop binary) or `unknown` when detection failed. `install.evidence.basis` names what decided it (`package-layout`, `mise-backend-record`, `standalone-binary` or `unavailable`); a mise install adds the mise tool alias and backend, and a failure adds an `error` code. No path is added.
 
 Output flags are per command. `doctor` rejects `--json` with exit 2;
 [`v2` (family reference)](/reference/cli/agents/)

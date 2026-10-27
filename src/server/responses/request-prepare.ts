@@ -17,7 +17,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -30,6 +30,9 @@ import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
   conversationIdFromResponsesRequest,
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
@@ -84,6 +87,7 @@ import {
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
 import {
   resolveSubagentFallbackChain,
@@ -99,6 +103,7 @@ import type {
 import {
   codexRouteCredentialDomainHeaders,
   codexRouteCredentialOwnership,
+  mainHardLockFallbackCallerCheck,
   resolveResponsesCodexAuth,
   withClaudeNativeSession,
 } from "./core-auth";
@@ -133,6 +138,7 @@ import {
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import {
+  admissionMayUseMeteredComboTargets,
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
@@ -140,6 +146,13 @@ import {
   routeAllowedByScope,
 } from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
+import type { ClientToolCatalogRestriction } from "../../lib/empty-tool-catalog";
+import {
+  currentTurnWireToolCatalogBody,
+  hasExplicitEmptyToolCatalog,
+  collectDeclaredWireToolNames,
+  collectDeclaredBareCustomWireToolNames,
+} from "../responses-undeclared-tool-guard";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
   preAuthUpstreamHostCircuitKey,
@@ -149,6 +162,8 @@ import {
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
+import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
+import { FallbackRefusedError, guardFallbackHop } from "../../routing/fallback-policy";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -286,14 +301,14 @@ export async function prepareResponsesRequest(
       effort: comboEffortRow.effort,
     };
   }
+  const isCompactionTrigger = body !== null && typeof body === "object" && !Array.isArray(body)
+    && Array.isArray((body as { input?: unknown }).input)
+    && ((body as { input: unknown[] }).input).some((item: unknown) =>
+      typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
   if (!concreteSelection && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const rawModel = (body as { model?: unknown }).model;
-    const rawInput = (body as { input?: unknown }).input;
-    const isCompactionTrigger = Array.isArray(rawInput)
-      && rawInput.some((item: unknown) =>
-        typeof item === "object" && item !== null && (item as { type?: string }).type === "compaction_trigger");
     if (typeof rawModel === "string" && !rawModel.includes("/") && isCompactionTrigger
       && !comboRows.fastRow && !comboEffortRow
       && !resolveComboId(config, rawModel)) {
@@ -322,6 +337,7 @@ export async function prepareResponsesRequest(
     }
   }
   let shadowCallIntercepted = false;
+  let shadowCallMatches = false;
   // Luna is also selectable by users/children. Both intercept sites use the same
   // per-turn provenance; WS frames must not inherit the handshake's classification.
   const threadSpawn = isThreadSpawnRequest(req.headers);
@@ -331,6 +347,7 @@ export async function prepareResponsesRequest(
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
       && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
+      shadowCallMatches = true;
       const shadowComboId = resolveComboId(config, shadowIntercept.model);
       if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
         shadowCallIntercepted = true;
@@ -342,6 +359,26 @@ export async function prepareResponsesRequest(
           shadowSourceModelPrefix(rawShadowModel, shadowIntercept.sourceModels),
         );
       }
+    }
+  }
+  // The hard-lock fallback owns ordinary turns only, and only after every more specific
+  // routing setting had its chance above: a shadow-intercepted, memory-phased, compaction
+  // or decision turn keeps its own destination, and an intercepted combo selector is
+  // already owned by the intercept. A spawned sub-agent turn names its model on purpose,
+  // the same reason the shadow intercept leaves it alone. Like the sites above it, this
+  // must run before comboIdFromRawBody reads `model`.
+  if (!concreteSelection && !options.compactionRoutingOverride && !isCompactionTrigger && !options.internalDecisionCall
+    && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
+    try {
+      options.mainHardLockFallbackOverride = await applyMainHardLockFallbackOverride(
+        body, config, undefined, mainHardLockFallbackCallerCheck(req, config, options), options.admission,
+      );
+    } catch (error) {
+      if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
+      if (error instanceof FallbackRefusedError) return error.response;
+      const mapped = mapCodexAuthContextErrorToResponse(error, { now: Date.now() });
+      if (mapped) return mapped;
+      throw error;
     }
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
@@ -430,15 +467,31 @@ export async function prepareResponsesRequest(
 
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
+  let clientToolCatalogRestriction: ClientToolCatalogRestriction | undefined;
   try {
     parsed = parseRequest(body);
     // Antigravity direct lane: the body carried only the request settings, so the parse above
     // produced them with an empty conversation; the conversation itself comes straight from the
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
+    parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
+    // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
+    // The direct settings body omits tools, including current legacy Chat functions. Recover
+    // their wire names only when this restriction needs a non-empty decoded catalog.
+    const catalogBody = options.directRequest && options.clientDeclaredEmptyToolCatalog === true && parsed.context.tools?.length
+      ? options.directRequest.bridgeConversation() : parsed._rawBody;
+    const currentCatalog = currentTurnWireToolCatalogBody(catalogBody, parsed._replayPrefixLen);
+    if (options.clientDeclaredEmptyToolCatalog === true || hasExplicitEmptyToolCatalog(currentCatalog)) {
+      clientToolCatalogRestriction = {
+        declaredToolNames: collectDeclaredWireToolNames(currentCatalog),
+        bareCustomToolNames: collectDeclaredBareCustomWireToolNames(currentCatalog),
+      };
+    }
     if (options.inboundWire === "anthropic") {
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
+      parsed._anthropicServerTools = options.anthropicServerTools;
+      parsed._anthropicServerReplay = options.anthropicServerReplay;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
@@ -553,15 +606,20 @@ export async function prepareResponsesRequest(
     // would become enough to read another caller's retained search result. Without a principal
     // bridgeSearchReplayScope yields no scope, so nothing is recorded or restored for it. The
     // field is always rewritten so an absent principal also clears one a reused holder carried.
-    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission);
+    const clientPrincipalId = options.replayPrincipal
+      ? options.replayPrincipal.clientPrincipalId
+      : resolveContextPrincipal(req, config, options.admission);
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
-  // absent or synthetically injected (session_id from prompt_cache_key).
-  if (!logCtx.conversationId) {
-    logCtx.conversationId = resolvedConversationId;
-  }
-  logCtx.requestedModel = options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+  // absent or synthetically injected (session_id from prompt_cache_key). A Hermes-only id
+  // is a log fallback: native resolution replaces it, and it only fills an empty slot.
+  assignNativeLogConversationId(logCtx, resolvedConversationId ?? nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
+  // A rewritten turn logs the selector the client asked for, so the usage log never
+  // claims the operator typed the fallback model themselves.
+  logCtx.requestedModel = options.mainHardLockFallbackOverride?.sourceModel
+    ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   // What this request may spend beyond its input, for the durable spend reservation (#4707).
   // Read from the caller rather than from the adapter's serialized body, because the
@@ -582,7 +640,7 @@ export async function prepareResponsesRequest(
   // The selector the caller actually sent, captured before shadow interception
   // or a subagent fallback rewrites it, so a refusal names the client's own
   // request rather than a destination it never asked for.
-  const inboundSelector = parsed.modelId;
+  const inboundSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {
     const slash = selector.indexOf("/");
     if (slash <= 0) return false;
@@ -602,6 +660,22 @@ export async function prepareResponsesRequest(
   }
   const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
+    // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
+    // policy so random/RR cannot refuse while an unmetered target is still usable.
+    if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
+      config, options.admission, config.combos?.[candidate.combo.comboId],
+    )) {
+      const pick = pickComboTarget(config, candidate.combo.comboId, {
+        eligible: target => !target.metered,
+        allowCooldownReprobe: false,
+      });
+      if (!pick) {
+        throw new NoAvailableComboTargetsError(candidate.combo.comboId,
+          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+      }
+      const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+      candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
+    }
     // Every route this request path produces passes through here: the direct
     // name, an alias, a policy or combo selection, a compaction override, a
     // shadow-intercept target and both subagent-fallback re-routes. Checking
@@ -668,7 +742,7 @@ export async function prepareResponsesRequest(
     }
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.internalDecisionCall && !preserveShadowModel && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!concreteSelection && !memoryRoute && !options.memoryModelPhase && !options.compactionRoutingOverride && !options.mainHardLockFallbackOverride && !options.internalDecisionCall && !preserveShadowModel && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -707,6 +781,23 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    // Selection-free hard-lock preflight grants no hop. Enforce the actual ranked destination
+    // against the locked source before admitting this first selection.
+    const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
+    if (hardLockProfileTrace && options.mainHardLockFallbackOverride) {
+      const override = options.mainHardLockFallbackOverride;
+      const hop = guardFallbackHop(config, {
+        site: "routing-profile",
+        route: override.sourceModel,
+        aliases: [`policy/${hardLockProfileTrace.id}`],
+        from: { provider: OPENAI_CODEX_PROVIDER_ID, model: override.sourceModel },
+        to: { provider: route.providerName, model: route.modelId },
+        trigger: "hard_lock",
+        admission: options.admission,
+      });
+      if (!hop.ok) return hop.response;
+      hop.commit();
+    }
     leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
     // Name the phase in the persisted route decision, so the request log says why this turn went to
     // the memory destination instead of leaving it looking like a plain user selection. Set here, on
@@ -721,15 +812,22 @@ export async function prepareResponsesRequest(
         };
       }
     }
-    if (options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)) {
+    if ((options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route))
+      || options.mainHardLockFallbackOverride) {
       credentialDomainWasRewritten = true;
       // The destination does not share the conversation's credential domain, so it can neither
       // verify the source backend's reasoning ciphertext nor decode its native compaction blob.
       // This is the same condition an account change already reports (account-change-state.ts),
       // and the serializer turns a stored summary into readable text instead of dropping it.
       parsed._stripReasoningEncryptedContent = true;
+      parsed._stripNativeCompactionEncryptedContent = true;
       if (parsed._compactionRequest === true) parsed._portableCompaction = true;
     }
+    // A v1 fallback needs an ocx1 summary for replacement-history decoding, even when this
+    // custom destination separately accepts native v2 triggers. Legacy defaults stay intact.
+    if (options.compactionRecoveryKind === "compaction-v1" && parsed._compactionRequest === true
+      && route.provider.adapter === "openai-responses" && route.provider.supportsNativeCompactionTrigger === true
+      && !isCanonicalOpenAiForwardProvider(route.provider)) parsed._portableCompaction = true;
     logCtx.routeDecision = route.routeDecision;
     logCtx.policyEligibility = route.policyEligibility;
   } catch (err) {
@@ -740,7 +838,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId);
+      return comboUnavailable(err.comboId, undefined, err.reasons);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -934,7 +1032,9 @@ export async function prepareResponsesRequest(
       subagentFallbackModelEligibleAccountIdsForModel,
       fallbackChain,
       candidateRoute => canPassThroughEncryptedV2AgentTask(candidateRoute, inboundWire),
+      options.admission,
     );
+    if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
@@ -958,7 +1058,7 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId);
+          return comboUnavailable(err.comboId, undefined, err.reasons);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -1030,6 +1130,7 @@ export async function prepareResponsesRequest(
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
+            "_nativeReasoningRetention",
             "_cursorIsolateConversation",
           ];
           for (const key of kept) {
@@ -1147,11 +1248,15 @@ export async function prepareResponsesRequest(
                 recoverySelectionOptions,
                 subagentFallbackAccountPreview,
                 subagentFallbackModelEligibleAccountIdsForModel,
+                undefined,
+                undefined,
+                options.admission,
               );
             } finally {
               recoverySelectionAdmission?.release();
             }
           })();
+          if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
@@ -1175,7 +1280,7 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId);
+                return comboUnavailable(err.comboId, undefined, err.reasons);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
@@ -1492,6 +1597,8 @@ export async function prepareResponsesRequest(
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
         parsed,
+        preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(route.provider)
+          && parsed._nativeReasoningRetention?.accountSwitch === true,
         bindingKey: binding.bindingKey,
         servingAccountId: binding.accountId,
         logCtx,
@@ -1511,6 +1618,7 @@ export async function prepareResponsesRequest(
   return {
     inboundWire,
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
+    clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and
     // the key scope as it stood when this request was admitted.
     inboundSelector,
