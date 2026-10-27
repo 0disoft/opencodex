@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, parse } from "node:path";
 import { spawnSync } from "node:child_process";
 import { codexCommandCanBypass } from "../../src/cli/codex-launch-command";
@@ -14,16 +13,14 @@ import { buildWindowsCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/c
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { makeCodexLaunchFixturePrivate, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
+import { createCodexLaunchFixtureRoot, codexLaunchOwnershipTest, codexLaunchProjectRefusalTest, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
 
 const fixtureToken = "ocx_fixture_launcher_security";
 const installation = { port: 12199, hostname: "0.0.0.0" };
 const local = 'model_provider = "opencodex"\n' + buildProviderTableBlockForTarget(standaloneCodexRoutingTarget(12199, installation));
 
 function fixture(run: (home: string, codexHome: string, ocxHome: string) => void): void {
-  const temp = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir();
-  const home = mkdtempSync(join(temp, "ocx-launch-security-"));
-  makeCodexLaunchFixturePrivate(home);
+  const home = createCodexLaunchFixtureRoot("ocx-launch-security-");
   const cwd = process.cwd();
   const saved = { CODEX_HOME: process.env.CODEX_HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME };
   const codexHome = join(home, "codex-home"), ocxHome = join(home, "ocx-home");
@@ -42,15 +39,15 @@ function fixture(run: (home: string, codexHome: string, ocxHome: string) => void
   }
 }
 
-function expectManagedHome(codexHome: string): void {
-  writeFileSync(join(codexHome, "config.toml"), local);
-  let reads = 0;
-  const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; } });
-  expect(reads).toBe(1);
-  expect(env.OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
-}
-
 describe("codex launcher credential destination", () => {
+  // Keep the shared positive control separate so unsafe hosts still execute all negatives.
+  codexLaunchOwnershipTest("the managed starting configuration reads the service token exactly once", () => fixture((_home, codexHome) => {
+    writeFileSync(join(codexHome, "config.toml"), local);
+    let reads = 0;
+    const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; } });
+    expect(reads).toBe(1);
+    expect(env.OPENCODEX_API_AUTH_TOKEN).toBe(fixtureToken);
+  }));
   for (const [name, content] of [
     ["remote reserved provider", local.replace("http://127.0.0.1:12199/v1", "https://gateway.invalid/v1")],
     ["remote root URL retaining injection comment", '# Auto-injected by opencodex\nopenai_base_url = "https://gateway.invalid/v1"\n'],
@@ -60,7 +57,6 @@ describe("codex launcher credential destination", () => {
     ["malformed TOML", local + '\nmodel_provider = [\n'],
   ]) {
     test(`does not load a token for ${name}`, () => fixture((_home, codexHome) => {
-      expectManagedHome(codexHome);
       writeFileSync(join(codexHome, "config.toml"), content!);
       let reads = 0;
       const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: classifyCodexRouting(content!), serviceToken: () => { reads++; return fixtureToken; } });
@@ -68,7 +64,7 @@ describe("codex launcher credential destination", () => {
       expect(reads).toBe(0);
     }));
   }
-  test("loads the service token for the managed provider on this installation's local listener", () => fixture((home, codexHome) => {
+  codexLaunchOwnershipTest("loads the service token for the managed provider on this installation's local listener", () => fixture((home, codexHome) => {
     writeFileSync(join(codexHome, "config.toml"), local);
     // This isolated Codex home must not inherit project configs beside the real user's
     // home/worktree. The filesystem root has no caller ancestor configuration layers.
@@ -79,7 +75,7 @@ describe("codex launcher credential destination", () => {
     } finally { process.chdir(originalDirectory); }
   }));
   test("directory and remote overrides never read a service token", () => fixture((_home, codexHome) => {
-    expectManagedHome(codexHome);
+    writeFileSync(join(codexHome, "config.toml"), local);
     for (const args of [["-C", "other"], ["-Cother"], ["--cd=other"], ["--cd", "other"], ["--remote", "remote"], ["--remote=remote"]]) {
       let reads = 0;
       expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", args, serviceToken: () => { reads++; return fixtureToken; } })).toEqual({ CODEX_HOME: codexHome });
@@ -87,7 +83,7 @@ describe("codex launcher credential destination", () => {
     }
   }));
   test("project configuration and environment destination overrides suppress loading", () => fixture((home, codexHome) => {
-    expectManagedHome(codexHome);
+    writeFileSync(join(codexHome, "config.toml"), local);
     expect(buildCodexLaunchEnv({ CODEX_HOME: codexHome, OPENAI_BASE_URL: "https://gateway.invalid/v1" }, { routingKind: "opencodex-local" }).OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     const project = join(home, "project"); mkdirSync(project);
     mkdirSync(join(project, ".codex"));
@@ -101,8 +97,8 @@ describe("codex launcher credential destination", () => {
       expect(reads).toBe(0);
     } finally { process.chdir(originalDirectory); }
   }));
-  test("custom project roots cannot hide an outer override behind a nested .git", () => fixture((home, codexHome) => {
-    expectManagedHome(codexHome);
+  codexLaunchProjectRefusalTest("custom project roots cannot hide an outer override behind a nested .git", (expectedReason) => fixture((home, codexHome) => {
+    writeFileSync(join(codexHome, "config.toml"), local);
     const workspace = join(home, "workspace"), nested = join(workspace, "nested"), cwd = join(nested, "src");
     mkdirSync(cwd, { recursive: true });
     mkdirSync(join(workspace, ".codex"));
@@ -119,7 +115,7 @@ describe("codex launcher credential destination", () => {
         credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }),
       });
       expect(reads).toBe(0);
-      expect(reason).toBe("project");
+      expect(reason).toBe(expectedReason);
       expect(env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     } finally { process.chdir(originalDirectory); }
   }));

@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { makeCodexLaunchFixturePrivate, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
+import { createCodexLaunchFixtureRoot, codexLaunchOwnershipTest, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
 import { codexLaunchSystemNamespaceIsSafe, codexPosixSystemNamespace, darwinAclInspectionIsEmpty } from "../../src/cli/codex-launch-ownership";
 
 const token = "ocx_fixture_admission";
@@ -14,9 +13,7 @@ const cfg = { port: 12199, hostname: "0.0.0.0" };
 const local = 'model_provider="opencodex"\n' + buildProviderTableBlockForTarget(standaloneCodexRoutingTarget(cfg.port, cfg));
 
 function fixture(run: (root: string, home: string) => void): void {
-  const temp = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir();
-  const root = mkdtempSync(join(temp, "ocx-admission-")), home = join(root, "codex"), ocx = join(root, "ocx");
-  makeCodexLaunchFixturePrivate(root);
+  const root = createCodexLaunchFixtureRoot("ocx-admission-"), home = join(root, "codex"), ocx = join(root, "ocx");
   mkdirSync(home); mkdirSync(ocx);
   const prior = process.env.OPENCODEX_HOME, cwd = process.cwd();
   process.env.OPENCODEX_HOME = ocx;
@@ -122,7 +119,7 @@ else { [System.IO.File]::SetAccessControl($path,$acl) }`;
     if (entry === "directory") expect(codexLaunchSystemNamespaceIsSafe(join(home, "missing-system"))).toBe(false);
   }));
 
-  test("a protected empty system namespace may authorize missing files", () => fixture((_root, home) => {
+  codexLaunchOwnershipTest("a protected empty system namespace may authorize missing files", () => fixture((_root, home) => {
     expect(codexLaunchSystemNamespaceIsSafe(join(home, "missing", "Codex"))).toBe(true);
   }));
   test.skipIf(process.platform !== "win32")("shell casing aliases cannot replace the system namespace protocol input", () => fixture((_root, home) => {
@@ -158,7 +155,7 @@ else { [System.IO.File]::SetAccessControl($path,$acl) }`;
   }));
 
   for (const args of [[], ["-m", "fixture", "--", "hello"], ["--model=fixture", "--", "hello"], ["--no-daemon", "exec", "--skip-git-repo-check", "--ephemeral", "--json", "fixture prompt"]]) {
-    test(`managed positive ${args.join(" ")}`, () => fixture((_root, home) => {
+    codexLaunchOwnershipTest(`managed positive ${args.join(" ")}`, () => fixture((_root, home) => {
       const result = launch(home, args);
       expect(result.reads).toBe(1);
       expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBe(token);

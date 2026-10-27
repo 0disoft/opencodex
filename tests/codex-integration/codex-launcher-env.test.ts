@@ -11,7 +11,7 @@ import { codexLaunchHomeIsOwned } from "../../src/cli/codex-launch-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
-import { makeCodexLaunchFixturePrivate, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
+import { createCodexLaunchFixtureRoot, codexLaunchOwnershipTest, codexLaunchProjectRefusalTest, buildCodexPrivateFixtureLaunchEnv as buildCodexLaunchEnv } from "../helpers/codex-launch-private-fixture";
 
 const token = "ocx_fixture_launch_env";
 const installation = { port: 12199, hostname: "0.0.0.0" };
@@ -21,9 +21,7 @@ const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "http
 
 async function fixture(run: (root: string, home: string) => void | Promise<void>): Promise<void> {
   // Avoid the real user's ancestor .codex layer, which deliberately denies injection.
-  const temp = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir();
-  const root = mkdtempSync(join(temp, "ocx-launch-env-"));
-  makeCodexLaunchFixturePrivate(root);
+  const root = createCodexLaunchFixtureRoot("ocx-launch-env-");
   const saved = { ...process.env }, cwd = process.cwd();
   const user = join(root, "user"), home = join(root, "codex-home"), ocx = join(root, "ocx");
   for (const path of [user, home, ocx]) mkdirSync(path);
@@ -64,7 +62,7 @@ function canCreateDirectorySymlink(): boolean {
 }
 
 describe("Codex launcher native home and proxy environment", () => {
-  test.skipIf(!canCreateDirectorySymlink())("a symlinked user .codex is the home config, not a project layer", () => fixture((root, home) => {
+  (canCreateDirectorySymlink() ? codexLaunchOwnershipTest : test.skip)("a symlinked user .codex is the home config, not a project layer", () => fixture((root, home) => {
     const user = join(root, "user"), cwd = join(user, "project");
     mkdirSync(cwd);
     symlinkSync(join("..", "codex-home"), join(user, ".codex"), "dir");
@@ -77,7 +75,7 @@ describe("Codex launcher native home and proxy environment", () => {
   }));
 
   for (const entry of ["parent", "ancestor", "redirect"] as const) {
-    test.skipIf(!canCreateDirectorySymlink())(`a writable project alias ${entry} refuses before token read`, () => fixture((root, home) => {
+    (canCreateDirectorySymlink() ? codexLaunchProjectRefusalTest : test.skip)(`a writable project alias ${entry} refuses before token read`, (expectedReason) => fixture((root, home) => {
       const shared = join(root, "shared"), project = join(shared, "project");
       mkdirSync(project, { recursive: true });
       if (entry === "redirect") {
@@ -96,32 +94,32 @@ describe("Codex launcher native home and proxy environment", () => {
       try {
         const result = launch();
         expect(result.reads).toBe(0);
-        expect(result.reason).toBe("project");
+        expect(result.reason).toBe(expectedReason);
         expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
       } finally { if (process.platform !== "win32") chmodSync(writable, 0o700); }
     }));
   }
 
-  test.skipIf(!canCreateDirectorySymlink())("project alias inspection failure refuses before token read", () => fixture((root, home) => {
+  (canCreateDirectorySymlink() ? codexLaunchProjectRefusalTest : test.skip)("project alias inspection failure refuses before token read", (expectedReason) => fixture((root, home) => {
     symlinkSync(home, join(root, ".codex"), "dir");
     const inspect = spyOn(fs, "readlinkSync").mockImplementation(() => { throw new Error("fixture inspection unavailable"); });
     try {
       const result = launch();
       expect(result.reads).toBe(0);
-      expect(result.reason).toBe("project");
+      expect(result.reason).toBe(expectedReason);
       expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     } finally { inspect.mockRestore(); }
   }));
 
-  test.skipIf(process.platform !== "win32" || !canCreateDirectorySymlink())("a writable Windows alias entry refuses while its target stays protected", () => fixture((root, home) => {
+  (process.platform === "win32" && canCreateDirectorySymlink() ? codexLaunchProjectRefusalTest : test.skip)("a writable Windows alias entry refuses while its target stays protected", (expectedReason) => fixture((root, home) => {
     const link = join(root, ".codex");
     symlinkSync(home, link, "dir");
     const grant = spawnSync("icacls.exe", [link, "/L", "/grant", "*S-1-1-0:(F)"], { encoding: "utf8", windowsHide: true });
     expect(grant.status).toBe(0);
-    expect(codexLaunchHomeIsOwned(home)).toBe(true);
+    expect(codexLaunchHomeIsOwned(home)).toBe(expectedReason === "project");
     const result = launch();
     expect(result.reads).toBe(0);
-    expect(result.reason).toBe("project");
+    expect(result.reason).toBe(expectedReason);
     expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
   }));
 
@@ -157,7 +155,7 @@ describe("Codex launcher native home and proxy environment", () => {
     expect(result.env).toEqual(base);
   }));
 
-  test("relative and literal tilde local homes are bound to the verified absolute directory", () => fixture((root) => {
+  codexLaunchOwnershipTest("relative and literal tilde local homes are bound to the verified absolute directory", () => fixture((root) => {
     const literal = join(root, "~", "local"); mkdirSync(literal, { recursive: true });
     writeFileSync(join(literal, "config.toml"), local);
     for (const raw of ["codex-home", join("~", "local")]) {
@@ -176,7 +174,7 @@ describe("Codex launcher native home and proxy environment", () => {
     }
   }));
 
-  test("an implicit home is resolved from the child environment and bound explicitly", () => fixture((root) => {
+  codexLaunchOwnershipTest("an implicit home is resolved from the child environment and bound explicitly", () => fixture((root) => {
     const implicit = join(root, "user", ".codex"); mkdirSync(implicit);
     writeFileSync(join(implicit, "config.toml"), local);
     const base = { ...process.env }; delete base.CODEX_HOME;
@@ -193,7 +191,7 @@ describe("Codex launcher native home and proxy environment", () => {
     }
   }));
 
-  test("junction or symlink homes bind to the physical verified directory", () => fixture((root, home) => {
+  codexLaunchOwnershipTest("junction or symlink homes bind to the physical verified directory", () => fixture((root, home) => {
     const link = join(root, "linked"); symlinkSync(home, link, process.platform === "win32" ? "junction" : "dir");
     process.env.CODEX_HOME = link;
     const result = launch();
@@ -212,7 +210,7 @@ describe("Codex launcher native home and proxy environment", () => {
     }));
   }
 
-  test("empty proxy variables preserve normal local credential delivery", () => fixture((_root, home) => {
+  codexLaunchOwnershipTest("empty proxy variables preserve normal local credential delivery", () => fixture((_root, home) => {
     const result = launch({ ...process.env, HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "" });
     expect(result.reads).toBe(1);
     expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBe(token);
@@ -234,7 +232,7 @@ describe("Codex launcher native home and proxy environment", () => {
     }
   }));
 
-  test("default transport gets identical loopback bypasses and preserves existing entries", () => fixture((_root, home) => {
+  codexLaunchOwnershipTest("default transport gets identical loopback bypasses and preserves existing entries", () => fixture((_root, home) => {
     writeFileSync(join(home, "config.toml"), local + "\n[features]\nrespect_system_proxy = false\nsystem_proxy_fallback = true\n");
     const result = launch({ ...process.env, NO_PROXY: "example.invalid", no_proxy: "other.invalid", No_Proxy: "third.invalid" });
     expect(result.reads).toBe(1);

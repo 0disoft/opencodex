@@ -6,6 +6,15 @@ import * as ownership from "../../src/cli/codex-launch-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("Codex launcher Darwin ACL mutation admission", () => {
+  test("only a null descriptor with ENOENT means no extended ACL", () => {
+    expect(ownership.darwinAclDescriptorIsAbsent(null, 2)).toBe(true);
+    expect(ownership.darwinAclDescriptorIsAbsent(0, 2)).toBe(true);
+    expect(ownership.darwinAclDescriptorIsAbsent(0n, 2)).toBe(true);
+    for (const errno of [0, 5, 12, 13, 22, 45]) {
+      expect(ownership.darwinAclDescriptorIsAbsent(null, errno)).toBe(false);
+    }
+    expect(ownership.darwinAclDescriptorIsAbsent(123, 2)).toBe(false);
+  });
   test("empty ACLs are safe", () => {
     expect(ownership.darwinAclEntriesAreSafe([])).toBe(true);
   });
@@ -43,6 +52,9 @@ describe("Codex launcher Darwin ACL mutation admission", () => {
     try {
       mkdirSync(home); chmodSync(root, 0o700); chmodSync(home, 0o700);
       writeFileSync(join(home, "config.toml"), 'model = "fixture"\n', { mode: 0o600 });
+      expect(ownership.codexLaunchHomeIsOwned(home)).toBe(true);
+      expect(ownership.codexLaunchSystemNamespaceIsSafe(join(home, "missing-system"))).toBe(true);
+      expect(ownership.codexLaunchProjectAliasIsOwned(join(home, "config.toml"))).toBe(true);
       const chmodAcl = (entry: string) => {
         const result = Bun.spawnSync(["/bin/chmod", "+a", entry, root], { stdout: "pipe", stderr: "pipe" });
         expect(result.success).toBe(true);
@@ -51,6 +63,10 @@ describe("Codex launcher Darwin ACL mutation admission", () => {
       expect(ownership.codexLaunchHomeIsOwned(home)).toBe(true);
       chmodAcl("everyone allow write");
       expect(ownership.codexLaunchHomeIsOwned(home)).toBe(false);
-    } finally { removeTreeWithRetry(root); }
+    } finally {
+      const cleared = Bun.spawnSync(["/bin/chmod", "-N", root], { stdout: "pipe", stderr: "pipe" });
+      expect(cleared.success).toBe(true);
+      removeTreeWithRetry(root);
+    }
   });
 });

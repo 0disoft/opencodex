@@ -160,6 +160,11 @@ export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string, repo
   } catch { return refuse("systemNamespace"); }
 }
 
+/** Libc's filesec_get_property reports an absent FILESEC_ACL as ENOENT. */
+export function darwinAclDescriptorIsAbsent(descriptor: number | bigint | null, errorNumber: number): boolean {
+  return !descriptor && errorNumber === 2;
+}
+
 /** Darwin's successful end-of-enumeration differs from POSIX. */
 export function darwinAclInspectionIsEmpty(validResult: number, entryResult: number, errorNumber: number): boolean {
   // Darwin differs from POSIX: found entry => 0; a valid empty ACL => -1/EINVAL.
@@ -200,7 +205,13 @@ function macHasNoManagedCodexPreferences(paths: readonly string[], inspectLinks 
       const bytes = Buffer.from(path + "\0"), entry = Buffer.alloc(8), tag = Buffer.alloc(4), permset = Buffer.alloc(8);
       // Alias admission must inspect the link's ACL, too; acl_get_file follows it.
       const descriptor = (inspectLinks ? acl.symbols.acl_get_link_np : acl.symbols.acl_get_file)(ptr(bytes), 0x100); // ACL_TYPE_EXTENDED
-      if (!descriptor) return false;
+      if (!descriptor) {
+        // Read errno immediately: both get_file and get_link_np use acl_get_file1.
+        // https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
+        const errno = acl.symbols.__error();
+        if (!errno || !darwinAclDescriptorIsAbsent(descriptor, read.i32(errno))) return false;
+        continue;
+      }
       try {
         const valid = acl.symbols.acl_valid(descriptor);
         if (valid !== 0) return false;

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCodexLaunchEnv, type CodexLaunchEnvDeps } from "../../src/cli/codex-launcher";
 import { codexCredentialDestinationIsTrusted } from "../../src/cli/codex-launch-auth";
@@ -8,7 +7,7 @@ import { CODEX_TOKEN_REFUSALS, codexTokenWithheldDiagnostic } from "../../src/cl
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
-import { makeCodexLaunchFixturePrivate } from "../helpers/codex-launch-private-fixture";
+import { createCodexLaunchFixtureRoot, codexLaunchOwnershipTest } from "../helpers/codex-launch-private-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const secret = "ocx_fixture_diagnostic_secret", contents = "fixture-key-file-content-never-log";
@@ -66,9 +65,8 @@ describe("Codex credential withholding diagnostics", () => {
     ]) expect(result.notes).toEqual([]);
   });
 
-  test.skipIf(process.platform !== "win32")("missing or writable Windows namespace explains the requirement and explicit credential alternative", () => {
-    const root = mkdtempSync(join(process.env.SystemRoot ?? "C:/Windows", "Temp", "ocx-namespace-diagnostic-"));
-    makeCodexLaunchFixturePrivate(root);
+  (process.platform === "win32" ? codexLaunchOwnershipTest : test.skip)("missing or writable Windows namespace explains the requirement and explicit credential alternative", () => {
+    const root = createCodexLaunchFixtureRoot("ocx-namespace-diagnostic-");
     const home = join(root, "codex"), ocx = join(root, "ocx"), machine = join(root, "machine");
     for (const path of [home, ocx, machine]) mkdirSync(path);
     const system = join(machine, "OpenAI", "Codex"), prior = process.env.OPENCODEX_HOME, cwd = process.cwd();
@@ -126,9 +124,8 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([Sy
     }
   });
 
-  test("configuration reasons reach stderr without file contents or credential paths", () => {
-    const root = mkdtempSync(join(process.platform === "win32" ? join(process.env.SystemRoot ?? "C:/Windows", "Temp") : tmpdir(), "ocx-diagnostic-"));
-    makeCodexLaunchFixturePrivate(root);
+  codexLaunchOwnershipTest("configuration reasons reach stderr without file contents or credential paths", () => {
+    const root = createCodexLaunchFixtureRoot("ocx-diagnostic-");
     const home = join(root, "codex"), ocx = join(root, "ocx"), system = join(root, "system");
     for (const path of [home, ocx, system]) mkdirSync(path);
     const cfg = { port: 12199, hostname: "0.0.0.0" }, prior = process.env.OPENCODEX_HOME, cwd = process.cwd();
