@@ -1,5 +1,6 @@
 {
   "codex-launcher-diagnostics.test.ts": "codex-integration",
+  "codex-launcher-darwin-acl.test.ts": "codex-integration",
   "codex-launcher-admission.test.ts": "codex-integration",
   "codex-launcher.test.ts": "codex-integration",
   "codex-launcher-process.test.ts": "codex-integration",

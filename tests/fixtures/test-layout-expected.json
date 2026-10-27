@@ -591,6 +591,7 @@
   "codex-service-manager-probe-hardening.test.ts": "codex-integration",
   "codex-service-manager-probe.test.ts": "codex-integration", "codex-systemd-env-probe.test.ts": "codex-integration",
   "codex-launcher-diagnostics.test.ts": "codex-integration",
+  "codex-launcher-darwin-acl.test.ts": "codex-integration",
   "codex-launcher-admission.test.ts": "codex-integration",
   "codex-launcher.test.ts": "codex-integration",
   "codex-launcher-process.test.ts": "codex-integration",

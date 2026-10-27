@@ -121,12 +121,25 @@ export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string, repo
   } catch { return refuse("systemNamespace"); }
 }
 
-/** Match Codex's CFPreferencesAppValueIsForced test without reading preference contents. */
+/** Darwin's successful end-of-enumeration differs from POSIX. */
 export function darwinAclInspectionIsEmpty(validResult: number, entryResult: number, errorNumber: number): boolean {
   // Darwin differs from POSIX: found entry => 0; a valid empty ACL => -1/EINVAL.
   return validResult === 0 && entryResult === -1 && errorNumber === 22;
 }
 
+// Tags, permission bits and enumeration constants: Apple's sys/acl.h
+// https://github.com/apple-oss-distributions/Libc/blob/main/include/sys/acl.h
+// WRITE_DATA/APPEND_DATA are also ADD_FILE/ADD_SUBDIRECTORY, respectively.
+const DARWIN_ACL_MUTATION_PERMISSIONS = [2, 4, 5, 6, 8, 10, 12, 13].map(bit => 1 << bit);
+const DARWIN_ACL_MUTATION_MASK = DARWIN_ACL_MUTATION_PERMISSIONS.reduce((mask, permission) => mask | permission, 0);
+
+/** null means incomplete/unreadable enumeration; DENYs never conceal later ALLOWs. */
+export function darwinAclEntriesAreSafe(entries: readonly { tag: number; perms: number }[] | null): boolean {
+  return entries !== null && entries.every(({ tag, perms }) =>
+    tag === 2 || (tag === 1 && (perms & DARWIN_ACL_MUTATION_MASK) === 0));
+}
+
+/** Match Codex's CFPreferencesAppValueIsForced test without reading preference contents. */
 function macHasNoManagedCodexPreferences(paths: readonly string[]): boolean {
   let library: { close(): void } | undefined;
   let aclLibrary: { close(): void } | undefined;
@@ -135,23 +148,44 @@ function macHasNoManagedCodexPreferences(paths: readonly string[]): boolean {
     const acl = dlopen("/usr/lib/libSystem.B.dylib", {
       acl_get_file: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
       acl_get_entry: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
+      acl_get_tag_type: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+      acl_get_permset: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+      acl_get_perm_np: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
       acl_valid: { args: [FFIType.ptr], returns: FFIType.i32 },
       acl_free: { args: [FFIType.ptr], returns: FFIType.i32 },
       __error: { args: [], returns: FFIType.ptr },
     });
     aclLibrary = acl;
     for (const path of paths) {
-      const bytes = Buffer.from(path + "\0"), entry = Buffer.alloc(8);
+      const bytes = Buffer.from(path + "\0"), entry = Buffer.alloc(8), tag = Buffer.alloc(4), permset = Buffer.alloc(8);
       const descriptor = acl.symbols.acl_get_file(ptr(bytes), 0x100); // ACL_TYPE_EXTENDED
       if (!descriptor) return false;
       try {
-        // Deny all extended ACLs, including unknown ACL semantics; mode bits alone are insufficient.
         const valid = acl.symbols.acl_valid(descriptor);
         if (valid !== 0) return false;
-        const found = acl.symbols.acl_get_entry(descriptor, 0, ptr(entry)); // ACL_FIRST_ENTRY
-        const errno = acl.symbols.__error();
-        if (!errno || !darwinAclInspectionIsEmpty(valid, found, read.i32(errno))) return false;
-      } finally { acl.symbols.acl_free(descriptor); }
+        const entries: { tag: number; perms: number }[] = [];
+        for (let id = 0; ; id = -1) { // ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1
+          const found = acl.symbols.acl_get_entry(descriptor, id, ptr(entry));
+          if (found !== 0) {
+            const errno = acl.symbols.__error();
+            if (!errno || !darwinAclInspectionIsEmpty(valid, found, read.i32(errno))) return false;
+            break;
+          }
+          const entryPointer = read.ptr(ptr(entry)) as import("bun:ffi").Pointer;
+          if (!entryPointer || acl.symbols.acl_get_tag_type(entryPointer, ptr(tag)) !== 0
+            || acl.symbols.acl_get_permset(entryPointer, ptr(permset)) !== 0) return false;
+          const permissions = read.ptr(ptr(permset)) as import("bun:ffi").Pointer;
+          if (!permissions) return false;
+          let perms = 0;
+          for (const permission of DARWIN_ACL_MUTATION_PERMISSIONS) {
+            const granted = acl.symbols.acl_get_perm_np(permissions, permission);
+            if (granted !== 0 && granted !== 1) return false;
+            if (granted === 1) perms |= permission;
+          }
+          entries.push({ tag: tag.readInt32LE(), perms });
+        }
+        if (!darwinAclEntriesAreSafe(entries)) return false;
+      } finally { if (acl.symbols.acl_free(descriptor) !== 0) return false; }
     }
     const core = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", {
       CFStringCreateWithCString: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.ptr },
