@@ -68,10 +68,13 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
     }
     for (let directory = process.cwd(); ; directory = dirname(directory)) {
       const projectConfig = join(directory, ".codex", "config.toml");
-      if (projectConfig !== join(home, "config.toml")) {
-        try { lstatSync(projectConfig); return refuse("project"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("layerInspection"); }
-      }
+      try {
+        lstatSync(projectConfig);
+        // A symlinked ~/.codex can name this very home config. Only proven file
+        // identity excludes an existing candidate from the project-layer check.
+        try { if (realpathSync(projectConfig) !== realpathSync(join(home, "config.toml"))) return refuse("project"); }
+        catch { return refuse("project"); }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("layerInspection"); }
       // A nested .git need not be Codex's root: custom project_root_markers can select
       // an outer workspace. Without proving that selection, inspect every ancestor.
       if (dirname(directory) === directory) break;

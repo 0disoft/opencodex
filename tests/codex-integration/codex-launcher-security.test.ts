@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { delimiter, join, parse } from "node:path";
 import { spawnSync } from "node:child_process";
 import { codexCommandCanBypass } from "../../src/cli/codex-launch-command";
+import { codexCredentialDestinationIsTrusted } from "../../src/cli/codex-launch-auth";
+import { resolveCodexLaunchCommand } from "../../src/cli/codex-launcher";
+import { commandInvocation } from "../../src/lib/win-exec";
 import { classifyCodexRouting } from "../../src/codex/inject/routing-classify";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
@@ -106,13 +109,17 @@ describe("codex launcher credential destination", () => {
     writeFileSync(join(workspace, ".workspace-root"), "");
     writeFileSync(join(nested, ".git"), "gitdir: fixture\n");
     writeFileSync(join(workspace, ".codex", "config.toml"), '[model_providers.opencodex]\nbase_url = "https://gateway.invalid/v1"\n');
-    writeFileSync(join(codexHome, "config.toml"), 'project_root_markers = [".workspace-root"]\n' + local);
+    writeFileSync(join(codexHome, "config.toml"), local);
     const originalDirectory = process.cwd();
     try {
       process.chdir(cwd);
-      let reads = 0;
-      const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, { routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; } });
+      let reads = 0, reason: string | undefined;
+      const env = buildCodexLaunchEnv({ CODEX_HOME: codexHome }, {
+        routingKind: "opencodex-local", serviceToken: () => { reads++; return fixtureToken; },
+        credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }),
+      });
       expect(reads).toBe(0);
+      expect(reason).toBe("project");
       expect(env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
     } finally { process.chdir(originalDirectory); }
   }));
@@ -143,6 +150,21 @@ describe.skipIf(process.platform !== "win32")("codex launcher installed Windows 
         const wrapper = join(bin, "codex.cmd"); writeFileSync(wrapper, installed);
         const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`, PATHEXT: ".EXE;.CMD" };
         for (const key of ["OPENCODEX_API_AUTH_TOKEN", "OPENCODEX_ADMIN_AUTH_TOKEN", "OCX_API_TOKEN_FILE", "OCX_SHIM_BYPASS"]) delete env[key];
+        const resolveWithThrowingInspector = () => resolveCodexLaunchCommand(env, {
+          findOnPath: () => wrapper,
+          inspectShim: () => { throw new Error("fixture inspection failure"); },
+        });
+        if (obsolete) expect(resolveWithThrowingInspector).toThrow("cannot verify Codex shim bypass");
+        else {
+          const launch = resolveWithThrowingInspector();
+          expect(launch.command).toBe(wrapper);
+          expect(launch.env.OCX_SHIM_BYPASS).toBe("1");
+          const invocation = commandInvocation(launch.command, args);
+          const bypassed = spawnSync(invocation.file, invocation.args, { ...invocation.options,
+            env: launch.env as NodeJS.ProcessEnv, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, windowsHide: true });
+          expect(bypassed.status).toBe(23);
+          expect(JSON.parse(bypassed.stdout.trim())).toEqual({ token: null });
+        }
         const result = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), "codex", ...args], {
           cwd: repoRoot(), env, encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, windowsHide: true,
         });

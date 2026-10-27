@@ -48,7 +48,28 @@ function launch(base = { ...process.env }) {
   return { env, reads };
 }
 
+function canCreateDirectorySymlink(): boolean {
+  const root = mkdtempSync(join(tmpdir(), "ocx-symlink-probe-"));
+  try { symlinkSync(root, join(root, "link"), "dir"); return true; }
+  catch (error) {
+    if (["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  } finally { removeTreeWithRetry(root); }
+}
+
 describe("Codex launcher native home and proxy environment", () => {
+  test.skipIf(!canCreateDirectorySymlink())("a symlinked user .codex is the home config, not a project layer", () => fixture((root, home) => {
+    const user = join(root, "user"), cwd = join(user, "project");
+    mkdirSync(cwd);
+    symlinkSync(home, join(user, ".codex"), "dir");
+    process.chdir(cwd);
+    const base = { ...process.env }; delete base.CODEX_HOME;
+    const result = launch(base);
+    expect(result.reads).toBe(1);
+    expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBe(token);
+    expect(result.env.CODEX_HOME).toBe(realpathSync(home));
+  }));
+
   test("literal tilde home cannot borrow authority from the expanded user home", () => fixture((root) => {
     const expanded = join(root, "user", "trusted"), literal = join(root, "~", "trusted");
     mkdirSync(expanded); mkdirSync(literal, { recursive: true });
