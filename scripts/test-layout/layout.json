@@ -1802,6 +1802,7 @@
     "codex-role-sizing.test.ts": "routing",
     "codex-role-auto-assign.test.ts": "routing",
     "codex-agent-role-routes.test.ts": "server",
+    "codex-role-history-recovery.test.ts": "server",
     "codex-role-auto-assign-routes.test.ts": "server",
     "local-chat-completion.test.ts": "lib",
     "injection-model-suggest-routes.test.ts": "codex-integration",

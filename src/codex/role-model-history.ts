@@ -64,10 +64,12 @@ export function isRoleHistoryBatch(value: unknown): value is string {
 export function recordRoleModelChange(codexHome: string, change: RoleModelChange & { readonly n: number; readonly restores?: string }, dir: string = integrationsDir()): void {
   ensureDir(historyPath(dir));
   const stored: StoredRoleModelChange = { ...change, codexHome };
+  // Capture the complete source before this append can move its first row outside either tail limit.
+  const tail = tailRows(historyPath(dir));
   appendFileSync(historyPath(dir), `${JSON.stringify(stored)}\n`, { encoding: "utf8", mode: 0o600 });
-  if (statSync(historyPath(dir)).size <= ROLE_HISTORY_MAX_BYTES) return;
+  if (statSync(historyPath(dir)).size <= ROLE_HISTORY_MAX_BYTES && tail.lines < ROLE_HISTORY_MAX_ROWS) return;
   try {
-    compact(dir);
+    compact(dir, wholeBatches([stored, ...tail.rows]));
   } catch (cause) {
     // Reads stay bounded without the trim; the next append retries it.
     throw new Error("recorded the change but could not trim the history file", { cause });
@@ -78,21 +80,39 @@ export function recordRoleModelChange(codexHome: string, change: RoleModelChange
  * Rewrite the file to its newest rows within half the byte budget and the row budget, so the next
  * compaction is many saves away. A batch the cut falls inside is dropped whole, for every Codex home,
  * so no home is left with part of an Apply all to restore. A kept Restore keeps the batch it restores
- * whole, so a Restore still writing its roles never loses the batch that vouches for them.
+ * whole when the Restore and its sources fit both read limits; protected rows displace older batches.
  */
-function compact(dir: string): void {
-  const rows = wholeBatches(tailRows(historyPath(dir)));
-  let newest = 0;
-  let bytes = 0;
+function compact(dir: string, rows: StoredRoleModelChange[]): void {
+  const batches = new Map<string, StoredRoleModelChange[]>();
   for (const row of rows) {
-    bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
-    if (bytes > ROLE_HISTORY_MAX_BYTES / 2 || newest >= ROLE_HISTORY_MAX_ROWS) break;
-    newest += 1;
+    const key = batchKey(row);
+    batches.set(key, [...(batches.get(key) ?? []), row]);
   }
-  const cut = new Set(rows.slice(newest).map(batchKey));
-  const keep = new Set(rows.slice(0, newest).map(batchKey).filter(key => !cut.has(key)));
-  const sources = rows.flatMap(row => keep.has(batchKey(row)) && row.restores ? [batchKey({ ...row, batch: row.restores })] : []);
-  for (const source of sources) keep.add(source);
+  const keep = new Set<string>();
+  let bytes = 0;
+  let count = 0;
+  for (const key of batches.keys()) {
+    if (keep.has(key)) continue;
+    const needed = new Set([key]);
+    // Include source dependencies before admitting a batch, so they share its byte and row budgets.
+    for (const dependency of needed) {
+      for (const row of batches.get(dependency) ?? []) {
+        if (row.restores) {
+          const source = batchKey({ ...row, batch: row.restores });
+          if (batches.has(source) && !keep.has(source)) needed.add(source);
+        }
+      }
+    }
+    const added = rows.filter(row => needed.has(batchKey(row)));
+    const addedBytes = added.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row)) + 1, 0);
+    if (bytes + addedBytes > ROLE_HISTORY_MAX_BYTES || count + added.length > ROLE_HISTORY_MAX_ROWS) break;
+    // Ordinary batches stay within the half-budget target; Restore sources may use the headroom.
+    if (bytes + addedBytes > ROLE_HISTORY_MAX_BYTES / 2 && !added.some(row => row.restores)) break;
+    for (const dependency of needed) keep.add(dependency);
+    bytes += addedBytes;
+    count += added.length;
+    if (bytes >= ROLE_HISTORY_MAX_BYTES / 2) break;
+  }
   const whole = rows.filter(row => keep.has(batchKey(row))).reverse();
   atomicWriteFile(historyPath(dir), whole.map(row => `${JSON.stringify(row)}\n`).join(""));
 }
@@ -130,12 +150,12 @@ function parseRow(line: string): StoredRoleModelChange | null {
  * at most ROLE_HISTORY_MAX_ROWS of them. When the read starts mid-file, its first partial line is
  * skipped; a batch that continues above the read is left for `wholeBatches` to drop.
  */
-function tailRows(path: string): StoredRoleModelChange[] {
+function tailRows(path: string): { rows: StoredRoleModelChange[]; lines: number } {
   let fd: number;
   try {
     fd = openSync(path, "r");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rows: [], lines: 0 };
     throw error;
   }
   let text: string;
@@ -157,10 +177,12 @@ function tailRows(path: string): StoredRoleModelChange[] {
   } finally {
     closeSync(fd);
   }
-  return text.split("\n").filter(line => line.trim()).slice(-ROLE_HISTORY_MAX_ROWS).flatMap(line => {
+  const lines = text.split("\n").filter(line => line.trim()).slice(-ROLE_HISTORY_MAX_ROWS);
+  const rows = lines.flatMap(line => {
     const row = parseRow(line);
     return row ? [row] : [];
   }).reverse();
+  return { rows, lines: lines.length };
 }
 
 /**
@@ -190,7 +212,7 @@ function forHome(rows: StoredRoleModelChange[], codexHome: string): RoleModelCha
  * integration journal reads its own.
  */
 export function listRoleModelChanges(codexHome: string, limit: number = ROLE_HISTORY_LIMIT, dir: string = integrationsDir()): RoleModelChange[] {
-  const newestFirst = forHome(wholeBatches(tailRows(historyPath(dir))), codexHome);
+  const newestFirst = forHome(wholeBatches(tailRows(historyPath(dir)).rows), codexHome);
   const sizes = new Map<string, number>();
   for (const change of newestFirst) sizes.set(change.batch, (sizes.get(change.batch) ?? 0) + 1);
   const listed = new Set<string>();
@@ -212,7 +234,7 @@ export function listRoleModelChanges(codexHome: string, limit: number = ROLE_HIS
  */
 export function claimBatchRow(codexHome: string, batch: string | undefined, dir: string = integrationsDir()): BatchSlot | "batch_closed" | "batch_full" {
   if (batch === undefined) return { batch: crypto.randomUUID(), n: 1 };
-  const held = wholeBatches(tailRows(historyPath(dir))).filter(row => row.codexHome === codexHome && row.batch === batch);
+  const held = wholeBatches(tailRows(historyPath(dir)).rows).filter(row => row.codexHome === codexHome && row.batch === batch);
   if (held.length === 0) return "batch_closed";
   return held.length >= ROLE_HISTORY_LIMIT ? "batch_full" : { batch, n: held.length + 1 };
 }
@@ -225,6 +247,6 @@ export function claimBatchRow(codexHome: string, batch: string | undefined, dir:
  * because a Restore's own rows push the batch it restores out of that listing before it finishes.
  */
 export function restorableSetting(codexHome: string, batch: string, role: string, dir: string = integrationsDir()): RoleSetting | null {
-  const changes = forHome(wholeBatches(tailRows(historyPath(dir))), codexHome).filter(change => change.batch === batch && change.role === role);
+  const changes = forHome(wholeBatches(tailRows(historyPath(dir)).rows), codexHome).filter(change => change.batch === batch && change.role === role);
   return changes.at(-1)?.before ?? null;
 }
