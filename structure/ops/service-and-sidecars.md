@@ -24,6 +24,8 @@ Only proven absence enters registration. A query failure refuses the bare comman
 guidance, because treating `unknown` as absent can rerun elevated `schtasks /create` against an
 existing task. Explicit `ocx service install` remains the operator-owned registration request.
 
+`src/lib/windows-elevation.ts` formats scheduler exec failures without echoing child stderr; generic failures retain the numeric exit status. Delete, run and end access denials name the exact command to run from an elevated terminal. `src/service/windows-scheduler.ts` also classifies an owned-task delete exiting 1 as denied when a fresh probe proves the task survived; absent, unreadable and failed probes do not establish that classification. `src/service/windows-ops.ts` retains service assets until deletion is proven complete. `tests/windows/windows-scheduler-errors.test.ts` exercises these paths with injected runners.
+
 `src/config/serving-runtimes.ts` records successfully serving installs and lets only a
 non-sibling managed-service start defer to a verified strictly newer recorded command. The
 census gate recognizes launchd, systemd, and current or repaired WinSW definitions through

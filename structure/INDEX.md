@@ -137,6 +137,7 @@ Background service, docs, release, and design discipline.
 | Doc | Scope |
 | --- | --- |
 | [`desktop-shell.md`](desktop-shell.md) | Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence. |
+| [`desktop-recovery.md`](desktop-recovery.md) | Native recovery intent, independently anchored executable and accepted-connection proof, cold-start decisions and installation scope. |
 | [`desktop-terminal-command.md`](desktop-terminal-command.md) | Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page. |
 | [`desktop-start-at-login.md`](desktop-start-at-login.md) | macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
@@ -171,9 +172,13 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/src-tauri/src/identity.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/login_registration.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/src-tauri/src/ownership.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/recovery.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_activity.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_presence.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/resolve.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/runtime_stop.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
-| `desktop/src-tauri/src/startup.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/startup.rs` | [`desktop-recovery.md`](desktop-recovery.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/supervisor.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/tray_login.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
@@ -218,6 +223,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/codex-cli-update.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
@@ -355,6 +361,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/` | [`runtime.md`](runtime.md) |
 | `src/service/cli.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-command-guard.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-recovery-process.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `src/service/desktop-recovery.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/service/desktop-startup.ts` | [`desktop-start-at-login.md`](desktop-start-at-login.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.d.mts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |

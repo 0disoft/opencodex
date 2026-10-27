@@ -382,6 +382,13 @@ revokes it, run `ocx login zed` again.
 
 For Zed-hosted OpenAI models, OpenCodex translates `developer` instructions to `system` messages and removes OpenAI-private fields and unsupported built-in tools such as `web_search`. Function and custom tools remain available through the delegate; a tool choice with no supported tools left becomes `none`.
 
+Current-turn tool declarations carried in Codex's `additional_tools` input are promoted into the
+supported tool catalog. Function calls and custom-tool input are relayed in order, including
+interleaved calls, so a tool-using turn can continue after its introductory text. Incomplete calls
+keep only received arguments and remain incomplete; cancellation releases buffered data. Conflicting
+completed custom input, including later deltas, fails the turn with incomplete calls. Function arguments accept JSON whitespace differences outside strings, decoded string escapes, and compatible partial snapshots while preserving delivered bytes. Number literals must match exactly (`1` and `1.0` conflict); object-key order and duplicate members must match too. These conservative conflicts fail the turn. JSON nesting is limited to 65,536 containers; deeper input fails with a clear depth-limit message. Late fragments are validated incrementally. On upstream failure, received text and
+reasoning remain visible and usage retains numeric counters only. The relay is covered by synthetic stream fixtures; live hosted-stream compatibility remains unverified.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request
 (the Responses wire accepts the same field, but opencodex does not send it there today);
