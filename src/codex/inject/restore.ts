@@ -869,6 +869,7 @@ function restoreNativeCodexImpl(
   }
   // `skipHistory` is how the async wrapper takes this work for itself: the
   // native files come down here, and history runs in the Worker under H.
+  let historyLockFailure: CodexRestoreHistoryResult | undefined;
   const rawHistory = options.skipHistory || historyStoodDown
     ? { rows: 0, files: 0 }
     : (() => {
@@ -880,7 +881,9 @@ function restoreNativeCodexImpl(
         const locked = withHistoryWriteSerialization(target.canonicalCodexHome, target.canonicalStateDbPath, () =>
           restore());
         if (locked.kind === "completed") return locked.value;
-        return options.withWriteGuard(() => { throw new StopRestoreOwnershipError("unproven"); });
+        // H availability says nothing about connection ownership; Grok must still clean up.
+        historyLockFailure = failedHistoryRestoreFromOutcome({ kind: "blocked", reason: locked.reason });
+        return { rows: 0, files: 0 };
       })();
   const history: CodexRestoreHistoryResult = historyStoodDown
     ? {
@@ -890,7 +893,7 @@ function restoreNativeCodexImpl(
       }
     : options.skipHistory
     ? { state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0, message: "History restoration runs asynchronously." }
-    : rawHistory.failed
+    : historyLockFailure ?? (rawHistory.failed
       ? failedHistoryRestore(rawHistory.failureReason, undefined, rawHistory)
       : {
           state: "ok",
@@ -901,7 +904,7 @@ function restoreNativeCodexImpl(
           message: rawHistory.rows > 0
             ? `Resume history metadata restored from opencodex backup (${rawHistory.rows} thread(s)); original providers preserved.`
             : "No backed-up resume-history metadata was pending; untracked routed history was left unchanged.",
-        };
+        });
   const message = catalog.removed > 0
     ? `${config.message} Catalog restored to ${catalog.kept} native model(s) (dropped ${catalog.removed} proxy-routed).`
     : config.message;

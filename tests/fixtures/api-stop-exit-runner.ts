@@ -10,7 +10,7 @@ if (!home || !process.env.CODEX_HOME) throw new Error("isolated fixture homes re
 delete process.env.OCX_SERVICE;
 delete process.env.OCX_DESKTOP_SUPERVISED;
 const events: string[] = [];
-const calls = { apiNative: 0, apiGrok: 0, exitNative: 0, exitGrok: 0, env: 0, pid: 0, runtime: 0 };
+const calls = { service: 0, apiNative: 0, apiGrok: 0, exitNative: 0, exitGrok: 0, env: 0, pid: 0, runtime: 0 };
 const restored = { success: true, message: "fixture restored", artifacts: {
   config: { state: "restored" }, catalog: { state: "restored" }, history: { state: "restored" },
 } };
@@ -18,7 +18,7 @@ const restored = { success: true, message: "fixture restored", artifacts: {
 // Replace host mutation only. Receipt verification, handler, drain and exit remain real.
 const service = await import("../../src/service");
 mock.module("../../src/service", () => ({ ...service,
-  installedServiceRespawnRisk: () => "none", stopServiceIfInstalledDetailed: () => "absent",
+  installedServiceRespawnRisk: () => "none", stopServiceIfInstalledDetailed: () => { calls.service++; return "stopped"; },
 }));
 const native = await import("../../src/codex/inject");
 mock.module("../../src/codex/inject", () => ({ ...native,

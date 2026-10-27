@@ -97,6 +97,19 @@ if (mode === "sync" && ownership === "standalone") {
 }
 const receipts = await import("../../src/config/pending-teardown");
 const receipt = receipts.claimPendingTeardown({ hostname: "127.0.0.1", port: 10100 }, "exact", process.pid);
+// Contend on the real H database, without blocking C or changing client ownership.
+let heldHistory: Database | undefined;
+const grok = await import("../../src/grok/inject");
+if (ownership === "history-busy") {
+  const identity = await import("../../src/codex/user-identity");
+  const lockPath = identity.resolveCodexHistorySerializationDatabasePath(identity.resolveEffectiveUserIdentity(), realpathSync.native(codex), canonicalDb);
+  heldHistory = new Database(lockPath, { create: true });
+  heldHistory.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+  mkdirSync(process.env.GROK_HOME!, { recursive: true });
+  const seededGrok = grok.injectGrokConfig(10100, []);
+  if (!seededGrok.ok || !grok.grokManagedBlockPresent()) throw new Error("Grok seed failed");
+  publication = snapshot();
+}
 armed = true;
 const stop = await import("../../src/cli/stop-restore-guard");
 const guard = stop.stopRestoreWriteGuard();
@@ -107,6 +120,12 @@ try { result = mode === "sync"
   ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"))
   : await (await import("../../src/cli/stop-restore")).restoreSharedClientStateAfterStop(() => {});
 } catch (error) { result = { error: String(error), boundary: guard.boundary() }; }
+let grokResult: unknown;
+if (ownership === "history-busy") {
+  try { grokResult = guard.run(() => grok.stripGrokConfig()); }
+  catch (error) { grokResult = { error: String(error) }; }
+  heldHistory!.close();
+}
 const record = { sharedTeardown: "pending" as import("../../src/cli/stop-report").StopRunRecord["sharedTeardown"], receiptClearFailed: false };
 const observed = result as { boundary?: "hub-owned" | "unproven"; sharedTeardown?: string };
 const boundary = observed.boundary ?? (mode === "api"
@@ -116,4 +135,5 @@ if (boundary) {
   stop.settleUnrestoredStopBoundary(boundary, record, [receipt.nonce]);
 }
 console.log(JSON.stringify({ result, before: publication, after: snapshot(), workerResult, lockChecks,
+  boundary: guard.boundary(), grokResult, grokManaged: grok.grokManagedBlockPresent(), native: readFileSync(nativePath, "utf8"),
   receiptExists: existsSync(receipts.pendingTeardownPathFor(receipt.nonce)), settled: record.sharedTeardown }));

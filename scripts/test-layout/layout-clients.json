@@ -1,4 +1,5 @@
 {
+  "stop-restoration-preflight.test.ts": "service",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",

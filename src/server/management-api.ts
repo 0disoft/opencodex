@@ -434,7 +434,7 @@ export async function handleManagementAPI(
     // outcome. This process cannot verify its own post-exit respawn window; only the
     // receipt-backed parent `ocx stop` can, which is what the deferral exists for.
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
-    const { deferralHonored, desktopSupervisedStopRefusal, performStopTeardown } = await import("./stop-teardown");
+    const { deferralHonored, desktopSupervisedStopRefusal, performStopTeardown, preflightStopTeardownOwnership } = await import("./stop-teardown");
     // The desktop app would start this proxy again within seconds; refuse before anything is
     // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
     const desktopRefusal = desktopSupervisedStopRefusal(principal);
@@ -475,44 +475,48 @@ export async function handleManagementAPI(
         message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Nothing was changed. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
       }, 409, req, config);
     }
-    let serviceStop: import("../service").ServiceStopOutcome;
-    try {
-      serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
-    } catch (err) {
-      if (isServiceOwnershipError(err)) {
-        // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
-        // this proxy immediately, and its shared config is not ours to tear down. Refuse the
-        // stop instead of half-performing it. 409, not 500 — the request is well-formed.
-        return jsonResponse({ success: false, message: err.message }, 409, req, config);
-      }
-      throw err;
-    }
-    // The boolean helper collapses "failed" into the same false as "no service installed",
-    // so this route used to tear down shared config and exit while a manager that refused
-    // to stop was still there to respawn the proxy (#3008).
-    if (serviceStop === "failed") {
-      return jsonResponse({
-        success: false,
-        message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
-      }, 409, req, config);
-    }
-    if (serviceStop === "state-unknown") {
-      // Same case, same remedy as the pre-check: the query is what needs fixing.
-      return jsonResponse({
-        success: false,
-        code: "service_state_unknown",
-        message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
-      }, 409, req, config);
-    }
-    // The pre-check above already refused the respawnable case without a receipt, so
-    // reaching here with one means the parent owns the verification.
-    // Both managed configs come down together on an explicit teardown. The daemon's own
-    // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
-    // which is exactly why an intentional stop has to do it here — unless the caller is
-    // `ocx stop`, which does it itself once the proxy is proven down.
-    // Block automatic handoff before awaiting teardown, without committing a refused stop.
+    // Block automatic handoff while deciding, without committing a refused stop.
     const releaseStopIntent = acquireExplicitShutdownIntent();
     try {
+      if (!holdsReceipt && !sibling) {
+        const refusal = preflightStopTeardownOwnership();
+        if (refusal) return jsonResponse(refusal, 409, req, config);
+      }
+      let serviceStop: import("../service").ServiceStopOutcome;
+      try {
+        serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
+      } catch (err) {
+        if (isServiceOwnershipError(err)) {
+          // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
+          // this proxy immediately, and its shared config is not ours to tear down. Refuse the
+          // stop instead of half-performing it. 409, not 500 — the request is well-formed.
+          return jsonResponse({ success: false, message: err.message }, 409, req, config);
+        }
+        throw err;
+      }
+      // The boolean helper collapses "failed" into the same false as "no service installed",
+      // so this route used to tear down shared config and exit while a manager that refused
+      // to stop was still there to respawn the proxy (#3008).
+      if (serviceStop === "failed") {
+        return jsonResponse({
+          success: false,
+          message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
+        }, 409, req, config);
+      }
+      if (serviceStop === "state-unknown") {
+        // Same case, same remedy as the pre-check: the query is what needs fixing.
+        return jsonResponse({
+          success: false,
+          code: "service_state_unknown",
+          message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
+        }, 409, req, config);
+      }
+      // The pre-check above already refused the respawnable case without a receipt, so
+      // reaching here with one means the parent owns the verification.
+      // Both managed configs come down together on an explicit teardown. The daemon's own
+      // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
+      // which is exactly why an intentional stop has to do it here — unless the caller is
+      // `ocx stop`, which does it itself once the proxy is proven down.
       const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
       if (teardown.sharedTeardown === "refused") return jsonResponse(teardown, 409, req, config);
       noteExplicitShutdownRequested(); // Accepted stops and signals remain irreversible.

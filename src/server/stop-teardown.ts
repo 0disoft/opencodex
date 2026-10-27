@@ -45,6 +45,21 @@ export type StopTeardownBody = {
   sharedTeardown: "deferred" | "performed" | "not-owned" | "refused";
 };
 
+function stopOwnershipRefusal(): StopTeardownBody {
+  return { success: false, message: "Stop refused: client connection ownership may be changing; remaining restoration and obligations are preserved. Retry once connect or disconnect finishes.", sharedTeardown: "refused" };
+}
+
+/** Read under C before manager mutation; every later write still revalidates independently. */
+export function preflightStopTeardownOwnership(): StopTeardownBody | null {
+  const guard = stopRestoreWriteGuard();
+  try { guard.run(() => {}); }
+  catch (error) {
+    if (guard.boundary() === "unproven") return stopOwnershipRefusal();
+    if (guard.boundary() !== "hub-owned") throw error;
+  }
+  return null;
+}
+
 /**
  * A deferral is honoured only when the caller proves it owns the obligation.
  *
@@ -150,7 +165,7 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
     if (boundary === "restore") throw error;
     return boundary === "hub-owned"
       ? { success: true, message: "Proxy stopping; a hub connection owns Codex routing, catalog and Grok config, so restoration stopped.", sharedTeardown: "not-owned" }
-      : { success: false, message: "Stop refused: client connection ownership may be changing; remaining restoration and obligations are preserved. Retry once connect or disconnect finishes.", sharedTeardown: "refused" };
+      : stopOwnershipRefusal();
   }
   // Success means BOTH halves came down. Deciding it from the native restore alone and
   // appending the Grok text let a caller read `success: true` while the fence still

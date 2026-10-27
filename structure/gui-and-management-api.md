@@ -447,7 +447,7 @@ The desktop shell needs only the dashboard, so it attaches to a client-role list
 
 The dashboard sidebar includes a stop button that calls `POST /api/stop`. The button shows a
 confirmation prompt, then fires the request and accepts the connection drop (the proxy exits). The
-endpoint restores native Codex config for ordinary owners and Remote Link Children; connected hub clients and siblings preserve their integrations. It stops any installed service to prevent respawn and exits, as described in the [runtime contract](runtime.md#lifecycle).
+endpoint restores native Codex config for ordinary owners and Remote Link Children; connected hub clients and siblings preserve their integrations. Without an owned deferral receipt, it checks connection ownership under C before stopping the installed service; an unproven boundary returns 409 with `sharedTeardown: "refused"` and leaves the manager and proxy running. Each later restoration write still revalidates independently. Accepted stops stop the service to prevent respawn and exit, as described in the [runtime contract](runtime.md#lifecycle).
 While the desktop app supervises the proxy it refuses a dashboard session with 409
 `desktop_supervised` before touching anything, because the app would start the proxy again
 ([desktop shell](desktop-shell.md#keeping-the-runtime-alive)); the button reports the refusal.
