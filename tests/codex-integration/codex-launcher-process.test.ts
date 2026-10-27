@@ -8,6 +8,20 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 describe("ocx codex real CLI handoff", () => {
+  for (const arg of ["--help", "--version"]) test(`missing Codex ${arg} reports the install hint`, () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-codex-missing-"));
+    try {
+      const result = spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), "codex", arg], {
+        cwd: home, env: { ...process.env, PATH: "", OPENCODEX_HOME: home },
+        encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, windowsHide: true,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("npm install -g @openai/codex");
+      expect(result.stderr).not.toContain("cannot verify Codex shim bypass");
+    } finally { removeTreeWithRetry(home); }
+  }, SPAWN_BUDGET_MS);
+
   for (const args of [["--help"], ["exec", "--help"], ["help"], ["--version"], ["resume", "two words"]]) {
     test(`forwards ${args.join(" ")} without loading a service token`, () => {
       const home = mkdtempSync(join(tmpdir(), "ocx-codex-process-"));

@@ -215,6 +215,7 @@ export function buildCodexLaunchEnv(
 }
 
 const CODEX_INSTALL_HINT = "❌ `codex` CLI not found. Install it first: npm install -g @openai/codex";
+class CodexNotFoundError extends Error {}
 
 /**
  * cmd.exe reports command-not-found as exit 9009 (the win32 launcher routes `.cmd`
@@ -250,13 +251,16 @@ export function resolveCodexLaunchCommand(
 ): CodexLaunchCommand {
   try {
     const selected = (deps.findOnPath ?? findExecutableOnPath)("codex");
-    if (!selected) throw new Error(CODEX_UNVERIFIED_SHIM);
-    const shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected);
+    if (!selected) throw new CodexNotFoundError(CODEX_INSTALL_HINT);
+    let shim: ReturnType<typeof inspectCodexShimBackingForCommand>;
+    try { shim = (deps.inspectShim ?? inspectCodexShimBackingForCommand)(selected); }
+    catch { shim = { status: "unknown", reason: "binding_unavailable" }; }
     if (shim.status === "matched" && shim.selectedRole === "wrapper") return { command: shim.backingPath, env };
     if (shim.status !== "unknown") return { command: selected, env };
     if (!(deps.verifyBypass ?? codexCommandCanBypass)(selected, env)) throw new Error(CODEX_UNVERIFIED_SHIM);
     return { command: selected, env: { ...env, OCX_SHIM_BYPASS: "1" } };
-  } catch {
+  } catch (error) {
+    if (error instanceof CodexNotFoundError) throw error;
     throw new Error(CODEX_UNVERIFIED_SHIM);
   }
 }
@@ -266,7 +270,7 @@ function spawnCodex(args: readonly string[], env: CodexLaunchEnv): Promise<numbe
   return new Promise<number>(resolve => {
     let launch: CodexLaunchCommand;
     try { launch = resolveCodexLaunchCommand(env); }
-    catch { console.error(CODEX_UNVERIFIED_SHIM); resolve(1); return; }
+    catch (error) { console.error(error instanceof CodexNotFoundError ? CODEX_INSTALL_HINT : CODEX_UNVERIFIED_SHIM); resolve(1); return; }
     const inv = commandInvocation(launch.command, args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: launch.env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
@@ -297,8 +301,8 @@ export async function cmdCodex(args: string[]): Promise<number> {
   if (!needsProxy) return spawnCodex(args, { ...process.env });
   const live = await ensureProxyForCodex();
   if (!live) {
-    // Never lock the user out of `codex`: mirror the generated shim's behavior of
-    // launching anyway with one stderr line. The already-injected config decides
+    // A failed ensure warns and continues, subject to executable verification.
+    // The already-injected config decides
     // what the session does next; `ocx doctor` names the autostart failure.
     console.error(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC);
   }

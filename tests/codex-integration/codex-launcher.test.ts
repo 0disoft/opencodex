@@ -308,12 +308,30 @@ describe("codex launcher shim handoff", () => {
     expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
   });
 
-  test("a shim filesystem error fails closed without changing the input environment", () => {
+  test("a throwing shim inspector requires a verified bypass", () => {
+    let verified = false;
+    const launch = resolveCodexLaunchCommand(env, {
+      findOnPath: onPath,
+      inspectShim: () => { throw new Error("fixture inspection failure"); },
+      verifyBypass: (selected, inherited) => {
+        expect(selected).toBe(onPath()); expect(inherited).toBe(env);
+        verified = true; return true;
+      },
+    });
+    expect(verified).toBe(true);
+    expect(launch).toEqual({ command: onPath(), env: { ...env, OCX_SHIM_BYPASS: "1" } });
+    expect(env).not.toHaveProperty("OCX_SHIM_BYPASS");
+  });
+
+  test("an unverifiable bypass after a shim filesystem error fails closed without changing the input environment", () => {
     const base = { ...env, OPENCODEX_API_AUTH_TOKEN: "ocx_fixture_inherited_token", OCX_SHIM_BYPASS: "" };
+    let verified = false;
     expect(() => resolveCodexLaunchCommand(base, {
       findOnPath: onPath,
       inspectShim: () => { throw Object.assign(new Error("shim state read failed"), { code: "EIO" }); },
+      verifyBypass: () => { verified = true; return false; },
     })).toThrow("cannot verify Codex shim bypass");
+    expect(verified).toBe(true);
     expect(base.OCX_SHIM_BYPASS).toBe("");
   });
 
@@ -324,6 +342,6 @@ describe("codex launcher shim handoff", () => {
       findOnPath: onPath,
       inspectShim: () => ({ status: "matched", selectedRole: "backing", backingPath: "/home/test/.local/bin/codex", backingKind: "real" }),
     })).toEqual({ command: onPath(), env });
-    expect(() => resolveCodexLaunchCommand(env, { findOnPath: () => null })).toThrow("cannot verify Codex shim bypass");
+    expect(() => resolveCodexLaunchCommand(env, { findOnPath: () => null })).toThrow("npm install -g @openai/codex");
   });
 });
