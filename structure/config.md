@@ -342,7 +342,7 @@ keeps the hard refusal and the compensating rollback.
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
-the preflight is an early no-write guard, not an authorization token for a later write.
+the preflight is an early no-write guard, not an authorization token for a later write. Stop history writes follow the [lifecycle ownership boundary](runtime.md).
 
 > Decision record: [ADR-0019](decisions/ADR-0019-config-injection.md)
 

@@ -3,13 +3,15 @@ import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
 import { withClientLifecycleSync } from "../client/lifecycle-lock";
+import type { RestoreBoundaryOwnership } from "../client/restore-ownership";
+export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
+import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError, stopRequestFetch as directStopRequestFetch } from "../lib/process-control";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { isSharedTeardownDeferredOnExit } from "../server/stop-teardown";
 import { findLiveProxy, probeEndpointLiveness, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
@@ -130,7 +132,7 @@ export function connectedClientStopSkipLine(state: ClientConnectionState): strin
  * token. Restoration ownership is decided separately.
  */
 export function stopRequestFetch(): typeof fetch {
-  return directLocalHttpFetch as typeof fetch;
+  return directStopRequestFetch as typeof fetch;
 }
 
 /**
@@ -146,9 +148,6 @@ export function stopRequestFetch(): typeof fetch {
 export function notOwnedTeardownIsAcceptable(state: ClientConnectionState, stoppingSibling: boolean): boolean {
   return stoppingSibling || state.kind !== "connected" || state.value.transport !== "link";
 }
-
-/** What the parent stop may do with shared client state at its final restore boundary. */
-export type RestoreBoundaryOwnership = "restore" | "hub-owned" | "unproven";
 
 /**
  * Re-read connection ownership at the parent restore boundary (#7736). A hub connection

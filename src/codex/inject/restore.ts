@@ -2,6 +2,8 @@ import { restoreApprovedCodexProviders } from "../provider-routing";
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./config-write-section";
 import { assertCodexHomeOwner, codexHomeIsAbsent, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
 import { loadConfig } from "../../config";
+import { StopRestoreOwnershipError } from "../../client/restore-ownership";
+import { withHistoryWriteSerialization } from "../history-lock";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
 import { withCatalogWriteSerialization } from "../catalog-write-serialization";
@@ -752,8 +754,15 @@ async function restoreNativeCodexAsyncImpl(
     : await runCodexHistoryJob({
       ...resolveCodexHistoryJobTarget(),
       ...(options.revalidateDesiredState ? { expectedDesiredEnabled: false } : {}),
+      ...(options.withWriteGuard ? { guardStopOwnership: true } : {}),
       operation: deriveCodexHistoryOperation({ direction: "restore", resumeHistory: true, legacyMode: false }),
     });
+  if (outcome.kind === "failed" && outcome.restoreBoundary) {
+    // Preserve the Worker's observed refusal even if the connection changes again
+    // before the parent resumes. The parent guard latches this typed boundary.
+    const boundary = outcome.restoreBoundary;
+    guardedRestoreWrite(options, () => { throw new StopRestoreOwnershipError(boundary); });
+  }
   if (transitionReceipt) {
     resolveCodexHistoryTransition(transitionReceipt, outcome);
   }
@@ -862,9 +871,17 @@ function restoreNativeCodexImpl(
   // native files come down here, and history runs in the Worker under H.
   const rawHistory = options.skipHistory || historyStoodDown
     ? { rows: 0, files: 0 }
-    : syncCodexHistoryProvider("openai", undefined, undefined, {
-        skipWhenProvablyNoop,
-      });
+    : (() => {
+        const target = resolveCodexHistoryJobTarget();
+        const restore = () => syncCodexHistoryProvider("openai", target.canonicalStateDbPath, target.canonicalBackupPath, {
+          skipWhenProvablyNoop, withWriteGuard: options.withWriteGuard,
+        });
+        if (!options.withWriteGuard) return restore();
+        const locked = withHistoryWriteSerialization(target.canonicalCodexHome, target.canonicalStateDbPath, () =>
+          restore());
+        if (locked.kind === "completed") return locked.value;
+        return options.withWriteGuard(() => { throw new StopRestoreOwnershipError("unproven"); });
+      })();
   const history: CodexRestoreHistoryResult = historyStoodDown
     ? {
         state: "skipped", changed: false, rows: 0, files: 0, ejectedRows: 0,

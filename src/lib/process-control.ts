@@ -216,7 +216,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
  */
 type StopRefusal = { message: string | null; code: string | null };
 
-async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+export async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   let status: number | undefined;
   try {
     return await directLocalHttpFetch(input, init, { onResponseStatus: value => { status = value; } });
