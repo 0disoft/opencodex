@@ -90,7 +90,7 @@ not cap process RSS or the conversation messages accumulated across completed me
 opaque metadata, normal tool passthrough, coalesced-tail accounting, and consumer cancellation on
 both execution paths. Final client tool output also follows the [explicit empty client-catalog
 boundary](responses-wire-shapes.md#declared-tool-membership-by-inbound-wire); internal media tool
-execution keeps its existing behavior.
+execution rejects explicitly unfinished tool ends and never fulfills media or re-asks after an incomplete, failed or truncated terminal.
 
 ## Bounded response ingestion and OrcaRouter login
 

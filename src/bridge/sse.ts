@@ -1184,6 +1184,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "tool_call_end": {
+              if (event.incomplete) { failCurrentToolCall(); break; }
               // Fragments already streamed cannot be repaired. Refuse to complete a function call
               // whose assembled arguments do not parse — cancel the item and fail the turn so the
               // client never sees status:"completed" for unusable args (#765 stream remainder).

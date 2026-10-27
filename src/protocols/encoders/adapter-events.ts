@@ -682,6 +682,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "tool_call_end": {
+            if (event.incomplete) { failCurrentToolCall(); break; }
             // Streamed fragments cannot be repaired: unusable arguments fail the turn.
             if (currentToolCall && currentToolCall.kind === "function" && !toolCallArgumentsUsable(currentToolCall.args)) {
               failCurrentToolCall();

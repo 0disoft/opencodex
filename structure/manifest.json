@@ -941,6 +941,22 @@
       ]
     },
     {
+      "path": "desktop-recovery.md",
+      "tier": 6,
+      "title": "Desktop recovery evidence",
+      "scope": "Native recovery intent, independently anchored executable and accepted-connection proof, cold-start decisions and installation scope.",
+      "documents": [
+        "desktop/src-tauri/src/recovery.rs",
+        "desktop/src-tauri/src/recovery_activity.rs",
+        "desktop/src-tauri/src/recovery_presence.rs",
+        "desktop/src-tauri/src/startup.rs",
+        "desktop/src-tauri/src/supervisor.rs",
+        "src/service/desktop-recovery.ts",
+        "src/service/desktop-recovery-process.ts",
+        "src/cli/ensure-desktop-cold-start.ts"
+      ]
+    },
+    {
       "path": "desktop-terminal-command.md",
       "tier": 6,
       "title": "Desktop-owned terminal command",

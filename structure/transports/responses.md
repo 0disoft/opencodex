@@ -586,7 +586,7 @@ machine for those encoders, so a change to item boundaries, tool naming or termi
 keeps allowlisted transport verdict codes, the buffered combo [required-tool verdict and retry policy](responses-combo-boundaries.md#buffered-required-tool-contract), and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
 `src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
 ([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). Explicit incomplete reasons follow the [reason contract](responses-wire-shapes.md#adapter-incomplete-reasons).
-The shared usage shaping's `input_tokens_details` and `output_tokens_details` are always emitted,
+An explicit `tool_call_end.incomplete` closes only that item as incomplete without argument-completion frames or malformed-argument failure; the following turn terminal owns reason and usage. The shared usage shaping's `input_tokens_details` and `output_tokens_details` are always emitted,
 with zero defaults, because strict Responses clients deserialize them as required fields.
 
 Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or is cancelled.
