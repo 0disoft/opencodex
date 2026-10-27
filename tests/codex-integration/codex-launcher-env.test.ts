@@ -1,10 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
+import { codexCredentialDestinationIsTrusted } from "../../src/cli/codex-launch-auth";
+import { codexLaunchHomeIsOwned } from "../../src/cli/codex-launch-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -43,9 +46,12 @@ async function fixture(run: (root: string, home: string) => void | Promise<void>
 }
 
 function launch(base = { ...process.env }) {
-  let reads = 0;
-  const env = buildCodexLaunchEnv(base, { routingKind: "opencodex-local", serviceToken: () => { reads++; return token; } });
-  return { env, reads };
+  let reads = 0, reason: string | undefined;
+  const env = buildCodexLaunchEnv(base, {
+    routingKind: "opencodex-local", serviceToken: () => { reads++; return token; },
+    credentialDestination: (home, report) => codexCredentialDestinationIsTrusted(home, join(home, "system-namespace-fixture"), r => { reason = r; report?.(r); }),
+  });
+  return { env, reads, reason };
 }
 
 function canCreateDirectorySymlink(): boolean {
@@ -61,13 +67,62 @@ describe("Codex launcher native home and proxy environment", () => {
   test.skipIf(!canCreateDirectorySymlink())("a symlinked user .codex is the home config, not a project layer", () => fixture((root, home) => {
     const user = join(root, "user"), cwd = join(user, "project");
     mkdirSync(cwd);
-    symlinkSync(home, join(user, ".codex"), "dir");
+    symlinkSync(join("..", "codex-home"), join(user, ".codex"), "dir");
     process.chdir(cwd);
     const base = { ...process.env }; delete base.CODEX_HOME;
     const result = launch(base);
     expect(result.reads).toBe(1);
     expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBe(token);
     expect(result.env.CODEX_HOME).toBe(realpathSync(home));
+  }));
+
+  for (const entry of ["parent", "ancestor", "redirect"] as const) {
+    test.skipIf(!canCreateDirectorySymlink())(`a writable project alias ${entry} refuses before token read`, () => fixture((root, home) => {
+      const shared = join(root, "shared"), project = join(shared, "project");
+      mkdirSync(project, { recursive: true });
+      if (entry === "redirect") {
+        const bridge = join(project, "bridge");
+        symlinkSync(home, bridge, "dir");
+        symlinkSync(bridge, join(root, ".codex"), "dir");
+      } else {
+        symlinkSync(home, join(project, ".codex"), "dir");
+        process.chdir(project);
+      }
+      const writable = entry === "ancestor" ? shared : project;
+      if (process.platform === "win32") {
+        const result = spawnSync("icacls.exe", [writable, "/grant", "*S-1-1-0:(F)"], { encoding: "utf8", windowsHide: true });
+        expect(result.status).toBe(0);
+      } else chmodSync(writable, 0o707);
+      try {
+        const result = launch();
+        expect(result.reads).toBe(0);
+        expect(result.reason).toBe("project");
+        expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+      } finally { if (process.platform !== "win32") chmodSync(writable, 0o700); }
+    }));
+  }
+
+  test.skipIf(!canCreateDirectorySymlink())("project alias inspection failure refuses before token read", () => fixture((root, home) => {
+    symlinkSync(home, join(root, ".codex"), "dir");
+    const inspect = spyOn(fs, "readlinkSync").mockImplementation(() => { throw new Error("fixture inspection unavailable"); });
+    try {
+      const result = launch();
+      expect(result.reads).toBe(0);
+      expect(result.reason).toBe("project");
+      expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+    } finally { inspect.mockRestore(); }
+  }));
+
+  test.skipIf(process.platform !== "win32" || !canCreateDirectorySymlink())("a writable Windows alias entry refuses while its target stays protected", () => fixture((root, home) => {
+    const link = join(root, ".codex");
+    symlinkSync(home, link, "dir");
+    const grant = spawnSync("icacls.exe", [link, "/L", "/grant", "*S-1-1-0:(F)"], { encoding: "utf8", windowsHide: true });
+    expect(grant.status).toBe(0);
+    expect(codexLaunchHomeIsOwned(home)).toBe(true);
+    const result = launch();
+    expect(result.reads).toBe(0);
+    expect(result.reason).toBe("project");
+    expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
   }));
 
   test("literal tilde home cannot borrow authority from the expanded user home", () => fixture((root) => {

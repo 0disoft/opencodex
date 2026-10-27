@@ -8,7 +8,7 @@ import { buildProviderTableBlockForTarget } from "../codex/inject/config-toml";
 import { standaloneCodexRoutingTarget, validateCodexRoutingTarget } from "../codex/inject/routing-target";
 import { readClientConnectionState } from "../client/state";
 import { codexHasOtherTokenConsumers, codexTokenConfigShapeIsSafe } from "./codex-launch-policy";
-import { codexLaunchHomeIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
+import { codexLaunchHomeIsOwned, codexLaunchProjectAliasIsOwned, codexLaunchSystemNamespaceIsSafe } from "./codex-launch-ownership";
 import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
 /** Resolve once; the credential verifier and child must use this exact directory. */
@@ -70,9 +70,10 @@ export function codexCredentialDestinationIsTrusted(home: string, systemNamespac
       const projectConfig = join(directory, ".codex", "config.toml");
       try {
         lstatSync(projectConfig);
-        // A symlinked ~/.codex can name this very home config. Only proven file
-        // identity excludes an existing candidate from the project-layer check.
-        try { if (realpathSync(projectConfig) !== realpathSync(join(home, "config.toml"))) return refuse("project"); }
+        // Same-file aliases qualify only when their lexical entries and redirect
+        // targets are protected against replacement by another principal.
+        try { if (realpathSync(projectConfig) !== realpathSync(join(home, "config.toml"))
+          || !codexLaunchProjectAliasIsOwned(projectConfig)) return refuse("project"); }
         catch { return refuse("project"); }
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return refuse("layerInspection"); }
       // A nested .git need not be Codex's root: custom project_root_markers can select

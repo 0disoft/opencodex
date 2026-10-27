@@ -1,5 +1,5 @@
-import { lstatSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, readlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
 
@@ -14,6 +14,12 @@ try {
   $sections=[System.Security.AccessControl.AccessControlSections]'Owner,Access'
   $paths=@($env:OCX_CODEX_OWNED_HOME,[System.IO.Path]::Combine($env:OCX_CODEX_OWNED_HOME,'config.toml'))
   $exactOwners=2
+  $chain=$env:OCX_CODEX_PATH_CHAIN -eq '1'
+  if ($chain) {
+    $paths=ConvertFrom-Json -InputObject $env:OCX_CODEX_OWNED_PATHS
+    if ($paths.Count -eq 0) { exit 1 }
+    $exactOwners=0
+  }
   if ($env:OCX_CODEX_NAMESPACE_CHECK -eq '1') {
     $systemDir=$env:OCX_CODEX_NAMESPACE_FIXTURE
     if ([string]::IsNullOrEmpty($systemDir)) {
@@ -42,7 +48,8 @@ try {
   while ($null -ne $parent) { $paths+= $parent.FullName; $parent=$parent.Parent }
   for ($i=0;$i -lt $paths.Count;$i++) {
     $path=$paths[$i]
-    if (([System.IO.File]::GetAttributes($path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { exit 1 }
+    $reparse=([System.IO.File]::GetAttributes($path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    if (!$chain -and $reparse) { exit 1 }
     if ([System.IO.Directory]::Exists($path)) { $acl=[System.Security.AccessControl.DirectorySecurity]::new($path,$sections) }
     else { $acl=[System.Security.AccessControl.FileSecurity]::new($path,$sections) }
     $raw=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)
@@ -61,7 +68,8 @@ try {
       # Include generic writes/all, DELETE, WRITE_DAC, WRITE_OWNER, and directory DELETE_CHILD.
       $mask=[int64]$ace.AccessMask -band 4294967295
       $mutation=1343029590
-      if ($i -ge 2 -or ($exactOwners -eq 0 -and $i -ge 1)) { $mutation=1343029312 }
+      if (($chain -and $i -gt 0 -and !$reparse) -or
+        (!$chain -and ($i -ge 2 -or ($exactOwners -eq 0 -and $i -ge 1)))) { $mutation=1343029312 }
       if (($mask -band $mutation) -ne 0) {
         if ($exactOwners -eq 0) { exit 2 }
         exit 1
@@ -73,18 +81,49 @@ try {
 `;
 const ENCODED_SCRIPT = Buffer.from(SCRIPT, "utf16le").toString("base64");
 
-function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirectory?: string, report?: CodexTokenRefusalReporter): boolean {
+function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirectory?: string, report?: CodexTokenRefusalReporter, paths?: readonly string[]): boolean {
   // Remove case aliases before constructing a Windows environment block. These
   // private protocol inputs must come from this call, never the caller's shell.
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !/^(?:OCX_CODEX_OWNED_HOME|OCX_CODEX_NAMESPACE_CHECK|OCX_CODEX_NAMESPACE_FIXTURE)$/i.test(key)));
+    !/^(?:OCX_CODEX_OWNED_HOME|OCX_CODEX_NAMESPACE_CHECK|OCX_CODEX_NAMESPACE_FIXTURE|OCX_CODEX_PATH_CHAIN|OCX_CODEX_OWNED_PATHS)$/i.test(key)));
   const result = Bun.spawnSync([
     resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ENCODED_SCRIPT,
   ], { env: { ...inherited, OCX_CODEX_OWNED_HOME: home, OCX_CODEX_NAMESPACE_CHECK: namespace ? "1" : "0",
-    OCX_CODEX_NAMESPACE_FIXTURE: fixtureDirectory }, stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 5_000, windowsHide: true });
+    OCX_CODEX_NAMESPACE_FIXTURE: fixtureDirectory, OCX_CODEX_PATH_CHAIN: paths ? "1" : "0",
+    OCX_CODEX_OWNED_PATHS: JSON.stringify(paths) }, stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 5_000, windowsHide: true });
   const safe = result.success && !result.exitedDueToTimeout;
   if (!safe && namespace) report?.(result.exitCode === 2 ? "systemNamespaceWritable" : result.exitCode === 3 ? "systemConfig" : "systemNamespace");
   return safe;
+}
+
+/** Inspect lexical entries as well as every link target; realpath alone loses replacement authority. */
+export function codexLaunchProjectAliasIsOwned(path: string): boolean {
+  try {
+    const paths = new Set<string>(), uid = process.getuid?.();
+    const inspect = (entry: string): boolean => {
+      if (paths.has(entry)) return true;
+      paths.add(entry);
+      const stat = lstatSync(entry), parent = dirname(entry);
+      if (!stat.isSymbolicLink() && !stat.isDirectory() && !stat.isFile()) return false;
+      if (process.platform !== "win32") {
+        if (uid === undefined || (stat.uid !== uid && stat.uid !== 0)) return false;
+        // Symlink modes are not access controls; their owner and parent protect the entry.
+        if (!stat.isSymbolicLink() && (stat.mode & 0o022) !== 0
+          && (!stat.isDirectory() || (stat.mode & 0o1000) === 0)) return false;
+        const container = lstatSync(parent);
+        if ((container.mode & 0o022) !== 0 && (container.mode & 0o1000) !== 0 && stat.uid !== uid) return false;
+      }
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(entry);
+        // Keep dot segments: collapsing link/../target could hide the link that redirects it.
+        if (!inspect(isAbsolute(target) ? target : parent + sep + target)) return false;
+      }
+      return parent === entry || inspect(parent);
+    };
+    if (!inspect(resolve(path))) return false;
+    if (process.platform === "win32") return windowsOwnershipCheck("", false, undefined, undefined, [...paths]);
+    return process.platform !== "darwin" || macHasNoManagedCodexPreferences([...paths], true);
+  } catch { return false; }
 }
 
 /** A missing system layer is safe only if another user cannot create it later. */
@@ -140,13 +179,14 @@ export function darwinAclEntriesAreSafe(entries: readonly { tag: number; perms: 
 }
 
 /** Match Codex's CFPreferencesAppValueIsForced test without reading preference contents. */
-function macHasNoManagedCodexPreferences(paths: readonly string[]): boolean {
+function macHasNoManagedCodexPreferences(paths: readonly string[], inspectLinks = false): boolean {
   let library: { close(): void } | undefined;
   let aclLibrary: { close(): void } | undefined;
   try {
     const { dlopen, FFIType, ptr, read } = require("bun:ffi") as typeof import("bun:ffi");
     const acl = dlopen("/usr/lib/libSystem.B.dylib", {
       acl_get_file: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
+      acl_get_link_np: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
       acl_get_entry: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
       acl_get_tag_type: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
       acl_get_permset: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
@@ -158,7 +198,8 @@ function macHasNoManagedCodexPreferences(paths: readonly string[]): boolean {
     aclLibrary = acl;
     for (const path of paths) {
       const bytes = Buffer.from(path + "\0"), entry = Buffer.alloc(8), tag = Buffer.alloc(4), permset = Buffer.alloc(8);
-      const descriptor = acl.symbols.acl_get_file(ptr(bytes), 0x100); // ACL_TYPE_EXTENDED
+      // Alias admission must inspect the link's ACL, too; acl_get_file follows it.
+      const descriptor = (inspectLinks ? acl.symbols.acl_get_link_np : acl.symbols.acl_get_file)(ptr(bytes), 0x100); // ACL_TYPE_EXTENDED
       if (!descriptor) return false;
       try {
         const valid = acl.symbols.acl_valid(descriptor);
