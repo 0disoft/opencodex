@@ -371,6 +371,12 @@ export function resolveRestoreHistoryDisposition(
 export interface RestoreConfigOptions {
   /** Strip `[model_providers.opencodex]` too, accepting that tagged threads stop opening. */
   removeProviderTable?: boolean;
+  /** Synchronous caller policy and exclusion, repeated at every async restore write boundary. */
+  withWriteGuard?: <T>(write: () => T) => T;
+}
+
+function guardedRestoreWrite<T>(options: RestoreConfigOptions, write: () => T): T {
+  return options.withWriteGuard ? options.withWriteGuard(write) : write();
 }
 
 /** The config/profile half of a native restore, reported as one artifact. */
@@ -385,7 +391,7 @@ function restoreCodexConfigInline(
    * shared write lock. Splitting it let a foreign write land between the pieces
    * and left preimage compensation replaying over bytes that writer committed.
    */
-  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, (held) => {
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, (held) => guardedRestoreWrite(options, () => {
     beginCodexWriteSection(held);
     assertCodexHomeOwner(getCodexHome());
     beforeRestoreConfigForTests?.(kind);
@@ -397,7 +403,7 @@ function restoreCodexConfigInline(
       if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
     }
     return result;
-  });
+  }));
   if (!locked.ok) {
     // Nothing was captured or written — there is nothing to compensate.
     return {
@@ -530,13 +536,14 @@ function restoreCodexConfigInlineImpl(
 function restoreCodexCatalogArtifact(
   revalidateDesiredState: boolean,
   journaledCatalogPath: string | null,
+  options: RestoreConfigOptions = {},
 ): CodexRestoreCatalogResult {
   const owningCodexHome = getCodexHome();
   try {
-    const restored = withCatalogWriteSerialization(owningCodexHome, permit =>
+    const restored = withCatalogWriteSerialization(owningCodexHome, permit => guardedRestoreWrite(options, () =>
       revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())
         ? null
-        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath),
+        : restoreCodexCatalogWithPermit(permit, owningCodexHome, journaledCatalogPath)),
       { intent: "restore", writer: "codex-restore" });
     return restored.kind === "completed" && restored.value !== null
       ? { state: "ok", changed: restored.value.removed > 0, ...restored.value, message: "Codex catalog restored." }
@@ -568,14 +575,15 @@ function restoreCodexCatalogArtifact(
  * that lost race into the discriminated `desired_enabled` skip.
  */
 export async function restoreNativeCodexAsync(
-  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
+  options: RestoreConfigOptions & { revalidateDesiredState?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
   if (codexHomeIsAbsent(getCodexHome())) return skippedRestoreEnvelope(true, "Codex config not found; no native restore was needed.");
   const sibling = siblingRestoreSkip();
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return finishApprovedProviderRestore(await restoreNativeCodexAsyncImpl(options), options.revalidateDesiredState);
+    const result = await restoreNativeCodexAsyncImpl(options);
+    return guardedRestoreWrite(options, () => finishApprovedProviderRestore(result, options.revalidateDesiredState));
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     if (!(error instanceof CodexRestoreRefusal)) throw error;
@@ -584,14 +592,14 @@ export async function restoreNativeCodexAsync(
 }
 
 async function restoreNativeCodexAsyncImpl(
-  options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean },
+  options: RestoreConfigOptions & { revalidateDesiredState?: boolean },
 ): Promise<CodexNativeRestoreResult> {
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     // External-provider courtesy: only the stale journal is removed. The
     // history worker must not launch — it would turn a read-mostly courtesy
     // result into a history mutation on a home we do not own.
-    cleanExternalProviderJournal();
+    guardedRestoreWrite(options, () => cleanExternalProviderJournal());
     return externalProviderRestoreResult(activeProvider);
   }
 
@@ -653,7 +661,7 @@ async function restoreNativeCodexAsyncImpl(
         admitted: witness,
         readAdmissionUnderLock: () => witness,
       },
-      (ctx) => {
+      (ctx) => guardedRestoreWrite(options, () => {
         assertCodexHomeOwner(getCodexHome());
         if (options.revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) {
           throw new CodexWriteLockSkipped("desired_enabled");
@@ -695,7 +703,7 @@ async function restoreNativeCodexAsyncImpl(
             currentTxId: ctx.expectation.txId,
           },
         };
-      },
+      }),
     );
     if (coordinated.status === "skipped") return desiredEnabledRestoreSkip();
     if (coordinated.status !== "acquired") {
@@ -708,10 +716,10 @@ async function restoreNativeCodexAsyncImpl(
           : `Codex configuration was not restored: ${coordinated.message}`,
       };
     } else {
-      recordCodexNativeTransactionProvenance(
+      guardedRestoreWrite(options, () => recordCodexNativeTransactionProvenance(
         coordinated.value.preImages,
         coordinated.value.receipt.currentTxId,
-      );
+      ));
       config = coordinated.value.config;
       transitionReceipt = coordinated.value.receipt;
     }
@@ -729,8 +737,10 @@ async function restoreNativeCodexAsyncImpl(
   }
 
   if (config.state === "failed") return failedConfigRestoreEnvelope(config);
-  notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath });
-  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath);
+  guardedRestoreWrite(options, () => notifyCatalogPublication({ kind: "native-released", path: journaledCatalogPath }));
+  const catalog = restoreCodexCatalogArtifact(options.revalidateDesiredState === true, journaledCatalogPath, options);
+  // Catalog failures are artifact results; a caller-policy refusal must also stop later work.
+  guardedRestoreWrite(options, () => {});
   // Re-asked after the config half, because the store can paginate mid-transaction. Deciding
   // the history job from the pre-write answer alone would spawn a Worker whose own preflight
   // is now guaranteed to refuse, and report that refusal as a restore failure on a home that

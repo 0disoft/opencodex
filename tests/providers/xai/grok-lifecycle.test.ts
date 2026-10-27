@@ -117,7 +117,8 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stopFn).toContain("if (!restoreBlocked && boundary === \"restore\") {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
-    expect(restoreFn).toContain("restoreNativeCodexAsync()");
+    expect(restoreFn).toContain("restoreNativeCodexAsync({ withWriteGuard: guard.run })");
+    expect(restoreFn).toContain("guard.run(() => stripGrokConfig())");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
     expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked && boundary === \"restore\") {"));
@@ -258,11 +259,15 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid)");
     expect(stopFn).not.toContain("isPendingTeardownAbandoned(read, isProcessAlive)");
     expect(stopFn.indexOf("listPendingTeardowns()")).toBeLessThan(claimAt);
-    expect(stopFn).toContain("clearPendingTeardown(nonce)");
+    expect(stopFn).toContain("clearRestoredStopReceipts(record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces)");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)"))
-      .toBeLessThan(stopFn.indexOf("clearPendingTeardown(nonce)"));
+      .toBeLessThan(stopFn.indexOf("clearRestoredStopReceipts(record,"));
     // A receipt that survives its discharge would re-trigger recovery forever.
-    expect(stopFn).toContain("if (!clearPendingTeardown(nonce)) {");
+    const receiptSource = readFileSync(repoPath("src", "cli", "stop-restore-guard.ts"), "utf8");
+    expect(receiptSource).toContain("if (!clearPendingTeardown(nonce)) {");
+    expect(receiptSource).toContain("return withConfigMutationLockSync(() => {");
+    expect(receiptSource.indexOf("const boundary = inspectStopRestoreOwnership();"))
+      .toBeLessThan(receiptSource.indexOf("clearPendingTeardown(nonce)"));
   });
 
   test("an unconfirmed inherited obligation blocks the restore, it does not merely warn", () => {

@@ -459,7 +459,7 @@ config facade in a fresh process, so an earlier schema import cannot mask an ini
 ## Restore
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip
-opencodex config and routed catalog entries without damaging native Codex state. Catalog restoration
+opencodex config and routed catalog entries without damaging native Codex state; parent stop also enforces [connection ownership at each write](runtime.md#remote-hub-hardening-ownership). Catalog restoration
 omits retired bare/account-qualified native rows even when they occur in a pristine backup;
 the backup itself is not rewritten. See the [catalog contract](catalog.md#shared-catalog).
 

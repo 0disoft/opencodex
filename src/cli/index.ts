@@ -71,7 +71,6 @@ import {
 } from "../config/process-state";
 import {
   claimPendingTeardown,
-  clearPendingTeardown,
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
@@ -163,7 +162,7 @@ import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopRequestFetch } from "./stop-restore";
+import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopRequestFetch } from "./stop-restore";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -1453,36 +1452,19 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable);
-    record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
-    if (restore.other) stopFailed = true;
-    else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-    else if (restore.historyOnly) historyOnlyFailure = true;
-    // The obligation is discharged whether or not history metadata finalized: config and
-    // catalog are what a client reads, and `restore.other` already fails the stop.
-    //
-    // Each nonce names its own file, so a clear can only ever remove the obligation it
-    // names — never one a concurrent stop wrote. Both this run's claim and every inherited
-    // receipt it proved discharged are released together.
-    //
-    // A history-preflight refusal is the exception: it restored nothing, so there is
-    // nothing to discharge. Clearing here would drop a real obligation on the floor and
-    // leave the client config pointing at a proxy that is gone, with nothing on disk
-    // saying so — which is the whole failure the receipt exists to prevent (#4718).
-    if (restore.historyDeferred) {
-      console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
-      console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
-    }
-    if (!restore.other && !restore.historyDeferred) {
-      const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-      for (const nonce of discharged) {
-        // A receipt that survives its discharge re-triggers recovery forever, so a failed
-        // removal is surfaced rather than swallowed.
-        if (!clearPendingTeardown(nonce)) {
-          stopFailed = true;
-          record.receiptClearFailed = true;
-          console.error(`❌ The shared teardown finished, but its receipt could not be removed: ${pendingTeardownPathFor(nonce)}`);
-          console.error("   Remove it manually; otherwise every later stop and update will try to recover it again.");
-        }
+    if (restore.boundary) stopFailed = settleUnrestoredStopBoundary(restore.boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
+    else {
+      record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
+      if (restore.other) stopFailed = true;
+      else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
+      else if (restore.historyOnly) historyOnlyFailure = true;
+      // A history preflight refusal restored nothing, so the obligation survives (#4718).
+      if (restore.historyDeferred) {
+        console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
+        console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
+      }
+      if (!restore.other && !restore.historyDeferred) {
+        stopFailed = clearRestoredStopReceipts(record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
       }
     }
   }

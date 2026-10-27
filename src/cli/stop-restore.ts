@@ -3,8 +3,8 @@ import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
 import { withClientLifecycleSync } from "../client/lifecycle-lock";
-import { clearPendingTeardown } from "../config/pending-teardown";
-import type { StopRunRecord } from "./stop-report";
+import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
+export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { loadConfig } from "../config";
 import { configuredAdminToken } from "../lib/admin-secrets";
@@ -154,9 +154,9 @@ export type RestoreBoundaryOwnership = "restore" | "hub-owned" | "unproven";
  * Re-read connection ownership at the parent restore boundary (#7736). A hub connection
  * committed while the stop was in flight owns Codex routing, the catalog and Grok, so the
  * stop must not restore over it. `ocx connect`/`ocx disconnect` publish connection state
- * under the client lifecycle lock (L), so this read takes L. Restoration takes the Codex write
- * lock (N), which may never be acquired inside L, so L is released before restoring: the same
- * final-inspection shape `ocx uninstall` uses. A busy or failing lock proves nothing either way.
+ * under the client lifecycle lock (L), so this early read takes L. Each subsequent write
+ * repeats the check under C via stopRestoreWriteGuard; the early read grants no write authority.
+ * A busy or failing lock proves nothing either way.
  */
 export function restoreBoundaryOwnership(deps: {
   read?: typeof readClientConnectionState;
@@ -164,37 +164,10 @@ export function restoreBoundaryOwnership(deps: {
 } = {}): RestoreBoundaryOwnership {
   const read = deps.read ?? readClientConnectionState;
   try {
-    return (deps.withLifecycle ?? withClientLifecycleSync)(() => {
-      const state = read();
-      return state.kind === "connected" && state.value.transport !== "link" ? "hub-owned" : "restore";
-    });
+    return (deps.withLifecycle ?? withClientLifecycleSync)(() => inspectStopRestoreOwnership(read));
   } catch {
     return "unproven";
   }
-}
-
-/**
- * Settle a restore boundary that must not restore. A hub that now owns the shared state also
- * supersedes this run's (and recovered) receipts, so they are discharged; an unproven boundary
- * keeps every obligation. Returns whether the stop failed.
- */
-export function settleUnrestoredStopBoundary(
-  boundary: "hub-owned" | "unproven",
-  record: Pick<StopRunRecord, "sharedTeardown" | "receiptClearFailed">,
-  nonces: string[],
-): boolean {
-  if (boundary === "unproven") {
-    record.sharedTeardown = "refused";
-    console.error("❌ The client connection could not be confirmed (it may be changing); nothing was restored and the obligation is kept. Rerun 'ocx stop'.");
-    return true;
-  }
-  record.sharedTeardown = "skipped";
-  console.log("↩️  A hub connection was committed while this stop ran; it owns Codex routing, its catalog and the Grok config, so nothing was restored over it.");
-  let failed = false;
-  for (const nonce of nonces) {
-    if (!clearPendingTeardown(nonce)) { failed = true; record.receiptClearFailed = true; }
-  }
-  return failed;
 }
 
 /**
@@ -216,12 +189,14 @@ export function settleUnrestoredStopBoundary(
  */
 export async function restoreSharedClientStateAfterStop(
   reportRetainedCodexProviderTable: (retained: RetainedCodexProviderTable) => void,
-): Promise<{ historyOnly: boolean; historyDeferred: boolean; other: boolean }> {
+): Promise<{ historyOnly: boolean; historyDeferred: boolean; other: boolean; boundary?: "hub-owned" | "unproven" }> {
   let historyOnly = false;
   let historyDeferred = false;
   let other = false;
+  const guard = stopRestoreWriteGuard();
   try {
-    const result = await restoreNativeCodexAsync();
+    const result = await restoreNativeCodexAsync({ withWriteGuard: guard.run });
+    if (guard.boundary() !== "restore") throw new Error("stop_restore_ownership_changed");
     if (result.success) {
       console.log(`↩️  ${result.message}`);
       if (result.retainedCodexProviderTable) {
@@ -251,16 +226,20 @@ export async function restoreSharedClientStateAfterStop(
       console.error(`⚠️  ${result.message}`);
     }
   } catch (error) {
+    const boundary = guard.boundary();
+    if (boundary !== "restore") return { historyOnly: false, historyDeferred: false, other: false, boundary };
     other = true;
     console.error(`⚠️  Native Codex restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // A refused or thrown Grok strip is actionable because it would point Grok at a dead proxy.
   try {
-    const grok = stripGrokConfig();
+    const grok = guard.run(() => stripGrokConfig());
     if (grok.changed) console.log(`↩️  ${grok.message}`);
     else if (!grok.ok) { other = true; console.error(`⚠️  ${grok.message}`); }
   } catch (error) {
+    const boundary = guard.boundary();
+    if (boundary !== "restore") return { historyOnly, historyDeferred, other, boundary };
     other = true;
     console.error(`⚠️  Grok config restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -68,6 +68,7 @@ async function runParentStop(options: {
   nativeSignal?: boolean; apiFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
+  connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -342,6 +343,43 @@ describe("parent CLI shared teardown completion", () => {
         expect(outcome.exitCode, outcome.stderr).toBe(0);
       });
     }
+  }
+  for (const transition of ["connectAfterBoundary", "connectDuringRestore"] as const) {
+    for (const receipt of [true, false]) {
+      test(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
+        const outcome = await runParentStop({ receipt, clientTransport: "link", json: true,
+          [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+        expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: receipt ? 1 : 0 });
+        expect(outcome.receiptExists).toBe(false);
+        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+        expect(outcome.exitCode, outcome.stderr).toBe(0);
+      }, 20_000);
+    }
+  }
+  test("R6 pending connect after inspection preserves the obligation", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", json: true, pendingAfterBoundary: true,
+      response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: 0 });
+    expect(outcome.receiptExists).toBe(true);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, sharedTeardown: "refused" });
+    expect(outcome.exitCode).toBe(1);
+  }, 20_000);
+  for (const mode of ["native-hub", "file-hub", "native-pending"] as const) {
+    test(`R6 real restore revalidates after waiting on writer (${mode})`, () => {
+      const codex = join(home, "codex"); mkdirSync(codex);
+      writeFileSync(join(home, "config.json"), JSON.stringify({ providers: {}, defaultProvider: "openai", syncResumeHistory: false }));
+      const child = spawnSync(process.execPath, [fixturePath("stop-restore-writer-runner.ts"), mode], {
+        cwd: repoPath(), env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codex, GROK_HOME: join(home, "grok") },
+        encoding: "utf8", timeout: 20_000, windowsHide: true,
+      });
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      const result = JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+      expect(result.after).toEqual(result.before);
+      expect(result.grokCalls).toBe(0);
+      expect(result.result.boundary).toBe(mode === "native-pending" ? "unproven" : "hub-owned");
+      expect(result.marker).toBe(mode === "native-pending");
+    }, 20_000);
   }
   test("a busy client lifecycle lock at the restore boundary keeps the obligation instead of restoring", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", lifecycleBusy: true, json: true,

@@ -297,7 +297,7 @@ restore still fails closed when a recorded logical entry has no surviving file.
 
 OpenCodex config writers share `config.toml.ocx-write.lock`: feature scalar and CLI-toggle
 batches, injection, journal replay, removal, and restore/compensation read and write while
-holding it. Injection and coordinated restore take config before SQLite N; prompt writes
+holding it. Parent stop adds [connection validation under C](runtime.md#remote-hub-hardening-ownership). Injection and coordinated restore take config before SQLite N; prompt writes
 take prompt-store before config. Nested writers receive an explicit live handle for the
 same canonical config destination; implicit nesting refuses fast. Symlink aliases contend
 on the real destination's lock. Acquisition revalidates the canonical path and captures the inode after the lock is held, admitting a preceding writer's completed atomic replacement while refusing a canonical retarget before entering the section. Each publication revalidates canonical identity and inode immediately before rename,

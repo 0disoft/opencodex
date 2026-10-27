@@ -33,6 +33,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   connectDuringPost?: boolean;
   /** The client lifecycle lock is held elsewhere when the parent reaches its restore boundary. */
   lifecycleBusy?: boolean;
+  connectAfterBoundary?: boolean;
+  pendingAfterBoundary?: boolean;
+  connectDuringRestore?: boolean;
   /** #7423: run the stop the way an update that restarts the proxy runs it. */
   handover?: boolean;
   /** The runtime-port record is missing, so the stop can only record a guessed endpoint. */
@@ -74,7 +77,10 @@ mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
   withClientLifecycleSync: (work: Parameters<typeof lifecycle.withClientLifecycleSync>[0]) => {
     if (options.lifecycleBusy) throw new Error("client_lifecycle_busy");
     calls.lifecycle += 1;
-    return work(Object.freeze({}) as Parameters<typeof work>[0]);
+    const value = work(Object.freeze({}) as Parameters<typeof work>[0]);
+    if (options.connectAfterBoundary) queueMicrotask(writeHubConnection);
+    if (options.pendingAfterBoundary) queueMicrotask(() => writeFileSync(join(home, "client-connect-pending"), "b".repeat(64) + "\n"));
+    return value;
   },
 }));
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
@@ -180,7 +186,12 @@ if (options.alreadyStopped) {
 const native = await import("../../src/codex/inject");
 mock.module("../../src/codex/inject", () => ({
   ...native,
-  restoreNativeCodexAsync: async () => { calls.native += 1; return options.restore; },
+  restoreNativeCodexAsync: async (restoreOptions?: { withWriteGuard?: <T>(write: () => T) => T }) => {
+    await Promise.resolve(); // The real restore awaits config-file/N acquisition before committing.
+    if (options.connectDuringRestore) writeHubConnection();
+    const write = () => { calls.native += 1; return options.restore; };
+    return restoreOptions?.withWriteGuard ? restoreOptions.withWriteGuard(write) : write();
+  },
 }));
 const grok = await import("../../src/grok/inject");
 mock.module("../../src/grok/inject", () => ({
