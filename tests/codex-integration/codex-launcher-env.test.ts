@@ -197,8 +197,15 @@ describe("Codex launcher native home and proxy environment", () => {
     const result = launch();
     expect(result.reads).toBe(1);
     expect(result.env.CODEX_HOME).toBe(realpathSync(home));
+  }));
+
+  test("junction or symlink homes with a foreign destination withhold credentials", () => fixture((root, home) => {
+    const link = join(root, "linked"); symlinkSync(home, link, process.platform === "win32" ? "junction" : "dir");
+    process.env.CODEX_HOME = link;
     writeFileSync(join(home, "config.toml"), foreign);
-    expect(launch().reads).toBe(0);
+    const result = launch();
+    expect(result.reads).toBe(0);
+    expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
   }));
 
   for (const key of proxyKeys) for (const bypass of [undefined, "", "localhost", "*"]) {

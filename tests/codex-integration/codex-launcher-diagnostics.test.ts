@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { buildCodexLaunchEnv, type CodexLaunchEnvDeps } from "../../src/cli/codex-launcher";
 import { codexCredentialDestinationIsTrusted } from "../../src/cli/codex-launch-auth";
 import { CODEX_TOKEN_REFUSALS, codexTokenWithheldDiagnostic } from "../../src/cli/codex-launch-diagnostics";
+import { codexLaunchSystemNamespaceIsSafe } from "../../src/cli/codex-launch-ownership";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { buildProviderTableBlockForTarget } from "../../src/codex/inject/config-toml";
 import { standaloneCodexRoutingTarget } from "../../src/codex/inject/routing-target";
-import { createCodexLaunchFixtureRoot, codexLaunchOwnershipTest } from "../helpers/codex-launch-private-fixture";
+import { createCodexLaunchFixtureRoot, codexLaunchFixtureHasProtectedAncestors } from "../helpers/codex-launch-private-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const secret = "ocx_fixture_diagnostic_secret", contents = "fixture-key-file-content-never-log";
@@ -65,7 +66,7 @@ describe("Codex credential withholding diagnostics", () => {
     ]) expect(result.notes).toEqual([]);
   });
 
-  (process.platform === "win32" ? codexLaunchOwnershipTest : test.skip)("missing or writable Windows namespace explains the requirement and explicit credential alternative", () => {
+  test.skipIf(process.platform !== "win32")("missing or writable Windows namespace always refuses without reading credentials", () => {
     const root = createCodexLaunchFixtureRoot("ocx-namespace-diagnostic-");
     const home = join(root, "codex"), ocx = join(root, "ocx"), machine = join(root, "machine");
     for (const path of [home, ocx, machine]) mkdirSync(path);
@@ -99,14 +100,17 @@ $p=$env:OCX_TEST_NAMESPACE
 $acl=[System.IO.Directory]::GetAccessControl($p)
 $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new('S-1-1-0'),[System.Security.AccessControl.FileSystemRights]::CreateFiles,[System.Security.AccessControl.AccessControlType]::Allow))
 [System.IO.Directory]::SetAccessControl($p,$acl)`);
+        let namespaceReason: keyof typeof CODEX_TOKEN_REFUSALS | undefined;
+        expect(codexLaunchSystemNamespaceIsSafe(system, reason => { namespaceReason = reason; })).toBe(false);
+        expect(namespaceReason).toBe("systemNamespaceWritable");
+        // Direct namespace admission exercises this reason even when home
+        // admission would stop earlier on an unsafe fixture ancestor.
+        const note = codexTokenWithheldDiagnostic(namespaceReason!);
+        diagnostic([note], CODEX_TOKEN_REFUSALS.systemNamespaceWritable);
+        for (const phrase of ["Default ProgramData creation rights", "must exist", "writable only by Administrators/SYSTEM",
+          "opencodex never changes ACLs itself", "OPENCODEX_API_AUTH_TOKEN", "leaves untouched"]) expect(note).toContain(phrase);
         const result = launch();
-        diagnostic(result.notes, "machine Codex namespace allows other principals to create or replace configuration");
-        expect(result.notes[0]).toContain("Default ProgramData creation rights");
-        expect(result.notes[0]).toContain("must exist");
-        expect(result.notes[0]).toContain("writable only by Administrators/SYSTEM");
-        expect(result.notes[0]).toContain("opencodex never changes ACLs itself");
-        expect(result.notes[0]).toContain("OPENCODEX_API_AUTH_TOKEN");
-        expect(result.notes[0]).toContain("leaves untouched");
+        diagnostic(result.notes, CODEX_TOKEN_REFUSALS[codexLaunchFixtureHasProtectedAncestors() ? "systemNamespaceWritable" : "ownership"]);
         expect(result.notes[0]).not.toContain(root);
         expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
         expect(reads).toBe(0);
@@ -124,19 +128,20 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([Sy
     }
   });
 
-  codexLaunchOwnershipTest("configuration reasons reach stderr without file contents or credential paths", () => {
+  test("credential-file missing, malformed and colliding negatives bypass destination ownership", () => {
     const root = createCodexLaunchFixtureRoot("ocx-diagnostic-");
     const home = join(root, "codex"), ocx = join(root, "ocx"), system = join(root, "system");
     for (const path of [home, ocx, system]) mkdirSync(path);
     const cfg = { port: 12199, hostname: "0.0.0.0" }, prior = process.env.OPENCODEX_HOME, cwd = process.cwd();
     process.env.OPENCODEX_HOME = ocx;
     process.chdir(root);
-    const local = 'model_provider="opencodex"\n' + buildProviderTableBlockForTarget(standaloneCodexRoutingTarget(cfg.port, cfg));
     writeFileSync(join(ocx, "config.json"), JSON.stringify(cfg));
     try {
       const keyFile = join(ocx, "service-api-token");
       const keyRead = (extra = {}) => capture({ CODEX_HOME: home, ...extra }, { credentialDestination: () => true });
-      diagnostic(keyRead().notes, "installation service credential is unavailable or invalid");
+      const missing = keyRead();
+      diagnostic(missing.notes, "installation service credential is unavailable or invalid");
+      expect(missing.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
       writeFileSync(keyFile, contents + "\n" + secret);
       const malformed = keyRead();
       diagnostic(malformed.notes, "installation service credential is unavailable or invalid");
@@ -149,31 +154,46 @@ $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([Sy
       const loaded = keyRead();
       expect(loaded.notes).toEqual([]);
       expect(loaded.env.OPENCODEX_API_AUTH_TOKEN).toBe(secret);
-      for (const [config, reason] of [
-        [local + '\n[mcp_servers.fixture]\ncommand="' + contents + '"\n', "configuration has additional credential consumers"],
-        ['unknown="' + contents + '"\n' + local, "configuration contains unaudited keys or values"],
-        [local.replace("127.0.0.1", "capture.invalid"), "provider transport does not match the managed loopback provider"],
-        ['broken = "' + contents, "credential destination inspection failed"],
-      ]) {
-        writeFileSync(join(home, "config.toml"), config!);
-        let reads = 0;
-        const result = capture({ CODEX_HOME: home }, {
-          credentialDestination: (path, report) => codexCredentialDestinationIsTrusted(path, system, report),
-          serviceToken: () => { reads++; return secret; },
-        });
-        diagnostic(result.notes, reason!);
-        expect(reads).toBe(0);
-        expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
-        expect(result.notes[0]).not.toContain(root);
+    } finally {
+      process.chdir(cwd);
+      if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior;
+      removeTreeWithRetry(root);
+    }
+  });
+
+  for (const [name, addition, reason] of [
+    ["MCP consumer", (local: string) => local + '\n[mcp_servers.fixture]\ncommand="' + contents + '"\n', "consumers"],
+    ["unknown config", (local: string) => 'unknown="' + contents + '"\n' + local, "configShape"],
+    ["foreign provider", (local: string) => local.replace("127.0.0.1", "capture.invalid"), "providerTransport"],
+    ["malformed config", () => 'broken = "' + contents, "inspection"],
+    ["system config", (local: string) => local, "systemConfig"],
+  ] as const) test(`${name} mutation always withholds credentials without reading them`, () => {
+    const root = createCodexLaunchFixtureRoot("ocx-diagnostic-negative-");
+    const home = join(root, "codex"), ocx = join(root, "ocx"), system = join(root, "system");
+    for (const path of [home, ocx, system]) mkdirSync(path);
+    const cfg = { port: 12199, hostname: "0.0.0.0" }, prior = process.env.OPENCODEX_HOME, cwd = process.cwd();
+    process.env.OPENCODEX_HOME = ocx; process.chdir(root);
+    const local = 'model_provider="opencodex"\n' + buildProviderTableBlockForTarget(standaloneCodexRoutingTarget(cfg.port, cfg));
+    writeFileSync(join(ocx, "config.json"), JSON.stringify(cfg));
+    try {
+      writeFileSync(join(home, "config.toml"), addition(local));
+      if (name === "system config") {
+        writeFileSync(join(system, "requirements.toml"), contents);
+        let namespaceReason: string | undefined;
+        expect(codexLaunchSystemNamespaceIsSafe(system, value => { namespaceReason = value; })).toBe(false);
+        expect(namespaceReason).toBe("systemConfig");
       }
-      writeFileSync(join(home, "config.toml"), local);
-      // The production namespace is deliberately not modified by this test.
-      writeFileSync(join(system, "requirements.toml"), contents);
+      let reads = 0;
       const result = capture({ CODEX_HOME: home }, {
         credentialDestination: (path, report) => codexCredentialDestinationIsTrusted(path, system, report),
-        serviceToken: () => { throw new Error("must not read"); },
+        serviceToken: () => { reads++; return secret; },
       });
-      diagnostic(result.notes, "machine Codex configuration adds an unaudited system layer");
+      // Diagnostic reachability needs protected ancestors; the mutation and
+      // no-token/zero-read assertions above and below run on every host.
+      diagnostic(result.notes, CODEX_TOKEN_REFUSALS[codexLaunchFixtureHasProtectedAncestors() ? reason : "ownership"]);
+      expect(reads).toBe(0);
+      expect(result.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+      expect(result.notes[0]).not.toContain(root);
     } finally {
       process.chdir(cwd);
       if (prior === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = prior;

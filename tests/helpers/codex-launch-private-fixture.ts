@@ -60,6 +60,10 @@ export function createCodexLaunchFixtureRoot(prefix: string): string {
   return root;
 }
 
+export function codexLaunchFixtureHasProtectedAncestors(): boolean {
+  return fixtureLocation().owned;
+}
+
 /** Gate only assertions that need a protected starting point, with an executed refusal proof. */
 export function codexLaunchOwnershipTest(name: string, body: () => void | Promise<void>, timeout?: number): void {
   const support = fixtureLocation();
@@ -85,8 +89,8 @@ export function codexLaunchOwnershipTest(name: string, body: () => void | Promis
 
 /** Still exercise the mutating negative scenario when its later diagnostic is unreachable. */
 export function codexLaunchProjectRefusalTest(name: string, body: (reason: "project" | "ownership") => void | Promise<void>): void {
-  codexLaunchOwnershipTest(name, () => body("project"));
-  if (!fixtureLocation().owned) test(`${name}: unsafe ancestors still withhold credentials`, () => body("ownership"));
+  // This is a negative scenario, so its body must never be replaced or skipped.
+  test(name, () => body(fixtureLocation().owned ? "project" : "ownership"));
 }
 
 // Model a protected, empty machine configuration namespace inside this fixture.

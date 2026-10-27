@@ -1,7 +1,19 @@
-import { lstatSync, readlinkSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readlinkSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import type { CodexTokenRefusal, CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
+
+type OwnershipStat = Pick<Stats, "uid" | "mode" | "isFile" | "isDirectory" | "isSymbolicLink"> & {
+  dev: number | bigint; ino: number | bigint;
+};
+
+function ownershipStat(path: string): OwnershipStat {
+  if (process.platform !== "darwin") return lstatSync(path);
+  // Keep 64-bit object identities exact; ownership and permission fields fit u32.
+  const stat = lstatSync(path, { bigint: true });
+  return { dev: stat.dev, ino: stat.ino, uid: Number(stat.uid), mode: Number(stat.mode),
+    isFile: () => stat.isFile(), isDirectory: () => stat.isDirectory(), isSymbolicLink: () => stat.isSymbolicLink() };
+}
 
 // Paths are environment data, never interpolated PowerShell source. The token is
 // not read until this read-only subprocess and the config checks have succeeded.
@@ -99,11 +111,11 @@ function windowsOwnershipCheck(home: string, namespace: boolean, fixtureDirector
 /** Inspect lexical entries as well as every link target; realpath alone loses replacement authority. */
 export function codexLaunchProjectAliasIsOwned(path: string): boolean {
   try {
-    const paths = new Set<string>(), uid = process.getuid?.();
+    const paths = new Map<string, OwnershipStat>(), uid = process.getuid?.();
     const inspect = (entry: string): boolean => {
       if (paths.has(entry)) return true;
-      paths.add(entry);
-      const stat = lstatSync(entry), parent = dirname(entry);
+      const stat = ownershipStat(entry), parent = dirname(entry);
+      paths.set(entry, stat);
       if (!stat.isSymbolicLink() && !stat.isDirectory() && !stat.isFile()) return false;
       if (process.platform !== "win32") {
         if (uid === undefined || (stat.uid !== uid && stat.uid !== 0)) return false;
@@ -121,8 +133,8 @@ export function codexLaunchProjectAliasIsOwned(path: string): boolean {
       return parent === entry || inspect(parent);
     };
     if (!inspect(resolve(path))) return false;
-    if (process.platform === "win32") return windowsOwnershipCheck("", false, undefined, undefined, [...paths]);
-    return process.platform !== "darwin" || macHasNoManagedCodexPreferences([...paths], true);
+    if (process.platform === "win32") return windowsOwnershipCheck("", false, undefined, undefined, [...paths.keys()]);
+    return process.platform !== "darwin" || macHasNoManagedCodexPreferences(paths);
   } catch { return false; }
 }
 
@@ -147,12 +159,12 @@ export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string, repo
       if (dirname(path) === path) return refuse("systemNamespace");
       path = dirname(path);
     }
-    const paths: string[] = [];
+    const paths = new Map<string, OwnershipStat>();
     for (;;) {
-      const stat = lstatSync(path);
+      const stat = ownershipStat(path);
       if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== process.getuid?.() && stat.uid !== 0)
-        || ((stat.mode & 0o022) !== 0 && (paths.length === 0 || (stat.mode & 0o1000) === 0))) return refuse("systemNamespace");
-      paths.push(path);
+        || ((stat.mode & 0o022) !== 0 && (paths.size === 0 || (stat.mode & 0o1000) === 0))) return refuse("systemNamespace");
+      paths.set(path, stat);
       if (dirname(path) === path) break;
       path = dirname(path);
     }
@@ -160,7 +172,7 @@ export function codexLaunchSystemNamespaceIsSafe(fixtureDirectory?: string, repo
   } catch { return refuse("systemNamespace"); }
 }
 
-/** Libc's filesec_get_property reports an absent FILESEC_ACL as ENOENT. */
+/** Only for a descriptor-bound ACL query: absent FILESEC_ACL reports ENOENT. */
 export function darwinAclDescriptorIsAbsent(descriptor: number | bigint | null, errorNumber: number): boolean {
   return !descriptor && errorNumber === 2;
 }
@@ -184,14 +196,13 @@ export function darwinAclEntriesAreSafe(entries: readonly { tag: number; perms: 
 }
 
 /** Match Codex's CFPreferencesAppValueIsForced test without reading preference contents. */
-function macHasNoManagedCodexPreferences(paths: readonly string[], inspectLinks = false): boolean {
+function macHasNoManagedCodexPreferences(paths: ReadonlyMap<string, OwnershipStat>): boolean {
   let library: { close(): void } | undefined;
   let aclLibrary: { close(): void } | undefined;
   try {
     const { dlopen, FFIType, ptr, read } = require("bun:ffi") as typeof import("bun:ffi");
     const acl = dlopen("/usr/lib/libSystem.B.dylib", {
-      acl_get_file: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
-      acl_get_link_np: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
+      acl_get_fd_np: { args: [FFIType.i32, FFIType.i32], returns: FFIType.ptr },
       acl_get_entry: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
       acl_get_tag_type: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
       acl_get_permset: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
@@ -201,43 +212,57 @@ function macHasNoManagedCodexPreferences(paths: readonly string[], inspectLinks 
       __error: { args: [], returns: FFIType.ptr },
     });
     aclLibrary = acl;
-    for (const path of paths) {
-      const bytes = Buffer.from(path + "\0"), entry = Buffer.alloc(8), tag = Buffer.alloc(4), permset = Buffer.alloc(8);
-      // Alias admission must inspect the link's ACL, too; acl_get_file follows it.
-      const descriptor = (inspectLinks ? acl.symbols.acl_get_link_np : acl.symbols.acl_get_file)(ptr(bytes), 0x100); // ACL_TYPE_EXTENDED
-      if (!descriptor) {
-        // Read errno immediately: both get_file and get_link_np use acl_get_file1.
-        // https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
-        const errno = acl.symbols.__error();
-        if (!errno || !darwinAclDescriptorIsAbsent(descriptor, read.i32(errno))) return false;
-        continue;
-      }
+    for (const [path, expected] of paths) {
+      // Apple bsd/sys/fcntl.h: O_RDONLY=0, O_NONBLOCK=4, O_NOFOLLOW=0x100,
+      // O_DIRECTORY=0x100000, O_SYMLINK=0x200000, O_CLOEXEC=0x1000000.
+      // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+      // O_SYMLINK opens the lexical link itself, never its target. Nonblocking
+      // open also prevents a replaced regular file/FIFO from stalling admission.
+      const fd = openSync(path, 0x1000104 | (expected.isSymbolicLink() ? 0x200000 : expected.isDirectory() ? 0x100000 : 0));
       try {
-        const valid = acl.symbols.acl_valid(descriptor);
-        if (valid !== 0) return false;
-        const entries: { tag: number; perms: number }[] = [];
-        for (let id = 0; ; id = -1) { // ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1
-          const found = acl.symbols.acl_get_entry(descriptor, id, ptr(entry));
-          if (found !== 0) {
-            const errno = acl.symbols.__error();
-            if (!errno || !darwinAclInspectionIsEmpty(valid, found, read.i32(errno))) return false;
-            break;
-          }
-          const entryPointer = read.ptr(ptr(entry)) as import("bun:ffi").Pointer;
-          if (!entryPointer || acl.symbols.acl_get_tag_type(entryPointer, ptr(tag)) !== 0
-            || acl.symbols.acl_get_permset(entryPointer, ptr(permset)) !== 0) return false;
-          const permissions = read.ptr(ptr(permset)) as import("bun:ffi").Pointer;
-          if (!permissions) return false;
-          let perms = 0;
-          for (const permission of DARWIN_ACL_MUTATION_PERMISSIONS) {
-            const granted = acl.symbols.acl_get_perm_np(permissions, permission);
-            if (granted !== 0 && granted !== 1) return false;
-            if (granted === 1) perms |= permission;
-          }
-          entries.push({ tag: tag.readInt32LE(), perms });
+        const actual = fstatSync(fd, { bigint: true });
+        if (actual.dev !== expected.dev || actual.ino !== expected.ino
+          || Number(actual.mode & 0o170000n) !== (expected.mode & 0o170000)) return false;
+        const entry = Buffer.alloc(8), tag = Buffer.alloc(4), permset = Buffer.alloc(8);
+        const descriptor = acl.symbols.acl_get_fd_np(fd, 0x100); // ACL_TYPE_EXTENDED
+        if (!descriptor) {
+          // Read errno immediately. acl_get_fd_np uses fstatx_np on this open fd,
+          // with no pathname lookup that could fail ENOENT after a rename/unlink.
+          // Only filesec_get_property(FILESEC_ACL) can report absence as ENOENT.
+          // https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
+          // https://github.com/apple-oss-distributions/Libc/blob/main/sys/statx_np.c
+          // https://github.com/apple-oss-distributions/Libc/blob/main/gen/filesec.c
+          const errno = acl.symbols.__error();
+          if (!errno || !darwinAclDescriptorIsAbsent(descriptor, read.i32(errno))) return false;
+          continue;
         }
-        if (!darwinAclEntriesAreSafe(entries)) return false;
-      } finally { if (acl.symbols.acl_free(descriptor) !== 0) return false; }
+        try {
+          const valid = acl.symbols.acl_valid(descriptor);
+          if (valid !== 0) return false;
+          const entries: { tag: number; perms: number }[] = [];
+          for (let id = 0; ; id = -1) { // ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1
+            const found = acl.symbols.acl_get_entry(descriptor, id, ptr(entry));
+            if (found !== 0) {
+              const errno = acl.symbols.__error();
+              if (!errno || !darwinAclInspectionIsEmpty(valid, found, read.i32(errno))) return false;
+              break;
+            }
+            const entryPointer = read.ptr(ptr(entry)) as import("bun:ffi").Pointer;
+            if (!entryPointer || acl.symbols.acl_get_tag_type(entryPointer, ptr(tag)) !== 0
+              || acl.symbols.acl_get_permset(entryPointer, ptr(permset)) !== 0) return false;
+            const permissions = read.ptr(ptr(permset)) as import("bun:ffi").Pointer;
+            if (!permissions) return false;
+            let perms = 0;
+            for (const permission of DARWIN_ACL_MUTATION_PERMISSIONS) {
+              const granted = acl.symbols.acl_get_perm_np(permissions, permission);
+              if (granted !== 0 && granted !== 1) return false;
+              if (granted === 1) perms |= permission;
+            }
+            entries.push({ tag: tag.readInt32LE(), perms });
+          }
+          if (!darwinAclEntriesAreSafe(entries)) return false;
+        } finally { if (acl.symbols.acl_free(descriptor) !== 0) return false; }
+      } finally { closeSync(fd); }
     }
     const core = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", {
       CFStringCreateWithCString: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.ptr },
@@ -259,21 +284,21 @@ function macHasNoManagedCodexPreferences(paths: readonly string[], inspectLinks 
 /** Excludes other-user writers; it cannot isolate processes with the same user identity. */
 export function codexLaunchHomeIsOwned(home: string): boolean {
   try {
-    const directory = lstatSync(home), config = lstatSync(join(home, "config.toml"));
+    const directory = ownershipStat(home), config = ownershipStat(join(home, "config.toml"));
     if (!directory.isDirectory() || directory.isSymbolicLink() || !config.isFile() || config.isSymbolicLink()) return false;
     if (process.platform === "win32") {
       return windowsOwnershipCheck(home, false);
     }
     const uid = process.getuid?.();
     if (uid === undefined || [directory, config].some(stat => stat.uid !== uid || (stat.mode & 0o022) !== 0)) return false;
-    const paths = [home, join(home, "config.toml")];
+    const paths = new Map<string, OwnershipStat>([[home, directory], [join(home, "config.toml"), config]]);
     for (let parent = dirname(home); ; parent = dirname(parent)) {
-      const stat = lstatSync(parent);
+      const stat = ownershipStat(parent);
       if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
       if (stat.uid !== uid && stat.uid !== 0) return false;
       // Sticky directories (e.g. /tmp) protect entries owned by this user.
       if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) return false;
-      paths.push(parent);
+      paths.set(parent, stat);
       if (dirname(parent) === parent) break;
     }
     return process.platform !== "darwin" || macHasNoManagedCodexPreferences(paths);
