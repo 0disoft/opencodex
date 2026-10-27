@@ -6,9 +6,11 @@ T3 Code follows the shared [client-integration ownership contract](integrations.
 
 T3 Code (`pingdotgg/t3code`) keeps server settings in JSON at `userdata/settings.json` under
 `T3CODE_HOME`, default `~/.t3`. `t3codeHomeDir` in `src/clients/config-export/t3code.ts` resolves
-that directory once for export, writing and detection, and refuses a relative override through
-`absoluteClientPath`. Detection reads `<base>/userdata`, which the T3 Code server creates on its
-first start.
+that directory once for export, writing and detection. POSIX overrides use `absoluteClientPath`;
+Windows overrides must have a fully qualified drive or UNC root after tilde expansion against
+the effective home. Drive-relative and drive-less rooted paths refuse with `ClientPathError`,
+because the proxy and T3 Code can run on different drives. Detection reads `<base>/userdata`,
+which the T3 Code server creates on its first start.
 
 The managed contribution is one fragment, `providerInstances.opencodex`: a T3 Code provider
 instance with `driver: "claudeAgent"`. Its `environment` carries the proxy origin as
@@ -40,5 +42,6 @@ permitting cleanup after a bind change. `ocx export --client t3code` asks the li
 `ocx sync`, `/api/sync` and catalog refresh includes T3 Code. The managed path template lives in
 `src/integrations/mutation-plan.ts`, and `tests/clients/t3code-client.test.ts` covers the
 contract. `tests/clients/t3code-client-lifecycle.test.ts` also covers relocated-home
-detection, apply and Undo, shared `ClientPathError` refusal, owned cleanup after
+detection, apply and Undo, cross-platform Windows drive/UNC and tilde admission,
+shared `ClientPathError` refusal, owned cleanup after
 the bind changes to require admission, and the Messages-surface refusal.

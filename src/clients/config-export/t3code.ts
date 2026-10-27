@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { PROXY_MARKER } from "../../claude/auth-detect";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
 import { resolveApiSurfaceSettings } from "../../protocols/settings";
-import { absoluteClientPath } from "../client-path";
+import { absoluteClientPath, ClientPathError } from "../client-path";
 import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { OPENCODE_PROVIDER_ID } from "./constants";
 import { normalizeExportModels, singleFragment } from "./model-metadata";
@@ -12,11 +12,22 @@ import { normalizeExportModels, singleFragment } from "./model-metadata";
  * T3 Code's data directory: `T3CODE_HOME` when set, otherwise `~/.t3`
  * (t3code `apps/server/src/os-jank.ts` `resolveBaseDir`). The desktop app and
  * the `t3` server share it. A relative override is refused because opencodex
- * and T3 Code would anchor it to different working directories.
+ * and T3 Code would anchor it to different working directories or Windows drives.
  */
-export function t3codeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+export function t3codeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
   const override = env.T3CODE_HOME?.trim();
-  return override ? absoluteClientPath(override, home, "T3CODE_HOME") : join(home, ".t3");
+  if (!override) return join(home, ".t3");
+  if (platform !== "win32") return absoluteClientPath(override, home, "T3CODE_HOME");
+  const expanded = override === "~" ? home
+    : override.startsWith("~/") || override.startsWith("~\\") ? win32.join(home, override.slice(2)) : override;
+  // isAbsolute also accepts \rooted paths, which still depend on the current drive.
+  if (!/^[A-Za-z]:[\\/]/.test(expanded) && !/^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(expanded)) {
+    throw new ClientPathError(
+      `T3CODE_HOME must be a fully qualified drive or UNC path, or start with ~; "${override}" depends on the working directory or drive, `
+      + "so opencodex and T3 Code would disagree about which file it names.",
+    );
+  }
+  return expanded;
 }
 
 /**

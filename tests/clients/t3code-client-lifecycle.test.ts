@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { ClientPathError } from "../../src/clients/client-path";
-import { t3codeConfigPath } from "../../src/clients/config-export/t3code";
+import { t3codeConfigPath, t3codeHomeDir } from "../../src/clients/config-export/t3code";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { readIntegrationState } from "../../src/integrations/state";
 import { createIntegrationStateStore } from "../../src/integrations/store";
@@ -64,6 +64,49 @@ test("a relative T3CODE_HOME throws the shared leaf error before touching a file
   const f = fixture();
   expect(() => t3codeConfigPath({ T3CODE_HOME: "relative/t3" }, f.input.home)).toThrow(ClientPathError);
   expect(readFileSync(f.path, "utf8")).toBe(f.before);
+});
+
+for (const override of ["\\shared\\t3", "/shared/t3", "C:relative", "relative/t3", "\\\\server"]) {
+  test(`Windows T3CODE_HOME refuses an unqualified path: ${override}`, () => {
+    expect(() => t3codeHomeDir({ T3CODE_HOME: override }, "D:\\Users\\test", "win32")).toThrow(ClientPathError);
+    expect(() => t3codeHomeDir({ T3CODE_HOME: override }, "D:\\Users\\test", "win32")).toThrow("T3CODE_HOME");
+  });
+}
+
+for (const override of ["C:\\abs", "C:/abs", "\\\\server\\share\\t3", "//server/share/t3"]) {
+  test(`Windows T3CODE_HOME accepts a fully qualified path: ${override}`, () => {
+    expect(t3codeHomeDir({ T3CODE_HOME: override }, "D:\\Users\\test", "win32")).toBe(override);
+  });
+}
+
+for (const [override, expected] of [["~", "D:\\Users\\test"], ["~/t3", win32.join("D:\\Users\\test", "t3")], ["~\\t3", win32.join("D:\\Users\\test", "t3")]] as const) {
+  test(`Windows T3CODE_HOME expands ${override} against the effective home`, () => {
+    expect(t3codeHomeDir({ T3CODE_HOME: override }, "D:\\Users\\test", "win32")).toBe(expected);
+  });
+}
+
+test("Windows T3CODE_HOME refuses a tilde expanded against a drive-less home", () => {
+  expect(() => t3codeHomeDir({ T3CODE_HOME: "~" }, "\\Users\\test", "win32")).toThrow(ClientPathError);
+});
+
+test("POSIX T3CODE_HOME keeps rooted paths and tilde expansion", () => {
+  expect(t3codeHomeDir({ T3CODE_HOME: "/shared/t3" }, "/home/test", "linux")).toBe("/shared/t3");
+  expect(t3codeHomeDir({ T3CODE_HOME: "~/t3" }, "/home/test", "linux")).toBe(join("/home/test", "t3"));
+  expect(() => t3codeHomeDir({ T3CODE_HOME: "relative/t3" }, "/home/test", "linux")).toThrow(ClientPathError);
+});
+
+test("an unqualified T3CODE_HOME surfaces as unsafe without changing client bytes", () => {
+  const f = fixture();
+  const overrides = process.platform === "win32" ? ["\\shared\\t3", "/shared/t3", "C:relative"] : ["relative/t3"];
+  for (const override of overrides) {
+    const input = { ...f.input, env: { T3CODE_HOME: override } };
+    expect(readIntegrationState(input)).toMatchObject({ state: "unsafe", reason: "unresolvable-path" });
+    for (const write of [applyIntegration, refreshIntegration]) {
+      expect(write(input)).toMatchObject({ ok: false, reason: "unsafe", message: expect.stringContaining("T3CODE_HOME") });
+    }
+    expect(readFileSync(f.path, "utf8")).toBe(f.before);
+    expect(f.input.store!.listOperations("t3code")).toEqual([]);
+  }
 });
 
 test("a closed Messages surface refuses apply and refresh but keeps disable", () => {

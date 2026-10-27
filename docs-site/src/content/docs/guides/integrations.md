@@ -160,8 +160,10 @@ re-point it. Each routed model is a custom model keyed by its opencodex selector
 `ocx sync` refresh the instance.
 
 T3 Code keeps its data in `T3CODE_HOME` when set, otherwise `~/.t3`. Set the same variable on the
-opencodex process if you relocate it; a relative value is refused. The marker is not a credential,
-so the integration needs loopback access and refuses an authenticated non-loopback bind unless the
+opencodex process if you relocate it; a relative value is refused. On Windows, use a fully qualified
+drive path (`C:\shared\t3`) or UNC path (`\\server\share\t3`); paths without a drive, such as
+`\shared\t3` or `/shared/t3`, are refused. `~` expands against the effective user home.
+The marker is not a credential, so the integration needs loopback access and refuses an authenticated non-loopback bind unless the
 unauthenticated loopback listener is enabled.
 
 Treat the instance as opencodex's. Marking one of its variables **Sensitive** in T3 Code, adding

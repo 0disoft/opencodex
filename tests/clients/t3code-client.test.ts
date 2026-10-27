@@ -76,8 +76,10 @@ describe("T3 Code client integration", () => {
   });
 
   test("T3CODE_HOME relocates the settings file and detection, and a relative value is refused", () => {
-    expect(t3codeConfigPath({ T3CODE_HOME: "/srv/t3" }, "/home/test")).toBe(join("/srv/t3", "userdata", "settings.json"));
-    expect(t3codeConfigPath({ T3CODE_HOME: "~/t3-work" }, "/home/test")).toBe(join("/home/test", "t3-work", "userdata", "settings.json"));
+    const home = join(tmpdir(), "ocx-t3code-path-home");
+    const relocated = join(tmpdir(), "ocx-t3code-path-override");
+    expect(t3codeConfigPath({ T3CODE_HOME: relocated }, home)).toBe(join(relocated, "userdata", "settings.json"));
+    expect(t3codeConfigPath({ T3CODE_HOME: "~/t3-work" }, home)).toBe(join(home, "t3-work", "userdata", "settings.json"));
     expect(INTEGRATION_CLIENTS.t3code.detectDir({}, "/home/test")).toBe(join("/home/test", ".t3", "userdata"));
     expect(() => t3codeConfigPath({ T3CODE_HOME: "relative/t3" }, "/home/test")).toThrow("T3CODE_HOME");
   });
