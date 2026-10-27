@@ -514,6 +514,7 @@ function buildResponseJSONWithBudget(
         }
         break;
       case "tool_call_end":
+        if (e.incomplete) { flushToolCall("incomplete"); break; }
         if (!toolCallArgumentsUsable(currentToolCallArgs) && currentToolCallId) {
           // Mirror the streaming path: refuse to complete unusable arguments.
           const mapped = options?.toolNsMap?.get(currentToolCallName);

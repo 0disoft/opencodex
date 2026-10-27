@@ -1,4 +1,8 @@
 {
+  "zed-openai-contract.test.ts": "providers",
+  "zed-failure-relay.test.ts": "providers",
+  "zed-argument-consistency.test.ts": "providers",
+  "zed-lossless-arguments.test.ts": "providers",
   "qoder-image-input.test.ts": "providers",
   "qoder-cn-image-validation.test.ts": "providers",
   "coding-agent-history-projection.test.ts": "adapters",

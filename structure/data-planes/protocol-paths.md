@@ -217,7 +217,7 @@ fixed at the bridge entry mark, before an effort override rewrites `thinking`.
 
 `src/protocols/encoders/` turns `AdapterEvent` streams into the Chat Completions and Anthropic
 Messages wires without the internal Responses SSE. It is server side and not a leaf.
-`adapter-events.ts` is the driver: it ports the item state machine of `bridgeToResponsesSSE`
+`adapter-events.ts` is the driver: it ports the item state machine of `bridgeToResponsesSSE`, including `tool_call_end.incomplete`, which closes an unfinished item without claiming argument completion
 (item boundaries, signature grouping, hidden and redacted reasoning envelopes, tool naming and
 argument gating, the integral-float repair, every terminal with its usage and durability rule,
 the wire-silence heartbeat and stall watchdog, pull-based stepping, cancellation) and calls one
