@@ -87,3 +87,17 @@ test("protected source bytes displace unrelated batches within the read budget",
   expect(listRoleModelChanges(home, 1000, dir).filter(change => change.batch === source)).toHaveLength(50);
 });
 
+test.each(["torn", "complete"])("restart after an unterminated %s suffix leaves a new Apply all batch joinable", async suffix => {
+  const old = await put("explorer", { model: "before-restart" });
+  const complete = readFileSync(path, "utf8");
+  // Disk state left by an interrupted process; no in-memory batch state survives a restart.
+  writeFileSync(path, suffix === "torn" ? `${complete}{"at":"interrupted` : complete.trimEnd());
+  const first = await put("explorer", { model: "apply-a" });
+  expect(first.status).toBe(200);
+  expect(typeof first.body.batch).toBe("string");
+  expect((await put("librarian", { model: "apply-b", batch: first.body.batch })).status).toBe(200);
+  const history = listRoleModelChanges(home, 50, dir);
+  expect(history.filter(change => change.batch === first.body.batch)).toHaveLength(2);
+  expect(history.filter(change => change.batch === old.body.batch)).toHaveLength(1);
+  expect(readFileSync(join(home, "agents", "librarian.toml"), "utf8")).toContain('model = "apply-b"');
+});

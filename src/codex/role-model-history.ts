@@ -66,7 +66,8 @@ export function recordRoleModelChange(codexHome: string, change: RoleModelChange
   const stored: StoredRoleModelChange = { ...change, codexHome };
   // Capture the complete source before this append can move its first row outside either tail limit.
   const tail = tailRows(historyPath(dir));
-  appendFileSync(historyPath(dir), `${JSON.stringify(stored)}\n`, { encoding: "utf8", mode: 0o600 });
+  // An interrupted JSONL suffix must not swallow the first record returned after restart.
+  appendFileSync(historyPath(dir), `${tail.unterminated ? "\n" : ""}${JSON.stringify(stored)}\n`, { encoding: "utf8", mode: 0o600 });
   if (statSync(historyPath(dir)).size <= ROLE_HISTORY_MAX_BYTES && tail.lines < ROLE_HISTORY_MAX_ROWS) return;
   try {
     compact(dir, wholeBatches([stored, ...tail.rows]));
@@ -150,12 +151,12 @@ function parseRow(line: string): StoredRoleModelChange | null {
  * at most ROLE_HISTORY_MAX_ROWS of them. When the read starts mid-file, its first partial line is
  * skipped; a batch that continues above the read is left for `wholeBatches` to drop.
  */
-function tailRows(path: string): { rows: StoredRoleModelChange[]; lines: number } {
+function tailRows(path: string): { rows: StoredRoleModelChange[]; lines: number; unterminated: boolean } {
   let fd: number;
   try {
     fd = openSync(path, "r");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rows: [], lines: 0 };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { rows: [], lines: 0, unterminated: false };
     throw error;
   }
   let text: string;
@@ -182,7 +183,7 @@ function tailRows(path: string): { rows: StoredRoleModelChange[]; lines: number 
     const row = parseRow(line);
     return row ? [row] : [];
   }).reverse();
-  return { rows, lines: lines.length };
+  return { rows, lines: lines.length, unterminated: text.length > 0 && !text.endsWith("\n") };
 }
 
 /**
