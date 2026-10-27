@@ -2215,7 +2215,7 @@ export const fr: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "Gère les fournisseurs OpenCodex et les modèles personnalisés dans ~/.qoder/settings.json. Nécessite qu’opencodex soit joignable sur une adresse de bouclage. Les autres paramètres sont conservés ; Annuler restaure la sauvegarde.",
-  "integrations.semantics.t3code": "Ajoute une instance de fournisseur Claude opencodex à ~/.t3/userdata/settings.json (T3CODE_HOME la déplace). Les modèles routés apparaissent dans le sélecteur de modèles de T3 Code ; les fils Codex passent déjà par le proxy. Nécessite qu’opencodex soit joignable sur une adresse de bouclage. Les autres paramètres sont conservés ; Annuler restaure la sauvegarde.",
+  "integrations.semantics.t3code": "Ajoute une instance de fournisseur Claude opencodex à ~/.t3/userdata/settings.json (T3CODE_HOME la déplace). Les modèles routés apparaissent dans le sélecteur de modèles de T3 Code ; les fils Codex ne passent par le proxy que si l’intégration Codex est activée et que T3 Code utilise le même CODEX_HOME. Nécessite qu’opencodex soit joignable sur une adresse de bouclage. Les autres paramètres sont conservés ; Annuler restaure la sauvegarde.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

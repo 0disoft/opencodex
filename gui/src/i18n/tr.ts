@@ -2228,7 +2228,7 @@ export const tr: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "~/.qoder/settings.json içindeki OpenCodex sağlayıcılarını ve özel modelleri yönetir. Loopback erişimi gerektirir. Diğer ayarlar korunur; Geri al, anlık görüntüyü geri yükler.",
-  "integrations.semantics.t3code": "~/.t3/userdata/settings.json dosyasına bir opencodex Claude sağlayıcı örneği ekler (T3CODE_HOME konumunu değiştirir). Yönlendirilen modeller T3 Code model seçicisinde görünür; Codex iş parçacıkları proxy’yi zaten kullanır. Loopback erişimi gerektirir. Diğer ayarlar korunur; Geri al, anlık görüntüyü geri yükler.",
+  "integrations.semantics.t3code": "~/.t3/userdata/settings.json dosyasına bir opencodex Claude sağlayıcı örneği ekler (T3CODE_HOME konumunu değiştirir). Yönlendirilen modeller T3 Code model seçicisinde görünür; Codex iş parçacıkları proxy’yi yalnızca Codex entegrasyonu etkinse ve T3 Code aynı CODEX_HOME değerini kullanıyorsa kullanır. Loopback erişimi gerektirir. Diğer ayarlar korunur; Geri al, anlık görüntüyü geri yükler.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

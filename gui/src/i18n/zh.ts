@@ -1674,7 +1674,7 @@ export const zh: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "管理 ~/.qoder/settings.json 中的 OpenCodex 提供商和自定义模型。需要回环访问。保留其他设置；撤销会恢复快照。",
-  "integrations.semantics.t3code": "在 ~/.t3/userdata/settings.json 中添加 opencodex Claude 提供商实例（T3CODE_HOME 可更改位置）。路由模型会出现在 T3 Code 的模型选择器中；Codex 线程已经通过代理。需要回环访问。保留其他设置；撤销会恢复快照。",
+  "integrations.semantics.t3code": "在 ~/.t3/userdata/settings.json 中添加 opencodex Claude 提供商实例（T3CODE_HOME 可更改位置）。路由模型会出现在 T3 Code 的模型选择器中；只有启用 Codex 集成且 T3 Code 使用相同的 CODEX_HOME 时，Codex 线程才会通过代理。需要回环访问。保留其他设置；撤销会恢复快照。",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

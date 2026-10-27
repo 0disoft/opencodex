@@ -1657,7 +1657,7 @@ export const de: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "Verwaltet OpenCodex-Anbieter und eigene Modelle in ~/.qoder/settings.json. Erfordert Loopback-Zugriff. Andere Einstellungen bleiben erhalten; Rückgängig stellt den Snapshot wieder her.",
-  "integrations.semantics.t3code": "Fügt eine opencodex-Claude-Anbieterinstanz zu ~/.t3/userdata/settings.json hinzu (T3CODE_HOME verschiebt sie). Geroutete Modelle erscheinen in der Modellauswahl von T3 Code; Codex-Threads nutzen den Proxy bereits. Erfordert Loopback-Zugriff. Andere Einstellungen bleiben erhalten; Rückgängig stellt den Snapshot wieder her.",
+  "integrations.semantics.t3code": "Fügt eine opencodex-Claude-Anbieterinstanz zu ~/.t3/userdata/settings.json hinzu (T3CODE_HOME verschiebt sie). Geroutete Modelle erscheinen in der Modellauswahl von T3 Code; Codex-Threads nutzen den Proxy nur, wenn die Codex-Integration aktiviert ist und T3 Code dasselbe CODEX_HOME verwendet. Erfordert Loopback-Zugriff. Andere Einstellungen bleiben erhalten; Rückgängig stellt den Snapshot wieder her.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

@@ -2201,7 +2201,7 @@ export const ru: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "Управляет провайдерами OpenCodex и пользовательскими моделями в ~/.qoder/settings.json. Требуется доступ через loopback. Остальные настройки сохраняются; отмена восстанавливает снимок.",
-  "integrations.semantics.t3code": "Добавляет экземпляр провайдера Claude от opencodex в ~/.t3/userdata/settings.json (T3CODE_HOME меняет расположение). Маршрутизируемые модели появляются в выборе моделей T3 Code; потоки Codex уже используют прокси. Требуется доступ через loopback. Остальные настройки сохраняются; отмена восстанавливает снимок.",
+  "integrations.semantics.t3code": "Добавляет экземпляр провайдера Claude от opencodex в ~/.t3/userdata/settings.json (T3CODE_HOME меняет расположение). Маршрутизируемые модели появляются в выборе моделей T3 Code; потоки Codex используют прокси только при включённой интеграции Codex и использовании T3 Code того же CODEX_HOME. Требуется доступ через loopback. Остальные настройки сохраняются; отмена восстанавливает снимок.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

@@ -2110,7 +2110,7 @@ export const ja: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "~/.qoder/settings.json の OpenCodex プロバイダーとカスタムモデルを管理します。ループバック接続が必要です。他の設定は保持され、元に戻すとスナップショットが復元されます。",
-  "integrations.semantics.t3code": "~/.t3/userdata/settings.json に opencodex の Claude プロバイダーインスタンスを追加します（T3CODE_HOME で移動できます）。ルーティングされたモデルが T3 Code のモデル選択に表示され、Codex スレッドはすでにプロキシを使用します。ループバック接続が必要です。他の設定は保持され、元に戻すとスナップショットが復元されます。",
+  "integrations.semantics.t3code": "~/.t3/userdata/settings.json に opencodex の Claude プロバイダーインスタンスを追加します（T3CODE_HOME で移動できます）。ルーティングされたモデルが T3 Code のモデル選択に表示されます。Codex 統合が有効で、T3 Code が同じ CODEX_HOME を使用している場合にのみ、Codex スレッドはプロキシを使用します。ループバック接続が必要です。他の設定は保持され、元に戻すとスナップショットが復元されます。",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

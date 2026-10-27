@@ -2243,7 +2243,7 @@ export const en = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "Manages OpenCodex providers and custom models in ~/.qoder/settings.json. Requires loopback access. Other settings are preserved; Undo restores the snapshot.",
-  "integrations.semantics.t3code": "Adds an opencodex Claude provider instance to ~/.t3/userdata/settings.json (T3CODE_HOME relocates it). Routed models appear in T3 Code's model picker; Codex threads already use the proxy. Requires loopback access. Other settings are preserved; Undo restores the snapshot.",
+  "integrations.semantics.t3code": "Adds an opencodex Claude provider instance to ~/.t3/userdata/settings.json (T3CODE_HOME relocates it). Routed models appear in T3 Code's model picker; Codex threads use the proxy only when the Codex integration is enabled and T3 Code shares the same CODEX_HOME. Requires loopback access. Other settings are preserved; Undo restores the snapshot.",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",

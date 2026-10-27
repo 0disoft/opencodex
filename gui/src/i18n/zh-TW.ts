@@ -3148,7 +3148,7 @@ export const zhTW: Record<TKey, string> = {
   "api.clientConfig.clientQoder": "Qoder",
   "api.clientConfig.clientT3code": "T3 Code",
   "integrations.semantics.qoder": "管理 ~/.qoder/settings.json 中的 OpenCodex 供應商和自訂模型。需要回環存取。保留其他設定；復原會還原快照。",
-  "integrations.semantics.t3code": "在 ~/.t3/userdata/settings.json 中新增 opencodex Claude 供應商實例（T3CODE_HOME 可變更位置）。路由模型會出現在 T3 Code 的模型選擇器中；Codex 對話已經透過代理。需要回環存取。保留其他設定；復原會還原快照。",
+  "integrations.semantics.t3code": "在 ~/.t3/userdata/settings.json 中新增 opencodex Claude 供應商實例（T3CODE_HOME 可變更位置）。路由模型會出現在 T3 Code 的模型選擇器中；只有啟用 Codex 整合且 T3 Code 使用相同的 CODEX_HOME 時，Codex 對話才會透過代理。需要回環存取。保留其他設定；復原會還原快照。",
   "integrations.tab.cline": "Cline CLI",
   "integrations.tab.kilo": "Kilo",
   "integrations.tab.droid": "Factory Droid",
