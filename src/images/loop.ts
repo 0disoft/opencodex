@@ -312,6 +312,8 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
 export interface ImageBridgeDeps {
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
   parsed: OcxParsedRequest;
+  /** Chat delivery only; never copied into parsed generation options. */
+  chatRawReasoningVisible?: boolean;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
@@ -1219,6 +1221,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
+      chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),

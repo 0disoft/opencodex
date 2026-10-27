@@ -270,6 +270,8 @@ export interface HandleResponsesOptions {
    * returning a Responses body, which the ingress converts as before.
    */
   clientEncoder?: ClientEncoderOption;
+  /** Chat ingress raw-channel delivery preference; never an upstream generation option. */
+  chatRawReasoningVisible?: boolean;
   /** Set only by the Chat or Messages ingress on an eligible Antigravity route; see {@link DirectRequestOption}. */
   directRequest?: DirectRequestOption;
 }

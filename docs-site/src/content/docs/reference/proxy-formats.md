@@ -577,6 +577,13 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+Without reasoning options, raw reasoning already returned by the upstream is delivered as
+`delta.reasoning_content` (streaming) or `message.reasoning_content` (buffered), without adding
+reasoning options to the upstream request. Explicit thinking disable (`thinking.type: "disabled"`
+or `reasoning.enabled: false`) and effort `none` also hide this raw text; an explicit enabled
+boolean takes precedence over effort. Provider `hideRawReasoning` still applies. Provider-authored
+summary visibility keeps its existing defaults; Responses and Anthropic Messages clients are unchanged.
+
 When the model is Claude, the response also carries `reasoning_details` in the same shape
 OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
 for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted

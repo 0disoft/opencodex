@@ -86,6 +86,8 @@ export function bridgeToResponsesSSE(
      */
     localUpstream?: boolean;
     hideThinkingSummary?: boolean;
+    /** Internal Chat delivery override for raw reasoning only; summaries keep their policy. */
+    chatRawReasoningVisible?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
     /**
@@ -1036,7 +1038,7 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "reasoning_raw_delta": {
-              if (options?.hideThinkingSummary || options?.hideRawReasoning) {
+              if (!(options?.chatRawReasoningVisible ?? !options?.hideThinkingSummary) || options?.hideRawReasoning) {
                 hiddenRawReasoning = appendString(
                   hiddenRawReasoning,
                   event.text,
