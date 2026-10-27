@@ -140,9 +140,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 単語一つのプロンプトの前に `--` を置き、未知の Codex サブコマンド選択を防いでください。
 
-設定ファイルがなくても、machine 設定パスに他の利用者が作成できない必要があります。Windows ProgramData/OpenAI/Codex の保護を確認できなければ注入を保留し、ディレクトリを作成しません。macOS は mode が安全でも拡張 ACL があれば拒否します。
+設定ファイルがなくても、machine 設定パスに他の利用者が作成できない必要があります。Windows ProgramData/OpenAI/Codex の保護を確認できなければ注入を保留し、ディレクトリを作成しません。macOS は拒否のみの ACL と読み取り専用の許可を受け入れます。書き込み・追記・削除・属性・セキュリティ・所有者の変更を許可するエントリは、先行する拒否があっても拒否します。不明なタグや検査エラーも拒否します。
 
-新しいサービストークンは既定で注入しません。検証済みの管理 loopback provider、監査済みキーのみの設定、対話実行または `exec` が必要です。未知のフラグ・設定キー、`--oss`、`--local-provider`、すべての `-c`/`--config` と profile 上書き、復元セッション（`resume`/`fork`）、追加 provider、MCP サーバー、hook、通知コマンド、プロジェクト設定、追加の system/managed/requirements/認証設定層があると注入を保留します。空でない `CODEX_*`（正規の `CODEX_HOME` を除く）、`OPENAI_*`、`AZURE_OPENAI_*` も同様です。元の引数と利用者が明示した資格情報は維持し、stderr で通知します。
+新しいサービストークンを読み込むのは、argv が下記の許可リスト内で、空でない HTTP(S)/ALL proxy や `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` 環境変数の上書きがなく（正規の `CODEX_HOME` は許可）、ホーム・設定・システムの名前空間が所有権検査を通過した場合だけです。設定は監査済みキーと正確な管理 loopback provider のみで、追加の資格情報利用先や設定層がない必要があります。`-c`/`--config`、`-p`/`--profile`、未知のフラグ、`resume`/`fork` など許可外の引数ではトークンを保留し、値を含まない診断を出します。明示した資格情報と元の引数は維持します。
 
 正規ホームと `config.toml` は現在の利用者所有である必要があります。POSIX は group/other の書き込みを、Windows は現在の利用者・SYSTEM・Administrators 以外への DACL 書き込み許可を拒否し、所有者 SID を確認します。祖先パスの置換権限も確認し、macOS は強制 Codex 設定 preference がないことも要求します。同じ利用者や管理者の悪意あるプロセスを隔離するものではありません。
 
@@ -159,7 +159,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 選択した provider の全転送設定が、このインストールのループバックリスナーまたは保存されたローカルクライアント接続向けの管理ブロックと一致する場合だけ、不足する `OPENCODEX_API_AUTH_TOKEN` をこのインストールの `service-api-token` から読みます。名前や注入コメントだけでは許可しません。不明・リモートの接続先、既定 profile、プロジェクト設定、`OPENAI_BASE_URL`、転送した `-c`/`--config`、`-p`/`--profile`、`-C`/`--cd`、`--remote` は自動読み込みを省略します。ユーザーがエクスポートした認証情報と引数を保持し、トークンファイルの上書きと管理トークンの衝突を拒否します。
 
-出所を検証した shim は背後の Codex を直接実行します。それ以外の Windows CMD wrapper は現在の生成テンプレート全体との一致が必要で、選択した絶対パスを `OCX_SHIM_BYPASS=1` で実行します。通常の npm ランチャーも使えます。古い、読めない、曖昧な管理 wrapper は診断を出して拒否します。`ocx codex-shim install` で更新するかネイティブ実行ファイルを選んでください。この起動で shim は修復しません。内容検査は Windows backing ファイルの出所や同時のパス置換を保証しません。
+一致を確認した（`matched`）autostart wrapper だけが背後の Codex を直接実行します。検査例外を含む不明な状態では検証済みのバイパスが必要で、管理対象の Windows CMD wrapper は生成テンプレート全体と一致した場合だけ `OCX_SHIM_BYPASS=1` で実行します。通常の npm ランチャーは利用できます。検証不能または古い wrapper は終了コード 1 で拒否し、Codex は開始しません。`ocx codex-shim install` で更新してください。この起動は shim を修復せず、内容検査は Windows backing ファイルの出所や並行したパス置換を保証しません。
 
 ランチャーのヘルプは `ocx help codex`、Codex のヘルプは `ocx codex --help` です。後で通常の `codex` を起動する動作は変わりません。
 

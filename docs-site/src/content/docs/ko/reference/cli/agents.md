@@ -172,9 +172,9 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 한 단어 프롬프트 앞에는 `--`를 넣어 알 수 없는 Codex 하위 명령 선택을 막으세요.
 
-설정 파일이 없어도 machine 설정 경로에 다른 사용자가 파일을 만들 수 없어야 합니다. Windows ProgramData/OpenAI/Codex 경로의 보호를 증명할 수 없으면 자동 토큰을 보류하며 디렉터리를 만들지 않습니다. macOS에서는 mode 비트가 안전해도 확장 ACL이 있으면 거부합니다.
+설정 파일이 없어도 machine 설정 경로에 다른 사용자가 파일을 만들 수 없어야 합니다. Windows ProgramData/OpenAI/Codex 경로의 보호를 증명할 수 없으면 자동 토큰을 보류하며 디렉터리를 만들지 않습니다. macOS는 거부 전용 ACL과 읽기 전용 허용 항목을 수락합니다. 쓰기·추가·삭제·속성·보안·소유자 변경을 허용하는 항목은 앞에 거부 항목이 있어도 거부합니다. 알 수 없는 태그나 검사 오류도 거부합니다.
 
-새 서비스 토큰은 기본적으로 주입하지 않습니다. 정확한 관리 loopback provider, 검증된 키만 포함하는 설정, 대화형 실행 또는 `exec`가 모두 확인되어야 합니다. 알 수 없는 플래그·설정 키, `--oss`, `--local-provider`, 모든 `-c`/`--config` 및 profile 재정의, 세션 복원(`resume`/`fork`), 추가 provider, MCP 서버, hook, 알림 명령, 프로젝트 설정, 추가 system/managed/requirements/인증 설정층이 있으면 토큰을 보류합니다. 비어 있지 않은 `CODEX_*`(정규 `CODEX_HOME` 제외), `OPENAI_*`, `AZURE_OPENAI_*` 환경 변수도 주입을 막습니다. 원래 인자와 명시적으로 내보낸 사용자 토큰은 유지하며 stderr에 이유를 안내합니다.
+새 서비스 토큰은 argv가 아래 허용 목록 안에 있고, 비어 있지 않은 HTTP(S)/ALL proxy 및 `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` 환경 재정의가 없으며(정규 `CODEX_HOME`은 허용), 홈·설정·시스템 경로가 소유권 검사를 통과할 때만 읽습니다. 설정에는 검증된 키와 정확한 관리 loopback provider만 있어야 하며 추가 자격 증명 소비자나 설정층이 없어야 합니다. `-c`/`--config`, `-p`/`--profile`, 알 수 없는 플래그, `resume`/`fork` 등 허용 목록 밖의 인자는 토큰을 보류하고 값 없는 진단을 출력합니다. 명시적인 사용자 자격 증명과 원래 인자는 유지합니다.
 
 정규 홈 디렉터리와 `config.toml`은 현재 사용자 소유여야 합니다. POSIX에서는 group/other 쓰기를, Windows에서는 현재 사용자·SYSTEM·Administrators 이외의 DACL 쓰기 권한을 거부하고 소유자 SID를 확인합니다. 상위 경로 교체 권한도 확인합니다. macOS에서는 강제 Codex 설정 preference가 없어야 합니다. 같은 사용자나 관리자의 악성 프로세스로부터 격리하는 기능은 아닙니다.
 
@@ -191,7 +191,7 @@ family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 �
 
 선택한 provider의 전체 전송 설정이 이 설치의 로컬 리스너 또는 저장된 로컬 클라이언트 연결에 대해 생성한 관리 블록과 일치할 때만, 누락된 `OPENCODEX_API_AUTH_TOKEN`을 이 설치의 `service-api-token`에서 읽습니다. 이름이나 주입 주석만으로는 허용하지 않습니다. 알 수 없거나 원격인 목적지, 기본 profile, 프로젝트 설정, `OPENAI_BASE_URL`, 전달된 `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, `--remote`는 자동 읽기를 생략합니다. 사용자가 export한 자격 증명과 인자는 보존하며, 토큰 파일 경로 재정의와 관리 토큰 충돌은 거부합니다.
 
-출처가 검증된 shim은 뒤의 Codex를 직접 실행합니다. 그 외 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 선택된 절대 경로를 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처도 지원합니다. 오래되었거나 읽을 수 없거나 모호한 관리 wrapper는 진단 후 실행을 거부합니다. `ocx codex-shim install`로 갱신하거나 네이티브 실행 파일을 선택하세요. 이 실행은 shim을 자동 복구하지 않습니다. 내용 검사는 Windows backing 파일의 출처나 동시 경로 교체를 보장하지 않습니다.
+일치가 확인된(`matched`) autostart wrapper만 backing Codex를 직접 실행합니다. 검사 예외를 포함한 알 수 없는 상태는 검증된 bypass가 필요하며, 관리되는 Windows CMD wrapper는 현재 생성 템플릿 전체와 일치해야 `OCX_SHIM_BYPASS=1`로 실행합니다. 일반 npm 런처는 지원합니다. 검증할 수 없거나 오래된 wrapper는 종료 코드 1로 거부하며 Codex를 시작하지 않습니다. `ocx codex-shim install`로 갱신하세요. 이 실행은 shim을 수리하지 않으며, 내용 검사는 Windows backing 파일 출처나 동시 경로 교체를 보장하지 않습니다.
 
 런처 도움말은 `ocx help codex`, Codex 도움말은 `ocx codex --help`입니다. 이후 plain `codex`의 동작은 기존과 같습니다.
 

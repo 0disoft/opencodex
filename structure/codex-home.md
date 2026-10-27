@@ -57,7 +57,7 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 ```
 
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
-the resolved `CODEX_HOME`.
+the resolved `CODEX_HOME`. For credential delivery, `src/cli/codex-launch-auth.ts` excludes an ancestor `.codex/config.toml` only when its realpath matches the home config, including a symlinked user `.codex`; distinct files or failed identity resolution withhold the token. Namespace ownership follows the [launcher contract](cli-management.md#head-and-help-navigation).
 
 Log Guard reclaim in `src/codex/log-guard/maintenance.ts` refuses a non-regular or redirected
 database path. It compares canonical path and full-width filesystem device and file identity

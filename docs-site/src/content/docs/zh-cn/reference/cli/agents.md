@@ -144,9 +144,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 单词提示前请加 `--`，以免选择未知的 Codex 子命令。
 
-即使系统配置文件不存在，也必须阻止其他用户创建这些文件。无法验证 Windows ProgramData/OpenAI/Codex 路径保护时不自动注入令牌，也不创建目录。macOS 即使 mode 位安全，也会拒绝扩展 ACL。
+即使系统配置文件不存在，也必须阻止其他用户创建这些文件。无法验证 Windows ProgramData/OpenAI/Codex 路径保护时不自动注入令牌，也不创建目录。macOS 接受仅拒绝的 ACL 和只读允许项。任何允许写入、追加、删除、修改属性、安全或所有者的项都会被拒绝，即使前面已有拒绝项。未知标签和检查错误也会被拒绝。
 
-新服务令牌默认不注入。必须确认使用准确的托管 loopback provider、仅含已审核键的配置，以及交互启动或 `exec`。未知标志或配置键、`--oss`、`--local-provider`、任何 `-c`/`--config` 或 profile 覆盖、恢复会话（`resume`/`fork`）、额外 provider、MCP 服务器、hook、通知命令、项目配置，以及额外 system/managed/requirements/认证配置层都会阻止注入。非空 `CODEX_*`（规范 `CODEX_HOME` 除外）、`OPENAI_*`、`AZURE_OPENAI_*` 环境变量也会阻止注入。原始参数和用户明确导出的凭据保持不变，stderr 会说明原因。
+只有 argv 位于下方允许列表内、环境中没有非空 HTTP(S)/ALL proxy 或 `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` 覆盖（允许规范的 `CODEX_HOME`），且主目录、配置和系统命名空间通过所有权检查时，才读取新服务令牌。配置必须只包含已审核键和准确的托管 loopback provider，没有额外凭据消费者或配置层。`-c`/`--config`、`-p`/`--profile`、未知标志和 `resume`/`fork` 等列表外参数都会暂缓令牌，并输出不含值的诊断；明确提供的用户凭据和原始参数保持不变。
 
 规范主目录和 `config.toml` 必须属于当前用户。POSIX 拒绝 group/other 写权限；Windows 验证所有者 SID，并拒绝当前用户、SYSTEM、Administrators 之外的 DACL 写入授权。还会检查祖先路径替换权限。macOS 还要求不存在强制 Codex 配置 preference。这些检查不能隔离同一用户或管理员运行的恶意进程。
 
@@ -163,7 +163,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 只有所选 provider 的完整传输配置与本次安装的回环监听器或已保存的本地客户端连接对应的管理块一致时，才从本次安装的 `service-api-token` 读取缺失的 `OPENCODEX_API_AUTH_TOKEN`。名称或注入注释本身不构成授权。未知或远程目标、默认 profile、项目配置、`OPENAI_BASE_URL` 以及传入的 `-c`/`--config`、`-p`/`--profile`、`-C`/`--cd`、`--remote` 都会跳过自动读取。保留用户导出的凭据和参数，拒绝令牌文件覆盖和管理令牌冲突。
 
-来源已验证的 shim 直接运行其背后的 Codex。其他 Windows CMD wrapper 必须与当前生成模板完整一致，才以 `OCX_SHIM_BYPASS=1` 执行选定的绝对路径。普通 npm 启动器仍受支持。过时、无法读取或含糊的管理 wrapper 会输出诊断并拒绝执行；请用 `ocx codex-shim install` 更新或选择原生可执行文件。本次启动不修复 shim。内容检查不保证 Windows backing 文件来源，也不防止并发路径替换。
+只有匹配成功（`matched`）的 autostart wrapper 才直接启动背后的 Codex。未知状态（包括检查异常）必须通过 bypass 验证；托管 Windows CMD wrapper 必须与当前生成模板完整一致，才以 `OCX_SHIM_BYPASS=1` 执行。普通 npm 启动器仍受支持。无法验证或过时的 wrapper 以退出码 1 拒绝，且不启动 Codex；请用 `ocx codex-shim install` 更新。本次启动不修复 shim；内容检查不证明 Windows backing 文件来源，也不防止并发路径替换。
 
 启动器帮助为 `ocx help codex`，Codex 帮助为 `ocx codex --help`。以后直接运行普通 `codex` 的行为保持不变。
 
