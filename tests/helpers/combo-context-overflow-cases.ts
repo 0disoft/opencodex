@@ -16,6 +16,9 @@ interface ComboHarness<Server> {
 
 const OVERFLOW_PROSE =
   "Please reduce the length of the messages or completion.";
+/** A Python SDK exception, serialized by a relay, around a parameter validation record. */
+const SDK_VALIDATION = `Error code: 400 - {'error': {'message': "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern.", 'type': 'invalid_request_error', 'param': 'tools[0].function.name', 'code': 'invalid_value'}}`;
+const BUDGET_OVERFLOW = "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens (8000 in the messages, 1000 in the completion). Please reduce the length of the messages or completion.";
 
 function sse(frames: Array<[string, Record<string, unknown>]>): Response {
   const body = frames
@@ -94,6 +97,10 @@ export function registerComboContextOverflowCases<Server>({
       message: "Invalid 'tools[0].function.name': 'customer's prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { param: "tools[0].function.name", message: "customer's prompt is too long" } }),
     "Invalid 'tools[0].function.name': 'customer\\'s prompt is too long'.",
+    SDK_VALIDATION,
+    JSON.stringify({ error: { type: "invalid_request_error", message: SDK_VALIDATION } }),
+    "Invalid tool name: \u2018prompt is too long\u2019.",
+    "Invalid tool name: 'prompt is too long",
   ]) {
     test(`ordinary or malformed 400 stays fatal: ${body}`, async () => {
       let backupHits = 0;
@@ -111,6 +118,23 @@ export function registerComboContextOverflowCases<Server>({
     });
   }
 
+  for (const param of ["max_tokens", "max_completion_tokens", "max_output_tokens", "input_tokens", "input_text"]) {
+    test(`context refusal naming the ${param} budget still advances`, async () => {
+      const hits: string[] = [];
+      const capped = serve(() => {
+        hits.push("a");
+        return Response.json({ error: { type: "invalid_request_error", code: "context_length_exceeded", param, message: BUDGET_OVERFLOW } }, { status: 400 });
+      });
+      const backup = serve(() => { hits.push("b"); return chatSuccess("larger window"); });
+      const response = await post(comboConfig({
+        a: provider("openai-chat", baseUrl(capped), "key-a"),
+        b: provider("openai-chat", baseUrl(backup), "key-b"),
+      }));
+      expect(response.status).toBe(200);
+      expect(hits).toEqual(["a", "b"]);
+    });
+  }
+
   test("the shared detector accepts SDK-wrapped verdicts and refuses parameter validation", () => {
     // Sidecar loops classify their own provider failures through this same detector.
     expect(isDefiniteContextOverflow(400, "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}")).toBe(true);
@@ -121,7 +145,13 @@ export function registerComboContextOverflowCases<Server>({
       JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
       "Invalid 'tools[0].function.name': 'customer's prompt is too long'.",
       'Invalid value for "user": "maximum context length" is not allowed.',
+      SDK_VALIDATION,
+      "Invalid tool name: \u2018prompt is too long\u2019.",
+      "Invalid tool name: 'prompt is too long",
     ]) expect(isDefiniteContextOverflow(400, echo)).toBe(false);
+    for (const param of ["max_tokens", "input_tokens"]) {
+      expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { code: "context_length_exceeded", param, message: BUDGET_OVERFLOW } }))).toBe(true);
+    }
   });
 
   test("context overflow advances while exhausted retryable targets return the sanitized last status", async () => {

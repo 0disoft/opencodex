@@ -730,13 +730,20 @@ const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
 
 /**
  * Parameter validation echoes the caller's own value, so its prose is not a context verdict even
- * when the value reads like one: "Invalid 'tools[0].function.name': 'prompt is too long'". The
- * prefix is recognized as syntax; quoted text elsewhere (an SDK error wrapper) stays evidence.
+ * when the value reads like one: "Invalid 'tools[0].function.name': 'prompt is too long'". These
+ * markers are read anywhere in the text, so an SDK error wrapper that serializes such a record as a
+ * Python dict is refused too, while a quoted genuine verdict in the same wrapper stays evidence.
  */
-const PARAMETER_VALIDATION_PREFIX = /^invalid\s+(?:value\s+for\s+)?['"`]/i;
+const CONTEXT_PARAM_NAMES = "messages|input|input_text|input_tokens|prompt|contents?|max_tokens|max_completion_tokens|max_output_tokens";
+/** A `param` naming the conversation or a token budget is consistent with an overflow. */
+const CONTEXT_PARAM = new RegExp(`^(?:${CONTEXT_PARAM_NAMES})(?:$|[.[])`, "i");
 const PARAMETER_VALIDATION_CODES: ReadonlySet<string> = new Set(["invalid_value", "invalid_type"]);
-/** A `param` naming the conversation is consistent with an overflow; any other names one field. */
-const CONTEXT_PARAM = /^(?:messages|input|prompt|contents?)(?:$|[.[])/i;
+const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
+  /\binvalid_(?:value|type)\b/i,
+  new RegExp(`['"]param['"]\\s*:\\s*['"](?!(?:${CONTEXT_PARAM_NAMES})(?:['".[]))`, "i"),
+  /\binvalid\s+(?:value\s+for\s+)?['"`\u2018\u201c]/i,
+  /\binvalid\s+(?:tool|function|parameter|argument|field)\b/i,
+];
 
 function isParameterValidationRecord(record: Record<string, unknown>): boolean {
   if (typeof record.code === "string" && PARAMETER_VALIDATION_CODES.has(record.code.toLowerCase())) return true;
@@ -744,7 +751,7 @@ function isParameterValidationRecord(record: Record<string, unknown>): boolean {
 }
 
 function isDefiniteContextOverflowMessage(text: string): boolean {
-  if (PARAMETER_VALIDATION_PREFIX.test(text.trim())) return false;
+  if (PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text))) return false;
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
