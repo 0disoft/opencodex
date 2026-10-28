@@ -330,9 +330,13 @@ import { runDesktopColdStart, productionDesktopColdStartDeps } from ${JSON.strin
 const evidence = await inspectDesktopRecovery(); const result = await runDesktopColdStart({ ...productionDesktopColdStartDeps(async () => ({ fixture: true })), desktopRecovery: async () => evidence, info: () => {} });
 console.log(JSON.stringify({ evidence, result }));`);
   const rustBuild = Bun.spawnSync([Bun.which("rustc")!, "--edition=2021", nativeSource, "-o", app], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect(rustBuild.exitCode).toBe(0);
+  // The compiler's own words travel with a failure: a bare "Received: 1" in 52ms left nothing to
+  // tell a compile error from a toolchain that never started.
+  expect({ exitCode: rustBuild.exitCode, stderr: rustBuild.stderr.toString().slice(-2_000) })
+    .toEqual({ exitCode: 0, stderr: expect.any(String) });
   const build = Bun.spawnSync([process.execPath, "build", "--compile", entry, "--outfile", cli], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect(build.exitCode).toBe(0);
+  expect({ exitCode: build.exitCode, stderr: build.stderr.toString().slice(-2_000) })
+    .toEqual({ exitCode: 0, stderr: expect.any(String) });
   const env = { ...process.env, XDG_CONFIG_HOME: join(root, "xdg"), OPENCODEX_HOME: config };
   let child: ReturnType<typeof Bun.spawn> | undefined;
   const foreignSockets: Socket[] = [];
