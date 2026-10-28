@@ -112,7 +112,8 @@ describe("omo Responses export: stateless reasoning/tool continuity over loopbac
     proxy = startServer(0);
     exported = (buildClientConfig("omo", {
       config, baseUrl: `${proxy.url.origin}/v1`,
-      models: [{ namespaced: "fixture/omo-fixture", provider: "fixture", id: "omo-fixture", supportsReasoning: true }],
+      // A reasoning ladder is what makes the Pi exporter mark the model as reasoning-capable.
+      models: [{ namespaced: "fixture/omo-fixture", provider: "fixture", id: "omo-fixture", reasoningEfforts: ["low", "medium", "high"] }],
     }) as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!;
   });
 
@@ -132,13 +133,18 @@ describe("omo Responses export: stateless reasoning/tool continuity over loopbac
     test(`exported placeholder admits two tool turns and preserves reasoning (${stream ? "SSE" : "JSON"})`, async () => {
       expect(exported.api).toBe("openai-responses");
       expect(exported.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
-      const model = exported.models[0]!.id;
+      const entry = exported.models[0]!;
+      const model = entry.id;
+      // pi-ai sends reasoning/include only for a reasoning model, with the effort its level map names.
+      expect(entry.reasoning).toBe(true);
+      const effort = entry.thinkingLevelMap?.medium;
+      expect(effort).toBe("medium");
       const mark = captured.length;
       const user = { role: "user", content: [{ type: "input_text", text: "Look up the fixture value." }] };
       const send = (input: Item[]) => fetch(`${exported.baseUrl}/responses`, {
         method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${exported.apiKey}` },
-        body: JSON.stringify({ model, stream, store: false, include: ["reasoning.encrypted_content"],
-          reasoning: { effort: "medium", summary: "auto" }, input,
+        body: JSON.stringify({ model, stream, store: false,
+          ...(entry.reasoning ? { include: ["reasoning.encrypted_content"], reasoning: { effort, summary: "auto" } } : {}), input,
           tools: [{ type: "function", name: "lookup", description: "Look up a fixture value", strict: null,
             parameters: { type: "object", properties: { key: { type: "string" } }, required: ["key"] } }],
         }),
