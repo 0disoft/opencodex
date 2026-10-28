@@ -82,7 +82,31 @@ export function tapAnthropicSseForLog(
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = "";
+  let frameParts: string[] = [];
+  let pendingParts: string[] = [];
+  let pendingChars = 0;
+  let heldCr = false;
+  let heldLf = false;
+  const appendPart = (part: string) => {
+    if (!part) return;
+    pendingParts.push(part);
+    pendingChars += part.length;
+    // Coalesce tiny transport fragments: a one-byte feed must not retain one array
+    // entry per byte for the entire event. Each character is joined at most twice.
+    if (pendingChars >= 4096) {
+      frameParts.push(pendingParts.join(""));
+      pendingParts = [];
+      pendingChars = 0;
+    }
+  };
+  const takeFrame = () => {
+    if (pendingParts.length) frameParts.push(pendingParts.join(""));
+    const frame = frameParts.join("");
+    frameParts = [];
+    pendingParts = [];
+    pendingChars = 0;
+    return frame;
+  };
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
@@ -106,17 +130,29 @@ export function tapAnthropicSseForLog(
     }
   };
   const inspect = (chunk: Uint8Array) => {
-    buffer += decoder.decode(chunk, { stream: true });
-    // SSE lines may end in CRLF, LF or CR. Normalize the inspection copy to LF (the forwarded
-    // bytes are untouched), holding a trailing CR until the next chunk shows whether an LF
-    // follows it, so a CRLF split across chunks stays one line ending.
-    const heldCr = buffer.endsWith("\r");
-    buffer = (heldCr ? buffer.slice(0, -1) : buffer).replace(/\r\n?/g, "\n") + (heldCr ? "\r" : "");
+    // Normalize and scan only new text. Keep an unfinished frame in fragments so a long
+    // SSE event arriving in small chunks is never flattened or rescanned on each read.
+    let text = (heldCr ? "\r" : "") + decoder.decode(chunk, { stream: true });
+    heldCr = text.endsWith("\r");
+    text = (heldCr ? text.slice(0, -1) : text).replace(/\r\n?/g, "\n");
+    let start = 0;
+    if (text && heldLf) {
+      heldLf = false;
+      if (text[0] === "\n") {
+        inspectFrame(takeFrame());
+        start = 1;
+      } else appendPart("\n");
+    }
     let sep: number;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      inspectFrame(frame);
+    while ((sep = text.indexOf("\n\n", start)) !== -1) {
+      appendPart(text.slice(start, sep));
+      inspectFrame(takeFrame());
+      start = sep + 2;
+    }
+    if (start < text.length) {
+      heldLf = text.endsWith("\n");
+      const end = text.length - (heldLf ? 1 : 0);
+      appendPart(text.slice(start, end));
     }
   };
   // The last block can sit in the buffer without its blank line: an upstream that stopped after
@@ -125,8 +161,9 @@ export function tapAnthropicSseForLog(
   // client has not seen a blank line after, so the caller restores one.
   const flushTail = (): boolean => {
     const terminalBefore = terminalSeen;
-    const tail = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
-    buffer = "";
+    const tail = (takeFrame() + (heldLf ? "\n" : "") + (heldCr ? "\r" : "") + decoder.decode()).replace(/\r\n?/g, "\n");
+    heldCr = false;
+    heldLf = false;
     if (tail) inspectFrame(tail);
     return terminalSeen && !terminalBefore && !tail.endsWith("\n\n");
   };
