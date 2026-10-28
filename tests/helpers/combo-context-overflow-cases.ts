@@ -31,6 +31,7 @@ export function registerComboContextOverflowCases<Server>({
     "Please reduce the length of the messages or completion.",
     "prompt is too long: 210000 tokens > 200000 maximum",
     "input is too long for requested model",
+    "This model's maximum context length is 8192 tokens; you're over it. Please reduce the length of the messages.",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
   ]) {
     test(`context-length 400 advances once without cooling: ${message}`, async () => {
@@ -82,6 +83,10 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { message: "Please reduce the length of the tool name" } }),
     JSON.stringify({ error: { message: "Invalid JSON", note: "Please reduce the length of the messages or completion" } }),
     '{"error":{"message":"Please reduce the length of the messages or completion"',
+    // Parameter validation that merely quotes a context phrase as the caller's own value.
+    JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
+      message: "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
+    JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
   ]) {
     test(`ordinary or malformed 400 stays fatal: ${body}`, async () => {
       let backupHits = 0;
@@ -92,7 +97,9 @@ export function registerComboContextOverflowCases<Server>({
         b: provider("openai-chat", baseUrl(backup), "key-b"),
       }));
       expect(response.status).toBe(400);
-      await response.text();
+      const text = await response.text();
+      // The retained combo context refusal must never relabel a parameter validation failure.
+      if (body.includes("invalid_value")) expect(text).not.toContain("context_length_exceeded");
       expect(backupHits).toBe(0);
     });
   }

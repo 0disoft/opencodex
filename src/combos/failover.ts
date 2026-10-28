@@ -728,8 +728,15 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 /** Wrapper envelopes unwrapped before the leaf message is read. */
 const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
 
+/**
+ * Quoted spans echo caller input (a tool name, a parameter value), never the provider's verdict:
+ * "Invalid 'tools[0].function.name': 'prompt is too long'" is a validation error. A quote opens
+ * only after a boundary, so the apostrophe in "model's maximum context length" is kept.
+ */
+const QUOTED_CALLER_SPAN = /(^|[\s([{:=,])(?:'[^'\n]*'|"[^"\n]*"|`[^`\n]*`)(?=$|[\s)\]}.,:;!?])/g;
+
 function isDefiniteContextOverflowMessage(text: string): boolean {
-  const normalized = text.toLowerCase();
+  const normalized = text.toLowerCase().replace(QUOTED_CALLER_SPAN, "$1 ");
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
 }
