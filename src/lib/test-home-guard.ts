@@ -342,6 +342,20 @@ function isInside(parent: string, child: string): boolean {
   return !samePathIgnoringPlatformCase(parent, child) && isSameOrInsideIgnoringPlatformCase(parent, child);
 }
 
+/**
+ * Whether `child` sits strictly below `parent` with case PRESERVED, deciding per path component.
+ *
+ * Only for the checkout exemption below, which LIFTS a refusal. Folding case there would let a
+ * running checkout at `~/.codex/worktrees/repo` exempt a distinct `~/.codex/worktrees/REPO` on a
+ * case-sensitive macOS volume. Protection decisions fold, because comparing too broadly only refuses
+ * more; an exemption must not, because the same breadth removes more.
+ */
+function isInsidePreservingCase(parent: string, child: string): boolean {
+  if (parent === child) return false;
+  const rel = relative(parent, child);
+  return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
 let checkoutRootSpellings: readonly string[] | undefined;
 
 /**
@@ -376,7 +390,7 @@ function checkoutRoots(): readonly string[] {
  * tree (one at `$HOME`, or the virtual root of a compiled build) never qualifies.
  */
 function isOwnCheckoutContent(protectedPath: string, candidate: string): boolean {
-  return checkoutRoots().some(root => isInside(protectedPath, root) && isInside(root, candidate));
+  return checkoutRoots().some(root => isInsidePreservingCase(protectedPath, root) && isInsidePreservingCase(root, candidate));
 }
 
 /**
