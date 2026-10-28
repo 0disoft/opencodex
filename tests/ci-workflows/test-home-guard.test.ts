@@ -824,7 +824,13 @@ const canSymlink = (() => {
   });
 
   // Windows' path.relative ignores case whatever the guard decides, so this case cannot arise there.
-  test.skipIf(!canSymlink || process.platform === "win32")("on a case-folding platform the checkout exemption still compares case exactly", async () => {
+  // Every letter of the checkout name is flipped, so the sibling differs whichever case the name
+  // uses; a name with no cased letter has no case-colliding sibling at all.
+  const checkoutName = basename(REPO_ROOT);
+  const caseFlippedName = [...checkoutName]
+    .map(ch => (ch === ch.toUpperCase() ? ch.toLowerCase() : ch.toUpperCase()))
+    .join("");
+  test.skipIf(!canSymlink || process.platform === "win32" || caseFlippedName === checkoutName)("on a case-folding platform the checkout exemption still compares case exactly", async () => {
     // The guard folds case on macOS so protection refuses broadly, but a case-sensitive APFS volume
     // can hold ~/.codex/worktrees/repo and a distinct ~/.codex/worktrees/REPO side by side. The
     // child reports darwin before loading the guard, so the guard folds while path comparison stays
@@ -834,7 +840,7 @@ const canSymlink = (() => {
     const codexLink = join(realHome, ".codex");
     symlinkSync(dirname(REPO_ROOT), codexLink);
     mkdirSync(join(realHome, ".opencodex"), { recursive: true });
-    const caseSibling = join(dirname(REPO_ROOT), basename(REPO_ROOT).toUpperCase());
+    const caseSibling = join(dirname(REPO_ROOT), caseFlippedName);
     try {
       const probe = await runProbe(probeId, `
         Object.defineProperty(process, "platform", { value: "darwin" });
