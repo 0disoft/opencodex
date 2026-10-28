@@ -19,7 +19,7 @@
 // Everything else in the row is left alone.
 
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
-import { MINIMAX_M31_FLASH, MINIMAX_M31_FLASH_PREVIEW_RETIRED } from "./registry/model-seeds";
+import { KIMI_API_K31_REASONING_EFFORT_MAP, MINIMAX_M31_FLASH, MINIMAX_M31_FLASH_PREVIEW_RETIRED } from "./registry/model-seeds";
 import { MODEL_KEYED_RECORDS, MODEL_ID_LISTS, MODEL_ID_SCALARS, MODEL_NESTED_RECORDS } from "./model-rename-fields";
 import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -121,6 +121,23 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
   // rather than a merely outdated one.
   ...kimiCodingRenames("kimi", "subscription endpoint after K2.8 Preview shipped"),
   ...kimiCodingRenames("kimi-code", "coding endpoint after K2.8 Preview shipped"),
+  {
+    provider: "moonshot",
+    from: "kimi-k2.5",
+    to: "kimi-k3.1-pro",
+    // Verified 2026-10-28: https://platform.kimi.ai/docs/models.md
+    reason: "Moonshot discontinued K2.5 on 2026-08-31 and recommends K3.1 Pro for API users",
+    dropNoReasoningModels: true,
+    targetSeedRefresh: {
+      contextWindow: { from: 262_144, to: 1_048_576 },
+      reasoning: {
+        fromEfforts: [],
+        toEfforts: ["low", "high", "max"],
+        defaultEffort: "max",
+        effortMap: KIMI_API_K31_REASONING_EFFORT_MAP,
+      },
+    },
+  },
   // Antigravity Flash generations. Google takes the previous Flash model off Cloud Code
   // Assist almost immediately when the next ships, so a saved 3.6 (or older 3.5) id is a
   // dead selection rather than a merely outdated one. Routing already redirects these ids
