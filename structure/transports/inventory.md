@@ -1,5 +1,9 @@
 # Transport Inventory
 
+Shared header helpers and bounded local JSON reads follow the
+[local timeout contract](timeouts.md). Disabling
+their clocks retains byte caps, cancellation, manual redirects and transport credential fences.
+
 WorkBuddy AI uses bounded fixed-origin login requests and shared Chat inference transport; see the [WorkBuddy contract](../providers/workbuddy.md).
 OpenCode Go's Gemini model uses the [Go Gemini transport contract](../providers/google.md#opencode-go-gemini-transport)
 through the Google adapter and the default server fetch path.

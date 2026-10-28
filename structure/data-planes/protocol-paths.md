@@ -220,7 +220,7 @@ Messages wires without the internal Responses SSE. It is server side and not a l
 `adapter-events.ts` is the driver: it ports the item state machine of `bridgeToResponsesSSE`, including `tool_call_end.incomplete`, which closes an unfinished item without claiming argument completion
 (item boundaries, signature grouping, hidden and redacted reasoning envelopes, tool naming and
 argument gating, the integral-float repair, every terminal with its usage and durability rule,
-the wire-silence heartbeat and stall watchdog, pull-based stepping, cancellation) and calls one
+the wire-silence heartbeat and live-destination stall watchdog ([timeout policy](../transports/timeouts.md)), pull-based stepping, cancellation) and calls one
 `ClientWireWriter` method wherever the bridge would emit a frame a client converter reads.
 `chat.ts` (`encodeChatCompletionSse`, `foldChatCompletion`) and `messages.ts`
 (`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers; the Chat one also emits `reasoning_details` ([#7429](chat-reasoning-details.md)). They reuse the

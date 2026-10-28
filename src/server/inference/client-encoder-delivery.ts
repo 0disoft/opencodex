@@ -220,13 +220,14 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
     translatorBudget,
     ...input.fold,
     ...(input.stallTimeoutSec !== undefined ? { stallTimeoutSec: input.stallTimeoutSec } : {}),
-    ...(input.localUpstream !== undefined ? { localUpstream: input.localUpstream } : {}),
+    get localUpstream() { return input.localUpstream; },
     hooks,
   };
   const encoded = encoder.protocol === "chat"
     ? encodeChatCompletionSse(events, encodeOptions)
     : encodeAnthropicMessageSse(events, {
       ...encodeOptions,
+      get localUpstream() { return input.localUpstream; },
       ...(encoder.inputTokenFloor !== undefined ? { inputTokenFloor: encoder.inputTokenFloor } : {}),
     });
   const tracked = trackStreamLifetime(encoded, new AbortController(), input.onStreamDone, input.turnAdmissionLease);

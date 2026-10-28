@@ -369,10 +369,7 @@ export function bridgeToResponsesSSE(
         ? encoder.encode(': opencodex heartbeat\n\n')
         : encoder.encode('event: response.heartbeat\ndata: {"type":"response.heartbeat"}\n\n');
       let stallTicks = 0;
-      const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, {
-        localUpstream: options?.localUpstream,
-      });
-      const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
+      let localUpstream = options?.localUpstream;
 
       let currentMsg: {
         itemId: string;
@@ -1494,6 +1491,9 @@ export function bridgeToResponsesSSE(
         gated = true;
         beat = setBeatInterval(() => {
           if (closed || gated) return;
+          if (localUpstream !== options?.localUpstream) { localUpstream = options?.localUpstream; stallTicks = 0; }
+          const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec, { localUpstream });
+          const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
           if (upstreamActivity) {
             upstreamActivity = false;
             stallTicks = 0;

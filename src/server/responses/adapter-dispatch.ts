@@ -12,6 +12,7 @@ import { transientSendCapFor } from "./request-send-budget";
 import { isNonReplayableResponse, isSameTargetRetryHold } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -258,16 +259,12 @@ export async function prepareAdapterExchange(
         ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
     }
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
-  // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
-  // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
-  const stallTimeoutMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec) && config.stallTimeoutSec > 0
-    ? Math.floor(config.stallTimeoutSec * 1000)
-    : 300_000;
   // Where this exchange dials. Local upstreams (loopback / private / `.local` / `.lan`) are
   // operator-trusted and often CPU-bound, so an unset stall budget resolves to disabled for them.
-  // Key/OAuth rotation re-resolves credentials, never the origin, so the routed baseUrl is stable.
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
+  // Header arrival and body silence are separate clocks (structure/transports/timeouts.md).
+  const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
+  const sendConnectMs = () => route.provider.authMode === "forward" ? resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) }) : 0;
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);
@@ -416,7 +413,7 @@ export async function prepareAdapterExchange(
         transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
           kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
           abortSignal: upstream.signal,
-          timeoutMs: connectMs,
+          timeoutMs: sendConnectMs(),
           sendBudget: adapterDispatchBudget,
           onPhysicalSend: send => { antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send); },
           onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -498,7 +495,7 @@ export async function prepareAdapterExchange(
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
             body: builtInitialRequest.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream,
+          }, recovery), upstream.signal, sendConnectMs(), parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
@@ -715,7 +712,7 @@ export async function prepareAdapterExchange(
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
-                timeoutMs: connectMs,
+                timeoutMs: sendConnectMs(),
                 sendBudget: adapterDispatchBudget,
                 onPhysicalSend: send => {
                   if (preserveFailureResponse) replacementAdmitted = true;
@@ -793,7 +790,7 @@ export async function prepareAdapterExchange(
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-                  }, recoveryKind), upstream.signal, connectMs, parsed.stream,
+                  }, recoveryKind), upstream.signal, sendConnectMs(), parsed.stream,
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                     dispatchOverride: oauthDispatch(retryRequest),
                     onPhysicalDispatch: deferredRefetch ? () => {
@@ -1977,9 +1974,9 @@ export async function prepareAdapterExchange(
   return {
     upstream,
     cleanupUpstreamAbort,
-    connectMs,
-    stallTimeoutMs,
-    localUpstream,
+    get connectMs() { return resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: this.localUpstream }); },
+    get stallTimeoutMs() { return resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: this.localUpstream }); },
+    get localUpstream() { return isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl); },
     upstreamResponse,
     thinkingSignatureRecovery,
     refetchThinkingSignature,

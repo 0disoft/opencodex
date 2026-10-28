@@ -102,6 +102,7 @@ export async function deliverAdapterResponse(
         return;
       }
       try {
+        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: adapterExchange.localUpstream });
         const retryEvents = upstreamRequestsStream
           ? readResponseStreamWithInactivity(response, upstream.signal, bodyInactivityMs,
             guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata))
@@ -239,7 +240,7 @@ export async function deliverAdapterResponse(
           toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames,
         },
         stallTimeoutSec: config.stallTimeoutSec,
-        localUpstream,
+        get localUpstream() { return adapterExchange.localUpstream; },
         turnAdmissionLease: options.turnAdmissionLease,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         stopUpstream: () => { cancelResponseCompletion(); upstream.abort(); },
@@ -257,7 +258,7 @@ export async function deliverAdapterResponse(
         ...(outputItemIds ? { outputItemIds } : {}),
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
-        localUpstream,
+        get localUpstream() { return adapterExchange.localUpstream; },
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         chatRawReasoningVisible: options.chatRawReasoningVisible,
         hideRawReasoning: parsed.options.hideRawReasoning,

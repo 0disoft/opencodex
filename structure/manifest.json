@@ -48,6 +48,23 @@
   ],
   "docs": [
     {
+      "path": "transports/timeouts.md",
+      "tier": 3,
+      "title": "Upstream Timeouts",
+      "scope": "Local header and JSON body deadlines, cancellation and optional OpenCode timeout export.",
+      "documents": [
+        "src/stall-timeout.ts",
+        "src/lib/abort.ts",
+        "src/lib/local-upstream.ts",
+        "src/lib/bounded-body.ts",
+        "src/server/",
+        "src/web-search/header-deadline.ts",
+        "src/clients/config-export.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/types/config.ts"
+      ]
+    },
+    {
       "path": "quota-snapshots.md",
       "tier": 4,
       "title": "Account Quota Snapshots",

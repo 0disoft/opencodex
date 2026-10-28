@@ -181,9 +181,7 @@ export function encodeAdapterEventStream(
   const heartbeatMs = options.heartbeatMs ?? 2_000;
   const setTimer = options.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearTimer = options.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
-  const maxStallTicks = Math.ceil(
-    (resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream: options.localUpstream }) * 1000) / heartbeatMs,
-  );
+  let localUpstream = options.localUpstream;
   const textEncoder = new TextEncoder();
 
   let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -870,6 +868,8 @@ export function encodeAdapterEventStream(
       gated = true;
       beat = setTimer(() => {
         if (closed || gated) return;
+        if (localUpstream !== options.localUpstream) { localUpstream = options.localUpstream; stallTicks = 0; }
+        const maxStallTicks = Math.ceil((resolveStallTimeoutSec(options.stallTimeoutSec, { localUpstream }) * 1000) / heartbeatMs);
         if (upstreamActivity) {
           upstreamActivity = false;
           stallTicks = 0;
