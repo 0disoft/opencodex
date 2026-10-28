@@ -720,9 +720,17 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "maximum context length",
   "maximum context window",
   "too many tokens",
-  "prompt is too long",
-  "input is too long for requested model",
-  "reduce the length of the messages or completion",
+];
+
+/**
+ * Short provider verdicts that a validation error could otherwise echo as the caller's own value
+ * (#7443). Each is accepted only where the provider puts it: at the start of the leaf message, or
+ * right after the `message` key of an SDK error wrapper, and Anthropic's only with its token counts.
+ */
+const ANCHORED_CONTEXT_OVERFLOW_VERDICTS: readonly RegExp[] = [
+  /(?:^|['"]message['"]\s*:\s*['"])prompt is too long: \d+ tokens > \d+ maximum/i,
+  /(?:^|['"]message['"]\s*:\s*['"])input is too long for requested model\b/i,
+  /(?:^|['"]message['"]\s*:\s*['"])please reduce the length of the messages or completion\b/i,
 ];
 
 /** Wrapper envelopes unwrapped before the leaf message is read. */
@@ -742,7 +750,9 @@ const PARAMETER_VALIDATION_MARKERS: readonly RegExp[] = [
   /\binvalid_(?:value|type)\b/i,
   new RegExp(`['"]param['"]\\s*:\\s*['"](?!(?:${CONTEXT_PARAM_NAMES})(?:['".[]))`, "i"),
   /\binvalid\s+(?:value\s+for\s+)?['"`\u2018\u201c]/i,
-  /\binvalid\s+(?:tool|function|parameter|argument|field)\b/i,
+  /\binvalid\s+(?:tool|function|parameter|argument|field|value)\b/i,
+  /\binput_value\s*=/i,
+  /\bvalidation errors? for\b/i,
 ];
 
 function isParameterValidationRecord(record: Record<string, unknown>): boolean {
@@ -754,7 +764,8 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
   if (PARAMETER_VALIDATION_MARKERS.some(marker => marker.test(text))) return false;
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
-    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
+    || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
+    || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
 }
 
 /**

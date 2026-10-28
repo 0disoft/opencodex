@@ -101,6 +101,9 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { type: "invalid_request_error", message: SDK_VALIDATION } }),
     "Invalid tool name: \u2018prompt is too long\u2019.",
     "Invalid tool name: 'prompt is too long",
+    "Invalid value: 'prompt is too long'. Supported values are: 'none', 'auto', and 'required'.",
+    "Invalid value at 'tool_config.function_calling_config.mode' (type.googleapis.com/google.ai.generativelanguage.v1beta.FunctionCallingConfig.Mode), \"prompt is too long\"",
+    "1 validation error for ToolChoice\\nname\\n  String should match pattern '^[a-zA-Z0-9_-]+$' [type=string_pattern_mismatch, input_value='prompt is too long', input_type=str]",
   ]) {
     test(`ordinary or malformed 400 stays fatal: ${body}`, async () => {
       let backupHits = 0;
@@ -148,6 +151,9 @@ export function registerComboContextOverflowCases<Server>({
       SDK_VALIDATION,
       "Invalid tool name: \u2018prompt is too long\u2019.",
       "Invalid tool name: 'prompt is too long",
+      "Invalid value: 'prompt is too long'. Supported values are: 'none', 'auto', and 'required'.",
+      "Invalid value at 'tool_config.function_calling_config.mode' (type.googleapis.com/google.ai.generativelanguage.v1beta.FunctionCallingConfig.Mode), \"prompt is too long\"",
+      "1 validation error for ToolChoice\\nname\\n  String should match pattern '^[a-zA-Z0-9_-]+$' [type=string_pattern_mismatch, input_value='prompt is too long', input_type=str]",
     ]) expect(isDefiniteContextOverflow(400, echo)).toBe(false);
     for (const param of ["max_tokens", "input_tokens"]) {
       expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { code: "context_length_exceeded", param, message: BUDGET_OVERFLOW } }))).toBe(true);
