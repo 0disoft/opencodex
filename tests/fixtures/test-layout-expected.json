@@ -1475,4 +1475,5 @@
   "link-apply-restart.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server",
   "hermes-profiles.test.ts": "clients", "hermes-profile-routes.test.ts": "clients"
   ,"cli-sync-expect-link.test.ts": "cli"
+  ,"local-credentials.test.ts": "cli", "local-credential-generation.test.ts": "config", "link-connection-generation.test.ts": "clients"
 }

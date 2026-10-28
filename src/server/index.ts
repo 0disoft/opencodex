@@ -203,11 +203,12 @@ import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/option
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
+import { withLocalCredentialObservation } from "../local-credentials/runtime-observation";
 export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const spendLedgerLifecycle = acquireSpendLedgerServerLifecycle(getConfigDir());
-  try { return startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle); }
+  try { return withLocalCredentialObservation(() => startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle)); }
   catch (error) { recordFailedStartRollback(error, spendLedgerLifecycle.releaseAfterFailedStart()); throw error; }
 }
 

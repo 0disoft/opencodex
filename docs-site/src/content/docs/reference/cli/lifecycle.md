@@ -1230,6 +1230,20 @@ starts and then once a minute; the Home keeps reports in memory only, so after a
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
 
+## Remote Link Child attestations
+
+A peer that sends work through a Remote Link Child can check two more facts in the Child's
+`ocx status --json`. Both fields are omitted, never `null`, when they cannot be proven.
+
+| Field | Meaning |
+| --- | --- |
+| `localCredentials` | `{count, generation}`. `count` is the number of provider credentials this installation stores on this machine: OAuth accounts, provider API-key slots (including disabled entries and keychain or environment references), Codex account-pool records, the native Codex `auth.json` and inactive native Codex profiles. Link keys, management tokens and incoming API keys do not count, and neither do the accounts a Home serves. `generation` is opaque and changes whenever a stored credential is added, replaced or removed, even when the count ends where it started. Reported only while an OpenCodex runtime on this machine is running and every store reads completely. A native Codex configuration whose `cli_auth_credentials_store` is not `file` omits it. |
+| `link.connectionGeneration` | On a Child: opaque, and changes whenever the tunnel to its Home connects (including a reconnect that keeps the same link) and whenever either runtime restarts. Reported only while the Child's runtime is ready. For a link started from Home, the Child learns it from the Home's signed answer, so a Home on an older release leaves it out. |
+
+A Child that reports `localCredentials.count` 0, with `localCredentials.generation` and
+`link.connectionGeneration` unchanged across a request, had no local provider credential during it
+and observed no tunnel reconnect.
+
 For a link the Home added, each row also carries `tunnel`: `attempt` (ssh attempts since the link
 was last connected), `nextRetryAt` (ISO time of the next scheduled retry, `null` while one runs or
 none is due), `lastTransition` (`{from, to, at, cause}`) and `lastFailure` (`{cause, at}`). A cause
