@@ -544,7 +544,14 @@ describe("DSH rc.6 serializer", () => {
     expect(models.find(model => model.id === "a/context")?.contextWindow).toBe(128_000);
     expect(models.find(model => model.id === "a/fraction")).not.toHaveProperty("contextWindow");
     expect(models.find(model => model.id === "a/zero")).not.toHaveProperty("contextWindow");
+    // DSH reads maxTokens as the real output ceiling and falls back to 32768 without it,
+    // so a known limit must ride along with the context window (see #5828 for the same
+    // failure in the other exporters). No context window means no limit claim either.
     for (const model of models) expect(model).not.toHaveProperty("maxTokens");
+    const withLimit = dshConfig(ctx({
+      models: [{ namespaced: "a/limit", provider: "a", id: "limit", contextWindow: 200_000, maxTokens: 128_000 }],
+    }))["llm-pi-ai"].providers.opencodex!.models;
+    expect(withLimit[0]!.maxTokens).toBe(128_000);
   });
 
   test("maps only authoritative effort levels to DSH level-to-wire entries", () => {
