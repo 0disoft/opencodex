@@ -195,11 +195,12 @@ function dropRenamedIdsFromList(
   from: string,
   to: string,
   dropStaleTarget: boolean,
+  keepTarget = false,
 ): string[] | null {
   if (!Array.isArray(value)) return null;
   const hasRetired = value.includes(from);
-  if (!hasRetired && !(dropStaleTarget && value.includes(to))) return null;
-  return value.filter(entry => typeof entry === "string" && entry !== from && entry !== to);
+  if (!hasRetired && !(dropStaleTarget && !keepTarget && value.includes(to))) return null;
+  return value.filter(entry => typeof entry === "string" && entry !== from && (keepTarget || entry !== to));
 }
 
 function renameInRecord(value: unknown, from: string, to: string): Record<string, unknown> | null {
@@ -400,6 +401,8 @@ export function projectModelRenames(
           rename.from,
           rename.to,
           targetReasoningMatchesStaleSeed(row, rename),
+          // A successor classification saved before the migration is the user's, not registry residue.
+          rename.targetSeedRefresh?.onlyTransferred === true,
         )
         : renameInList(row[field], rename.from, rename.to);
       if (!next) continue;

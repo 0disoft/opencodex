@@ -223,6 +223,13 @@ describe("registry model rename migration (#1610)", () => {
     const kept = projectModelRenames(seedEqual).config.providers.moonshot!;
     expect(kept.modelContextWindows).toEqual({ "kimi-k3.1-pro": 262_144 });
     expect(kept.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": [] });
+    // Explicit successor no-reasoning stays, with or without K2.5 still present.
+    const coexist = structuredClone(seedEqual);
+    coexist.providers.moonshot!.noReasoningModels = ["kimi-k2.5", "kimi-k3.1-pro"];
+    expect(projectModelRenames(coexist).config.providers.moonshot!.noReasoningModels).toEqual(["kimi-k3.1-pro"]);
+    const successorOnly = { providers: { moonshot: { adapter: "openai-chat", baseUrl: "https://api.moonshot.ai/v1",
+      models: ["kimi-k3.1-pro"], noReasoningModels: ["kimi-k3.1-pro"], modelReasoningEfforts: { "kimi-k3.1-pro": [] } } } } as unknown as OcxConfig;
+    expect(projectModelRenames(structuredClone(successorOnly)).changed).toBe(false);
   });
 
   test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
