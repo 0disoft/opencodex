@@ -58,6 +58,8 @@ Antigravity failed-login text includes a content-free discovery summary from
 `src/oauth/antigravity-discovery-diagnostics.ts`: stage, HTTP status, root category, done/error
 presence and types of only the three known project fields at the root and fixed `response` container.
 Only the last response per stage is retained; values and arbitrary keys never enter the summary.
+`AntigravityProjectDiscoveryError` constructs this public text only from sanitizer outputs;
+the public OAuth mapper preserves it for CLI reporting and background login/status settlement.
 Project-required admission, import codes, polling and request budgets remain unchanged.
 
 ## Discovery credential ownership

@@ -7,9 +7,9 @@ import { getCredential, saveCredential } from "../../../src/oauth/store";
 import { ANTIGRAVITY_IDE_VERSION } from "../../../src/adapters/client-fingerprint";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import { OAuthCallbackFlow } from "../../../src/oauth/callback-server";
-import { runLogin } from "../../../src/oauth";
+import { publicOAuthAuthenticationErrorMessage, runLogin } from "../../../src/oauth";
 import { getDefaultConfig } from "../../../src/config";
-import { summarizeAntigravityDiscovery } from "../../../src/oauth/antigravity-discovery-diagnostics";
+import { AntigravityProjectDiscoveryError, summarizeAntigravityDiscovery } from "../../../src/oauth/antigravity-discovery-diagnostics";
 
 const realFetch = globalThis.fetch;
 const secret = "PRIVATE_DISCOVERY_SENTINEL";
@@ -63,6 +63,23 @@ async function failedDiscoveryLogin(load: () => Response, onboard: () => Respons
 }
 
 describe("antigravity sanitized failed-login discovery diagnostics", () => {
+  test("typed error projects only sanitized observations even when message and cause are overwritten", () => {
+    const error = new AntigravityProjectDiscoveryError();
+    error.observe("loadCodeAssist", 403, undefined);
+    error.observe("onboardUser", 200, { done: false, [secret]: secret });
+    error.observe("onboardUser", 200, { done: true, error: { message: secret } });
+    const safeMessage = error.message;
+    error.message = secret;
+    error.cause = new Error(secret);
+    const projected = publicOAuthAuthenticationErrorMessage(error);
+    expect(projected).toBe(safeMessage);
+    expect(projected).toContain('"stage":"loadCodeAssist","status":403');
+    expect(projected).toContain('"outcome":"done-with-error"');
+    expect(projected).not.toContain('"outcome":"pending"');
+    expect(projected.match(/"stage":"onboardUser"/g)).toHaveLength(1);
+    expect(projected).not.toContain(secret);
+  });
+
   test("pure summary contains only fixed fields, enums and status with private keys/values", () => {
     const summary = summarizeAntigravityDiscovery("onboardUser", 200, {
       [secret]: secret, done: true, error: { [secret]: secret }, name: secret,

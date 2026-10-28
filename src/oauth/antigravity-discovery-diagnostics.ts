@@ -42,3 +42,24 @@ export function summarizeAntigravityDiscovery(
     response: projectTypes(object?.response),
   });
 }
+
+const DISCOVERY_FAILURE_MESSAGE = "Antigravity login could not discover a Cloud Code Assist project for this account. Ensure the account has Antigravity/Cloud Code Assist access and try again.";
+
+/** Only sanitizer outputs can enter this error's public message; raw responses are never retained. */
+export class AntigravityProjectDiscoveryError extends Error {
+  #summaries: string[] = [];
+
+  constructor() {
+    super(DISCOVERY_FAILURE_MESSAGE);
+    this.name = "AntigravityProjectDiscoveryError";
+  }
+
+  observe(stage: "loadCodeAssist" | "onboardUser", status: number, data: unknown): void {
+    this.#summaries[stage === "loadCodeAssist" ? 0 : 1] = summarizeAntigravityDiscovery(stage, status, data);
+    this.message = this.publicMessage;
+  }
+
+  get publicMessage(): string {
+    return `${DISCOVERY_FAILURE_MESSAGE} Discovery: ${this.#summaries.join("; ")}`;
+  }
+}
