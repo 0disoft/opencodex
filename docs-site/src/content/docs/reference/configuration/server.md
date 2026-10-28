@@ -47,7 +47,7 @@ runs helper features around provider requests.
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
 | `spendPoolAliases?` | `Record<string, string>` | unset | Explicit historical salted pool-alias to canonical provider mappings. Keep this key at the top level, outside `spend`. See [Historical pool continuity](#historical-pool-continuity). |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`; older clients through 0.144.x used `gpt-5.4-mini`, which `sourceModels` can restore. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`. The dashboard exposes one toggle per source and keeps both Terra generations (`gpt-6.1-terra` and `gpt-5.6-terra`) and the retired `gpt-5.4-mini` helper off until selected. At least one source must stay enabled; disable the main switch to stop all shadow calls. |
 | `memoryModels?` | `{ extract?: { model: string; reasoningEffort?: string }; consolidation?: { model: string; reasoningEffort?: string } }` | off | Route Codex's two memory phases to a chosen model, with an optional reasoning effort per phase. See [Memory routing](#memory-routing). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
@@ -932,10 +932,25 @@ proxy after editing `config.json` by hand. Dashboard saves apply immediately.
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
-replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
-uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
-extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) in the
-list when current clients should still be intercepted.
+replacement keeps the request's configured reasoning effort. The dashboard lists the sources the
+runtime supports and persists one switch per source through
+`PUT /api/shadow-call-settings`; `GET` returns both the active `sourceModels` and that
+`sourceModelOptions` inventory. A non-empty `sourceModels` replaces the default prefixes instead of
+extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) when
+current clients should still be intercepted. The API rejects an empty, duplicate, whitespace-bearing,
+or provider-qualified source prefix, caps the list at 32 prefixes of 128 characters each, and it
+refuses a target that would intersect a selected source.
+A rejected source list returns `code: "shadow_call_source_invalid"` and a conflicting target
+returns `code: "shadow_call_target_invalid"`, so the dashboard can show the matching message
+instead of treating every `400` or HTTP error as a network failure.
+At least one source stays active; use the main switch to stop every shadow call.
+Memory consolidation is separate: Codex asks for Terra there, and
+`memoryModels.consolidation` controls that phase. Terra is also a normal foreground and subagent
+model, so its source toggles stay off by default. Selecting the active Terra generation routes
+consolidation through the shadow target only while no consolidation model is configured; a
+configured Memory-Routing phase still wins. The dashboard keeps both `gpt-6.1-terra` and
+`gpt-5.6-terra` in the source inventory and labels them as `Memory` rather than silently omitting
+them.
 Matching bare model ids are eligible for interception, but explicit user turns keep their selected
 model: `x-codex-turn-metadata` must contain both `request_kind: "turn"` and `thread_source: "user"`.
 Spawned children also keep their model, identified by the `x-openai-subagent: collab_spawn` connection header (HTTP request or WebSocket
