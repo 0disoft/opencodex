@@ -702,6 +702,8 @@ export interface OcxConfig {
    * See {@link OcxOpencodeClientExportConfig}.
    */
   opencodeClientExport?: OcxOpencodeClientExportConfig;
+  /** Opt-in dialect for the managed Pi-based omo block; omitted keeps `openai-completions` (#7431). */
+  omoClientExport?: { api?: "openai-completions" | "openai-responses" };
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;

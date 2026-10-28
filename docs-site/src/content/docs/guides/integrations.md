@@ -69,6 +69,20 @@ This integration retains Pi’s loopback-only export policy and stores no real A
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
 
+The managed Pi-based omo block uses the Chat dialect (`api: "openai-completions"`) by default. Chat
+drops the previous step's reasoning across tool calls, which long omo tool loops notice. To have
+enable and every refresh write the Responses dialect instead, set this in your opencodex config and
+refresh the omo integration:
+
+```json
+{ "omoClientExport": { "api": "openai-responses" } }
+```
+
+The setting applies only to omo; Pi, Gentle Shell and the other Pi-format clients keep
+`openai-completions`. Removing it writes Chat again on the next refresh. An unknown value is ignored.
+opencodex still owns only `providers.opencodex` in `~/.omo/agent/models.json`, so other providers
+in that file are left as they are.
+
 ### Qoder CN and WorkBuddy editions
 
 In **Connect**, enable **Qoder CN**, **WorkBuddy (CN)** or **WorkBuddy AI**, then choose
