@@ -69,13 +69,21 @@ is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore 
 ## Claude Opus 5.5 progress updates
 
 When the `anthropic` adapter sends Claude Opus 5.5 to `api.anthropic.com` (OAuth or API key),
-OpenCodex requests Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
+OpenCodex defaults to Anthropic's [progress-update display mode](https://platform.claude.com/docs/en/build-with-claude/thinking#progress-updates).
 Progress updates and mid-turn acknowledgements appear as visible assistant commentary in Codex,
 even when thinking summaries are hidden. Reasoning summaries are omitted in this mode because
 Anthropic cannot distinguish progress updates from reasoning under `display: "summarized"`.
 The original signed thinking blocks are preserved for tool continuation; no signature is decoded
 or rewritten. Updates appear once their signed block completes. Other models and compatible
 third-party endpoints retain their existing thinking display behavior.
+
+To request summarized thinking instead, explicitly send `reasoning.summary: "concise"` or
+`"detailed"`. OpenCodex then sends `thinking: {type: "adaptive", display: "summarized"}` without
+the updates beta and returns thinking text as reasoning instead of progress commentary. In this
+mode, Anthropic's progress updates may be folded into the reasoning summary. The choice also
+works when reasoning effort is omitted or `"none"`; it does not change the requested effort.
+Omitting `reasoning.summary` or sending `"auto"` (the Codex default) or `"none"` keeps the updates default. Local summary hiding
+still controls reasoning visibility and does not hide progress commentary in updates mode.
 
 ## Anthropic image input
 
