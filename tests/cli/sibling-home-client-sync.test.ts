@@ -296,11 +296,16 @@ test("same PID, null PID, foreign, stale and remote hints grant no sibling owner
   const foreign = healthServer(process.pid + 1, "another-service");
   writeFileSync(grokPath, grokFence(foreign));
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBeNull();
-  const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("closed") });
-  const stale = closed.port;
-  closed.stop(true);
+  // A stale URL exercises transport refusal, not a subsequent bind. Inject the
+  // refusal so an unrelated process cannot turn the "dead" hint into a live one.
+  const stale = 42101;
+  let refusedProbes = 0;
   writeFileSync(grokPath, grokFence(stale));
-  expect(await findCrossHomeOwner({ homeDir: fx.home })).toBeNull();
+  expect(await findCrossHomeOwnerDetailed({ homeDir: fx.home, io: {
+    fetchFn: async () => { refusedProbes++; throw Object.assign(new Error("fixture refusal"), { code: "ECONNREFUSED" }); },
+    sleepFn: async () => {},
+  } })).toEqual({ kind: "none" });
+  expect(refusedProbes).toBeGreaterThan(0);
   writeFileSync(grokPath, grokFence("not-a-port"));
   expect(await findCrossHomeOwner({ homeDir: fx.home })).toBeNull();
   writeFileSync(grokPath, grokFence(foreign).replace("127.0.0.1", "example.com"));
@@ -324,9 +329,6 @@ test("a secondary start preserves shared client bytes and records the sibling ow
   const fx = fixture();
   const fakeOwnerPid = 1_000_000_000;
   const ownerPort = healthServer(fakeOwnerPid);
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
-  const secondaryPort = reservation.port;
-  reservation.stop(true);
   defaultRuntime(fx, fakeOwnerPid, ownerPort);
   const grokPath = join(fx.grok, "config.toml");
   const codexPath = join(fx.codex, "config.toml");
@@ -336,11 +338,11 @@ test("a secondary start preserves shared client bytes and records the sibling ow
   writeFileSync(claudePath, "owned roster bytes\n");
   const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
   writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
-    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
     checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
-  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(child);
@@ -357,9 +359,6 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
   const fx = fixture();
   const ownerPort = healthServer(process.pid);
   defaultRuntime(fx, process.pid, ownerPort);
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
-  const secondaryPort = reservation.port;
-  reservation.stop(true);
   const grokPath = join(fx.grok, "config.toml");
   const codexPath = join(fx.codex, "config.toml");
   const claudePath = join(fx.claude, "agents", "ocx-existing.md");
@@ -368,7 +367,7 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
   writeFileSync(claudePath, "---\ngenerated-by: opencodex\n---\nowner roster\n");
   const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
   writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
-    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: true, syncResumeHistory: false,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: true, syncResumeHistory: false,
     checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
@@ -380,11 +379,11 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
   const output = captured.stdout.tail;
   const error = captured.stderr.tail;
   expect(await ensure.exited).toBe(0);
-  expect(output + error).toContain(`Proxy running on port ${secondaryPort}`);
   const runtime = JSON.parse(readFileSync(join(fx.ocx, "runtime-port.json"), "utf8")) as {
     pid: number; port: number; siblingOfPort?: number;
   };
   detachedPids.push(runtime.pid);
+  expect(output + error).toContain(`Proxy running on port ${runtime.port}`);
   expect(runtime.siblingOfPort).toBe(ownerPort);
   expect([grokPath, codexPath, claudePath].map(path => readFileSync(path))).toEqual(before);
 
@@ -401,19 +400,16 @@ test("a secondary ensure parent preserves shared Grok, Codex and Claude agent by
 
 test("a lone custom-home start still syncs Grok and prunes its own Claude roster", async () => {
   const fx = fixture();
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
-  const port = reservation.port;
-  reservation.stop(true);
   const grokPath = join(fx.grok, "config.toml");
   const claudePath = join(fx.claude, "agents", "ocx-existing.md");
   writeFileSync(grokPath, grokFence(12345));
   writeFileSync(claudePath, "---\ngenerated-by: opencodex\n---\nold roster\n");
   writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
-    port, hostname: "127.0.0.1", codexAutoStart: true, syncResumeHistory: false,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: true, syncResumeHistory: false,
     checkForUpdates: false, clientIntegrations: { codex: false, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
-  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(port)], {
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(child);
@@ -421,7 +417,7 @@ test("a lone custom-home start still syncs Grok and prunes its own Claude roster
   expect(runtime.siblingOfPort).toBeUndefined();
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && readFileSync(grokPath, "utf8").includes("127.0.0.1:12345")) await Bun.sleep(20);
-  expect(readFileSync(grokPath, "utf8")).toContain(`127.0.0.1:${port}`);
+  expect(readFileSync(grokPath, "utf8")).toContain(`127.0.0.1:${runtime.port}`);
   expect(existsSync(claudePath)).toBe(false);
   writeFileSync(claudePath, "---\ngenerated-by: opencodex\n---\nstale roster\n");
   const ensure = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "ensure"], {
@@ -655,9 +651,6 @@ async function secondaryStartPreservesBytes(
   ownerPort: number,
   expectedSiblingPort: number | null,
 ): Promise<void> {
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
-  const secondaryPort = reservation.port;
-  reservation.stop(true);
   const grokPath = join(fx.grok, "config.toml");
   const codexPath = join(fx.codex, "config.toml");
   const claudePath = join(fx.claude, "agents", "ocx-existing.md");
@@ -666,11 +659,11 @@ async function secondaryStartPreservesBytes(
   writeFileSync(claudePath, "owned roster bytes\n");
   const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
   writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
-    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
     checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
-  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(child);
@@ -747,15 +740,12 @@ test("a registry-only discovered owner vetoes shared writes end to end", async (
   writeFileSync(codexPath, "model = \"gpt-6\"\n");
   writeFileSync(claudePath, "owned roster bytes\n");
   const before = [grokPath, codexPath, claudePath].map(path => readFileSync(path));
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
-  const secondaryPort = reservation.port;
-  reservation.stop(true);
   writeFileSync(join(fx.ocx, "config.json"), JSON.stringify({
-    port: secondaryPort, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
+    port: 0, hostname: "127.0.0.1", codexAutoStart: false, syncResumeHistory: false,
     checkForUpdates: false, clientIntegrations: { codex: true, grok: true, "claude-desktop": false },
     claudeCode: { injectAgents: false, systemEnv: false }, providers: {}, defaultProvider: "openai",
   }));
-  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(secondaryPort)], {
+  const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start"], {
     cwd: fx.root, env: { ...process.env, NO_PROXY: "127.0.0.1,localhost" }, stdout: "pipe", stderr: "pipe",
   });
   trackChild(child);
