@@ -63,6 +63,7 @@ import {
   nativeContextLimits,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
+  shouldUpgradeToUpstreamEntry,
 } from "./catalog/metadata";
 import {
   trustedAccountBoundNativeCatalogSlug,
@@ -77,7 +78,7 @@ import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "./account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { applyNativeAccessPrograms } from "./catalog/access-programs";
-import { captureNativeInheritanceTemplate } from "./catalog/native-template";
+import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./catalog/native-template";
 import { omitDisabledNativeCatalogEntries } from "./catalog/native-omission";
 import {
   availableAccountGatedNativeModels,
@@ -297,6 +298,13 @@ function prepareCatalog(
     ...desktopAllowlistSuppressedNativeSlugs(config),
     ...[...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(slug => !availableBareGatedNativeSlugs.has(slug)),
   ]);
+  // An omitted source still needs the same upgrade/normalization as a visible native.
+  // Keep independent combo-alias and entitlement suppression authoritative.
+  if (template && shouldUpgradeToUpstreamEntry(template)
+    && (!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(String(template.slug)) || availableBareGatedNativeSlugs.has(String(template.slug)))
+    && !desktopAllowlistSuppressedNativeSlugs({ ...config, omitDisabledNativeModels: false }).has(String(template.slug))) {
+    suppressedBareNativeSlugs.delete(String(template.slug));
+  }
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const enabledProviders = Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
@@ -417,6 +425,7 @@ function prepareCatalog(
       : null,
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels, config);
+  advanceNativeInheritanceTemplate(catalog, mergedModels);
   // The second writer of this file. A dashboard model toggle, a combo edit, or a Codex account
   // login reaches `convergeCodexCatalog` and commits through `fixedCommit`, never through
   // `writeRetainedCatalogSync`, so the #4730 uniqueness guard has to stand here too or the same

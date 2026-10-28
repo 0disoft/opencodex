@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
 import { commitCodexCatalogCandidate, gatherCodexCatalogCandidate } from "../../src/codex/convergence";
-import { resetCatalogRuntimeStateForTests, syncCatalogModels } from "../../src/codex/catalog";
+import { invalidateCodexModelsCache, resetCatalogRuntimeStateForTests, syncCatalogModels } from "../../src/codex/catalog";
 import { findSupportedNativeTemplate, type RawCatalog, type RawEntry } from "../../src/codex/catalog/parsing";
 import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
@@ -219,3 +219,73 @@ test("a retained template must pass exactly the existing supported native valida
     expect(findSupportedNativeTemplate({ models: [], [SOURCE_FIELD]: bad })).toBeNull();
   }
 });
+
+async function upgradedOutputs(flag: boolean, model: string, method: "convergence" | "retained sync", passCount: number) {
+  // Astra's old self-authored label and a slug-labelled fallback both need native upgrades.
+  const old = { ...native(), slug: model, display_name: model === "gpt-6-astra" ? "GPT-6 Astra" : model };
+  writeFileSync(path, JSON.stringify({ models: [old] }), "utf8");
+  resetCatalogRuntimeStateForTests();
+  const next = config(flag);
+  next.disabledModels = [model];
+  next.providers.openai!.models = [model];
+  for (let pass = 0; pass < passCount; pass++) {
+    if (method === "convergence") await converge(next);
+    else {
+      saveConfig(next);
+      expect((await syncCatalogModels(next, { allowWhenDesiredDisabled: true })).refreshOutcome).toBe("committed");
+      invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
+    }
+  }
+  const catalog = read();
+  expect(catalog.models?.some(row => row.slug === model)).toBe(!flag);
+  const template = flag ? catalog[SOURCE_FIELD] as RawEntry : catalog.models!.find(row => row.slug === model)!;
+  if (!flag) {
+    expect(template.display_name).not.toBe(old.display_name);
+    expect(template.base_instructions).not.toBe(old.base_instructions);
+  }
+  const cache = JSON.parse(readFileSync(join(home.codexHome, "models_cache.json"), "utf8")) as RawCatalog;
+  const live = liveList(next);
+  const server = startServer(0);
+  let http: RawCatalog;
+  try {
+    const response = await fetch(new URL("/v1/models?client_version=0.160.0", server.url));
+    expect(response.status).toBe(200);
+    http = await response.json() as RawCatalog;
+  } finally { await server.stop(true); }
+  for (const output of [catalog, cache, live, http]) {
+    expect(output.models?.some(row => row.slug === "fixture/model")).toBe(true);
+  }
+  return { catalog: routed(catalog), cache: routed(cache), live: routed(live), http: routed(http), template };
+}
+
+for (const method of ["convergence", "retained sync"] as const) {
+  test(`an upgraded sole source survives ${method} when every native is omitted without an orphan reviewer`, async () => {
+    writeFileSync(path, JSON.stringify({ models: [{ ...native(), slug: "gpt-6-astra", display_name: "GPT-6 Astra" }] }), "utf8");
+    const next = { ...config(true), disabledModels: [...NATIVE_OPENAI_MODELS] };
+    if (method === "convergence") await converge(next);
+    else {
+      saveConfig(next);
+      expect((await syncCatalogModels(next, { allowWhenDesiredDisabled: true })).refreshOutcome).toBe("committed");
+    }
+    expect(read().models?.map(row => row.slug)).toEqual(["fixture/model"]);
+    expect((read()[SOURCE_FIELD] as RawEntry).display_name).toBe("GPT-6-Astra");
+  });
+}
+
+for (const model of ["gpt-6-astra", "gpt-6-luna"]) {
+  for (const method of ["convergence", "retained sync"] as const) {
+    for (const passCount of [1, 2]) {
+      describe(`upgraded ${model} after ${passCount} ${method} passes`, () => {
+        let off: Awaited<ReturnType<typeof upgradedOutputs>>;
+        // Keep each independent server lifecycle within the unchanged default test budget.
+        beforeEach(async () => {
+          off = await upgradedOutputs(false, model, method, passCount);
+          expect(createHash("sha256").update(JSON.stringify(off)).digest("hex")).toMatchSnapshot();
+        });
+        test("preserves catalog, derived cache, live builder and HTTP discovery bytes", async () => {
+          expect(await upgradedOutputs(true, model, method, passCount)).toEqual(off);
+        });
+      });
+    }
+  }
+}

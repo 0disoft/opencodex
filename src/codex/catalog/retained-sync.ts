@@ -16,7 +16,7 @@ import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { applyNativeAccessPrograms } from "./access-programs";
-import { captureNativeInheritanceTemplate } from "./native-template";
+import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./native-template";
 import { omitDisabledNativeCatalogEntries } from "./native-omission";
 import {
   availableAccountGatedNativeModels,
@@ -53,6 +53,7 @@ import {
   observedReserveCatalogSource,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
+  shouldUpgradeToUpstreamEntry,
   upstreamNativeEntry,
 } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
@@ -371,6 +372,13 @@ function writeRetainedCatalogSync({
     ...desktopAllowlistSuppressedNativeSlugs(config),
     ...unavailableGatedNativeSlugs,
   ]);
+  // An omitted source still needs the same upgrade/normalization as a visible native.
+  // Keep independent combo-alias and entitlement suppression authoritative.
+  if (template && shouldUpgradeToUpstreamEntry(template)
+    && (!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(String(template.slug)) || availableBareGatedNativeSlugs.has(String(template.slug)))
+    && !desktopAllowlistSuppressedNativeSlugs({ ...config, omitDisabledNativeModels: false }).has(String(template.slug))) {
+    suppressedBareNativeSlugs.delete(String(template.slug));
+  }
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -550,6 +558,7 @@ function writeRetainedCatalogSync({
   applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
+  advanceNativeInheritanceTemplate(catalog, catalog.models);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
   // against the effort clamp is load-bearing rather than cosmetic.
   catalog.models = enforceCatalogSlugUniqueness(omitDisabledNativeCatalogEntries(catalog.models, config), true);
