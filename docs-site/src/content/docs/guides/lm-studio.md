@@ -31,6 +31,8 @@ preserves the original relative order of system/developer messages. Both paths
 normalize the outbound copy and keep user messages and tool pairs in order.
 
 Non-text system/developer parts in direct Chat fail explicitly rather than being
-silently discarded. Translated developer image/audio messages keep their existing
+silently discarded. Translated developer documents keep their file parts in a
+user-compatible message at the existing timeline slot while their text joins the
+leading system message. Developer image/audio messages keep their existing
 user-compatible mapping. No LM Studio runtime is required to configure this flag;
 the served model's template still determines which other wire features it accepts.

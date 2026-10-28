@@ -272,6 +272,15 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             role: msg.role === "developer" && !hasImages && !hasAudio ? developerWireRole : "user",
             content: chatParts,
           };
+          if (provider.singleLeadingSystemMessage === true && chatMsg.role !== "user") {
+            // Keep document bytes in a user-compatible slot; only their accompanying text is
+            // instruction content. Use the same tool barrier so instruction order is retained.
+            const instruction = { role: developerWireRole, content: chatParts.filter(p => p.type === "text") };
+            if (instruction.content.length > 0) {
+              (pendingToolCalls.length > 0 ? deferredBarrierMessages : out).push(instruction);
+            }
+            chatMsg = { role: "user", content: chatParts.filter(p => p.type !== "text") };
+          }
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);
         else out.push(chatMsg);

@@ -23,7 +23,7 @@ The role that slot carries is a separate decision, and the setting that makes it
 `foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends
 `developer`. Unset means nothing has been recorded about the destination; `true` records an
 upstream that rejects the role; `false` records one that accepts it. The message keeps the slot it
-arrived in in every case — only the role changes, never the position. The unrecorded state is the
+arrived in unless the [LM Studio instruction policy](lm-studio-chat.md) applies. The unrecorded state is the
 folded one because a destination that rejects the role answers
 `400 role 'developer' is not allowed` and the turn never starts, a failure that lands outside this
 repository where no test can reach it. The role was previously decided by testing the base URL host

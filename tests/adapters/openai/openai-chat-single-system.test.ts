@@ -97,5 +97,32 @@ describe("single leading Chat system message (#7761)", () => {
   test("unsupported instruction content fails explicitly rather than losing it", () => {
     expect(() => native([{ role: "system", content: [{ type: "image_url", image_url: { url: "https://example.invalid/image.png" } }] }]))
       .toThrow("singleLeadingSystemMessage requires text-only system/developer content");
+    expect(() => native([{ role: "developer", content: [{ type: "file", file: { file_data: "data:application/pdf;base64,JVBERi0xLjQ=" } }] }]))
+      .toThrow("singleLeadingSystemMessage requires text-only system/developer content");
+  });
+
+  test.each([true, false])("translated developer documents retain bytes and merge text (fold=%s)", fold => {
+    const file = { type: "input_file", filename: "spec.pdf", file_data: "data:application/pdf;base64,JVBERi0xLjQ=" };
+    const parsed = parseRequest({ model, instructions: "Base", input: [
+      { role: "user", content: "First" },
+      { type: "function_call", call_id: "call_doc", name: "lookup", arguments: "{}" },
+      { role: "developer", content: [{ type: "input_text", text: "Read " }, file, { type: "input_text", text: "carefully" }] },
+      { role: "developer", content: "Later" },
+      { type: "function_call_output", call_id: "call_doc", output: "result" },
+      { role: "developer", content: [file] },
+      { role: "user", content: "Continue" },
+    ] });
+    const before = structuredClone(parsed);
+    const messages = JSON.parse(createOpenAIChatAdapter({ ...enabled, foldDeveloperRoleToSystem: fold }).buildRequest(parsed).body).messages;
+    expect(parsed).toEqual(before);
+    expect(messages).toEqual([
+      { role: "system", content: "Base\n\nRead carefully\n\nLater" },
+      { role: "user", content: "First" },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_doc", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call_doc", content: "result" },
+      { role: "user", content: [{ type: "file", file: { filename: file.filename, file_data: file.file_data } }] },
+      { role: "user", content: [{ type: "file", file: { filename: file.filename, file_data: file.file_data } }] },
+      { role: "user", content: "Continue" },
+    ]);
   });
 });

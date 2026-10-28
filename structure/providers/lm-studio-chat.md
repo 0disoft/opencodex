@@ -15,6 +15,8 @@ The explicit policy takes precedence over the model-name-based late-developer-to
 mapping. Other presets and unflagged custom endpoints keep their existing behavior.
 Non-text native instruction parts fail explicitly rather than being discarded; translated
 developer image/audio messages retain the existing user-compatible mapping.
+Translated developer documents retain file parts in a user message at the tool-barrier-adjusted
+timeline slot; accompanying text joins the leading instruction block in IR order.
 Tests: `tests/adapters/openai/openai-chat-single-system.test.ts` and
 `tests/config/lmstudio-system-policy.test.ts`.
 
