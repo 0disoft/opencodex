@@ -137,6 +137,28 @@ async function nativeCombo(cfg = config, status = 200) {
 }
 
 describe("combo exhaustion reports the primary's quota refusal", () => {
+  test("context exhaustion retains diagnostics and charges each failed attempt once", async () => {
+    const hosts: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const host = new URL(input instanceof Request ? input.url : String(input)).host;
+      hosts.push(host);
+      return host.startsWith("primary")
+        ? Response.json({ error: { message: "Please reduce the length of the messages or completion." } }, { status: 400 })
+        : Response.json({ error: { message: "backup unavailable" } }, { status: 404 });
+    }) as typeof fetch;
+    const logCtx = { model: "", provider: "" } as RequestLogContext;
+    const response = await loggedCombo(config, logCtx, createRequestExecutionBudget());
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "context_length_exceeded" } });
+    expect(hosts).toEqual(["primary.example", "fallback.example"]);
+    expect(logCtx.upstreamError).toContain("Please reduce the length");
+    expect(logCtx.attempts).toMatchObject([
+      { provider: "primary", status: 400, sendCount: 1 },
+      { provider: "fallback", status: 404, sendCount: 1 },
+    ]);
+    expect(logCtx.attempts).toHaveLength(2);
+  });
+
   for (const cooled of [false, true]) {
     test(`a successful native Chat combo skips unused quota eligibility (cooldown: ${cooled})`, async () => {
       if (cooled) coolComboTarget("fan", { provider: "fallback", model: "model-fallback" }, { retryAfter: "120", status: 429 });

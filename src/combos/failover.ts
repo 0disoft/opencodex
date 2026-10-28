@@ -720,6 +720,9 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
   "maximum context length",
   "maximum context window",
   "too many tokens",
+  "prompt is too long",
+  "input is too long for requested model",
+  "reduce the length of the messages or completion",
 ];
 
 /** Wrapper envelopes unwrapped before the leaf message is read. */
@@ -902,8 +905,8 @@ export function comboFailureDecision(
   //
   // This MUST be tested before the generic stop list below. Our own refusal message says
   // "context window" -- that is what it refuses on -- and the classifier remaps that phrase,
-  // so checking the stop list first swallowed the signal and ended the chain. An UPSTREAM
-  // `context_length_exceeded` carries no admission code and still falls through to stop.
+  // so checking the stop list first swallowed the signal and ended the chain. Confirmed
+  // upstream context refusals already took the bounded message-classification hop above.
   //
   // Matched on the STRUCTURED code only, which classifyError now preserves for our own
   // refusal. A raw substring test would additionally let any upstream override a terminal

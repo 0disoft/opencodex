@@ -1,5 +1,18 @@
 # Combo Streaming Boundaries
 
+## Context-window refusals
+
+`isDefiniteContextOverflow` in `src/combos/failover.ts` reads bounded innermost provider messages,
+including OpenAI context-length wording, Anthropic `prompt is too long` / `input is too long for requested model`,
+and `reduce the length of the messages or completion`. This shared Responses recovery detector grants
+a target-local hop before the generic HTTP 400 stop, without recording a cooldown. Code-only evidence
+beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
+Cancellation, hard policy refusals, non-replayable attempts and the streaming commit boundary still win.
+`src/server/responses/core-combo.ts` retains the first confirmed HTTP 400 context refusal and its child
+diagnostics for exhaustion or a refused later send budget; later fatal errors return immediately.
+Every physical attempt retains its own send count and usage. Coverage: `tests/helpers/combo-context-overflow-cases.ts`
+(registered by `tests/server/server-combo-failover-e2e.test.ts`) and `tests/responses/responses-combo-exhausted-error.test.ts`.
+
 ## Buffered required-tool contract
 
 Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`

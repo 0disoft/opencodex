@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { isComboTargetInCooldown } from "../../src/combos";
 
 interface ComboHarness<Server> {
   serve(handler: () => Response | Promise<Response>): Server;
@@ -13,7 +14,7 @@ interface ComboHarness<Server> {
 }
 
 const OVERFLOW_PROSE =
-  "Your input exceeds the context window of this model. Please adjust your input and try again.";
+  "Please reduce the length of the messages or completion.";
 
 function sse(frames: Array<[string, Record<string, unknown>]>): Response {
   const body = frames
@@ -26,6 +27,76 @@ function sse(frames: Array<[string, Record<string, unknown>]>): Response {
 export function registerComboContextOverflowCases<Server>({
   serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, collectSse,
 }: ComboHarness<Server>): void {
+  for (const message of [
+    "Please reduce the length of the messages or completion.",
+    "prompt is too long: 210000 tokens > 200000 maximum",
+    "input is too long for requested model",
+    JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
+  ]) {
+    test(`context-length 400 advances once without cooling: ${message}`, async () => {
+      const hits: string[] = [];
+      const capped = serve(() => {
+        hits.push("a");
+        return Response.json({ error: { type: "invalid_request_error", message } }, { status: 400 });
+      });
+      const backup = serve(() => { hits.push("b"); return chatSuccess("larger window"); });
+      const config = comboConfig({
+        a: provider("openai-chat", baseUrl(capped), "key-a"),
+        b: provider("openai-chat", baseUrl(backup), "key-b"),
+      });
+      const response = await post(config);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("larger window");
+      expect(hits).toEqual(["a", "b"]);
+      for (const [comboId, combo] of Object.entries(config.combos ?? {})) {
+        for (const target of combo.targets) expect(isComboTargetInCooldown(comboId, target)).toBe(false);
+      }
+    });
+  }
+
+  for (const status of [404, 429, 503]) {
+    test(`exhaustion retains a context-length refusal before a later ${status}`, async () => {
+      const hits: string[] = [];
+      const capped = serve(() => {
+        hits.push("a");
+        return Response.json({ error: {
+          type: "invalid_request_error", code: "context_length_exceeded", message: "too many tokens",
+        } }, { status: 400 });
+      });
+      const backup = serve(() => {
+        hits.push("b");
+        return Response.json({ error: { message: "target unavailable" } }, { status });
+      });
+      const response = await post(comboConfig({
+        a: provider("openai-chat", baseUrl(capped), "key-a"),
+        b: provider("openai-chat", baseUrl(backup), "key-b"),
+      }));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: { code: "context_length_exceeded" } });
+      expect(hits).toEqual(["a", "b"]);
+    });
+  }
+
+  for (const body of [
+    JSON.stringify({ error: { code: "context_length_exceeded", message: "Unsupported parameter: user" } }),
+    JSON.stringify({ error: { message: "Please reduce the length of the tool name" } }),
+    JSON.stringify({ error: { message: "Invalid JSON", note: "Please reduce the length of the messages or completion" } }),
+    '{"error":{"message":"Please reduce the length of the messages or completion"',
+  ]) {
+    test(`ordinary or malformed 400 stays fatal: ${body}`, async () => {
+      let backupHits = 0;
+      const invalid = serve(() => new Response(body, { status: 400 }));
+      const backup = serve(() => { backupHits += 1; return chatSuccess("must not run"); });
+      const response = await post(comboConfig({
+        a: provider("openai-chat", baseUrl(invalid), "key-a"),
+        b: provider("openai-chat", baseUrl(backup), "key-b"),
+      }));
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(backupHits).toBe(0);
+    });
+  }
+
   test("context overflow advances while exhausted retryable targets return the sanitized last status", async () => {
     let backupHits = 0;
     const context = serve(() => Response.json(
