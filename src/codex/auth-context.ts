@@ -1,4 +1,5 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
+import { markCodexAccountCooldownResponse } from "./account-cooldown-response";
 import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
@@ -995,7 +996,10 @@ export function cooldownErrorResponse(
   if (!(err instanceof CodexReserveUnavailableError)) {
     headers.set("Retry-After", String(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000))));
   }
-  return new Response(res.body, { status: res.status, headers });
+  const response = new Response(res.body, { status: res.status, headers });
+  // Exact class only: credit, Reserve (including unsupported-helper), recovery-withheld and
+  // future policy subclasses keep their own retry semantics. Main hard-lock returned above.
+  return err.constructor === CodexAccountCooldownError ? markCodexAccountCooldownResponse(response) : response;
 }
 
 export class CodexThreadAffinityExpiredError extends Error {
