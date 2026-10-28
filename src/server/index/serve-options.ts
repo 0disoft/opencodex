@@ -1069,7 +1069,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             config.claudeCode?.desktopProfile,
             desktopInputs.nativeContextCap,
           );
-          const { buildAnthropicModelInfos } = await import("../../claude/model-info");
+          const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
           const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
@@ -1097,7 +1097,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                   ? nativeFastEligible(model.id)
                   : catalogRowFastEligible(model)
               : undefined,
-            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels },
+            { modelPickerOrder: config.modelPickerOrder, featured: config.subagentModels }, configuredRoutedDisplayName(config),
           );
           return jsonResponse({ data }, 200, req, policy);
         }
