@@ -13,6 +13,9 @@ import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { streamFromText } from "../helpers/sse-stream";
 
+/** Synthetic upstream credential for the fake upstream; never a real key. */
+const UPSTREAM_FIXTURE_KEY = "omo-upstream-fixture-key";
+
 /**
  * Wire contract: @mariozechner/pi-ai 0.57.1, a9cedccdde77e9d765303463d8a6cd11c58f7a7f.
  * https://github.com/badlogic/pi-mono/blob/a9cedccdde77e9d765303463d8a6cd11c58f7a7f/packages/ai/src/providers/openai-responses.ts
@@ -105,7 +108,7 @@ describe("omo Responses export: stateless reasoning/tool continuity over loopbac
       omoClientExport: { api: "openai-responses" },
       providers: { fixture: {
         adapter: "openai-responses", baseUrl: `${upstream.url.origin}/v1`, allowPrivateNetwork: true,
-        authMode: "key", apiKey: "omo-upstream-fixture-key", models: ["omo-fixture"], upstreamWebsocket: false,
+        authMode: "key", apiKey: UPSTREAM_FIXTURE_KEY, models: ["omo-fixture"], upstreamWebsocket: false,
       } },
     };
     saveConfig(config);
@@ -163,7 +166,7 @@ describe("omo Responses export: stateless reasoning/tool continuity over loopbac
       expect(turns).toHaveLength(2);
       for (const turn of turns) {
         expect(turn.path).toBe("/v1/responses");
-        expect(turn.authorization).toBe("Bearer omo-upstream-fixture-key");
+        expect(turn.authorization).toBe(`Bearer ${UPSTREAM_FIXTURE_KEY}`);
         expect(turn.body.model).toBe("omo-fixture");
         expect(turn.body.store).toBe(false);
         expect(turn.body.previous_response_id).toBeUndefined();
