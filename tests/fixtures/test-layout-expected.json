@@ -2,6 +2,7 @@
     "advisor-caller-policy.test.ts": "advisor",
     "advisor-caller-policy-ingress.test.ts": "advisor",
     "advisor-caller-policy-http.test.ts": "advisor",
+    "advisor-caller-policy-jev.test.ts": "advisor",
     "advisor-caller-policy-routing.test.ts": "advisor",
     "windows-config-root-async-writers.test.ts": "windows",
     "t3code-client.test.ts": "clients",
