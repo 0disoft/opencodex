@@ -71,15 +71,20 @@ This integration retains Pi’s loopback-only export policy and stores no real A
 
 The managed Pi-based omo block uses the Chat dialect (`api: "openai-completions"`) by default. Chat
 drops the previous step's reasoning across tool calls, which long omo tool loops notice. To have
-enable and every refresh write the Responses dialect instead, set this in your opencodex config and
-refresh the omo integration:
+enable and every refresh write the Responses dialect instead, set this config-file-only key in
+your opencodex config:
 
 ```json
 { "omoClientExport": { "api": "openai-responses" } }
 ```
 
+Restart the proxy to load the edited config (`ocx service restart` for a service install, or stop
+and start `ocx start`), then refresh the omo integration from **Connect → omo** in the dashboard.
+Refreshing alone uses the running proxy's config and does not reload the config file.
+
 The setting applies only to omo; Pi, Gentle Shell and the other Pi-format clients keep
-`openai-completions`. Removing it writes Chat again on the next refresh. An unknown value is ignored.
+`openai-completions`. To return to Chat, remove the key, restart the proxy in the same way, then
+refresh **Connect → omo**. An unknown value is ignored.
 opencodex still owns only `providers.opencodex` in `~/.omo/agent/models.json`, so other providers
 in that file are left as they are.
 

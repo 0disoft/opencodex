@@ -1041,7 +1041,7 @@
   "ollama-native-structured-output.test.ts": "providers/ollama", "ollama-native-v4.test.ts": "providers/ollama",
   "ollama-native.test.ts": "providers/ollama", "ollama-show-enrichment-v7.test.ts": "providers/ollama",
   "ollama-show-enrichment.test.ts": "providers/ollama", "ollama-show-ignore-abort.test.ts": "providers/ollama",
-  "omo-client.test.ts": "clients", "omp-path-contract.test.ts": "clients",
+  "omo-client.test.ts": "clients", "omo-responses-loop.test.ts": "clients", "omp-path-contract.test.ts": "clients",
   "omp-yaml-source-inline-comments.test.ts": "clients", "opaque-blob-wrapped-rejection.test.ts": "responses",
   "openai-api-virtual-models.test.ts": "adapters/openai", "openai-chat-audio.test.ts": "adapters/openai",
   "openai-chat-bounded-tool-names.test.ts": "adapters/openai",
