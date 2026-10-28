@@ -62,7 +62,7 @@ vision describers, the web-search executors and loop, and the image loop. The mo
 paths — native Responses passthrough, the generic adapter dispatch and its continuation loop,
 compact, and native Chat — do not set `replaySafe`; eligible operator-granted replacements are separate. Adapters with their own
 `fetchResponse` (kiro, cursor, google) keep their own retry policies; kiro imports the shared
-abort/sleep helpers from this module.
+abort/sleep helpers from this module. Response-body cancellation before retry clears its fallback timer when cancellation settles, including without a parent signal; a never-settling cancellation remains bounded by the existing timeout, and cancellation errors remain best effort.
 
 ## Ambiguous-resend gate
 

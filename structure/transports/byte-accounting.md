@@ -157,7 +157,7 @@ one source chunk keeps its source view. Storage grows with received bytes rather
 length, and completed carry allocations remain owned by their yielded payloads. The four-byte
 length and twelve-byte prelude are validated before copying subsequent payload bytes, including
 the header-to-frame boundary. The 16 MiB frame and 128 KiB header limits, both CRC checks, truncated
-EOF errors and reader cancellation remain in force. Coalesced chunks may contain multiple valid
+EOF errors and reader cancellation remain in force. Teardown initiates cancellation and observes errors without awaiting transport settlement, so consumer return cannot hang on a never-settling cancel promise. Coalesced chunks may contain multiple valid
 frames whose aggregate exceeds the per-frame cap. `tests/responses/eventstream-fragmentation.test.ts`
 covers copy work, ownership, validation checkpoints and cleanup across split/coalesced input.
 

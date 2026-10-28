@@ -531,6 +531,7 @@
         "src/adapters/",
         "src/chat/",
         "src/combos/",
+        "src/lib/tool-argument-integers.ts",
         "src/oauth/",
         "src/providers/",
         "src/responses/",

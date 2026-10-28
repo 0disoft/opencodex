@@ -23,6 +23,13 @@ adapter own retries/timeouts, while `runTurn` supports transports that cannot be
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
+## Shared tool argument repair
+
+The bridge repairs integral floats in integer fields and safe bare integers in string-only
+fields against the tool's schema. Unsafe integers, overflowing numbers and unrepaired non-integral
+decimals retain their exact tokens while safe siblings are still repaired. Nested arrays and duplicate keys retain every
+unsafe token, so repairing a timeout cannot silently change an unrelated identifier.
+
 ## External task input on translated Responses routes
 
 Codex task coordination can deliver input as `function_call_output` with nonblank
@@ -478,6 +485,8 @@ MiMo model Command Code serves.
   caller expecting JSON would otherwise receive prose.
 - Decodes `application/vnd.amazon.eventstream`, reconstructs text/thinking/tool events, detects
   truncated tool JSON, and estimates usage because the upstream does not return token counts.
+  Decoder teardown initiates cancellation without waiting for transport cleanup to settle, so a
+  stalled cleanup promise cannot hold the decoder open after the consumer stops reading.
 - Uses the configured `baseUrl` verbatim when it is custom. A canonical
   `runtime.{region}.kiro.dev` URL follows the imported credential's API region; only that canonical
   shape is eligible for one budgeted fallback to `q.{region}.amazonaws.com` after an endpoint,

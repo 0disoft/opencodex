@@ -925,6 +925,9 @@ remove `provider.opencodex` from those files before enabling the integration. An
 candidate also blocks the write. Disable can still remove a block owned in the recorded file
 while another candidate conflicts or cannot be parsed; the other candidate is left untouched.
 
+OpenCodex reads these candidate files as JSONC. A `//` line comment ends at a CR, LF, or CRLF
+line ending, so a file saved with any of these line endings keeps the settings that follow a comment.
+
 The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
 `models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
 not emitted; Kilo instead receives the per-model reasoning choices as a variant map inside
@@ -939,6 +942,9 @@ commas in other keys are not preserved. Kilo is on the implicit catalog fan-out:
 sync`, `POST /api/sync`, and visibility, provider, or preset changes refresh an owned Kilo
 block under the same safe owned-only rules as every other client, and a new Kilo session
 loads the updated file.
+
+When reading these candidate files, OpenCodex accepts a trailing comma after an array element or
+object property. Write an empty array or object as `[]` or `{}`; `[,]` and `{,}` are refused as malformed.
 
 ```bash
 ocx integration client enable --client kilo

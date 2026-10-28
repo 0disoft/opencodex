@@ -1,4 +1,10 @@
 {
+  "fix-search-frame-shapes.test.ts": "web-search",
+  "fix-search-orphan-source.test.ts": "web-search",
+  "fix-search-unicode-clamp.test.ts": "web-search",
+  "fix-retry-release-timer.test.ts": "lib",
+  "fix-tool-number-preservation.test.ts": "adapters",
+  "fix-eventstream-cancel-wait.test.ts": "responses",
   "zed-openai-contract.test.ts": "providers",
   "zed-failure-relay.test.ts": "providers",
   "zed-argument-consistency.test.ts": "providers",

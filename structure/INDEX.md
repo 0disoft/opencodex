@@ -286,6 +286,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |
 | `src/lib/decision-quota-sink.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
+| `src/lib/tool-argument-integers.ts` | [`providers-and-adapters.md`](providers-and-adapters.md) |
 | `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
 | `src/link/` | [`remote-messaging.md`](remote-messaging.md)<br>[`remote-link.md`](remote-link.md) |
 | `src/local-credentials/` | [`remote-link.md`](remote-link.md) |
