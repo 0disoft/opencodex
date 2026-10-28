@@ -174,6 +174,14 @@ describe("antigravity sanitized failed-login discovery diagnostics", () => {
     });
   }
 
+  test("a null onboarding body after a refused loadCodeAssist still reports both sanitized stages", async () => {
+    // Without a loadCodeAssist account the onboarding call has no catch, so a TypeError on `null.done`
+    // used to replace the discovery error with generic OAuth text.
+    const message = await failedDiscoveryLogin(() => new Response(secret, { status: 403 }), () => Response.json(null));
+    expect(message).toContain('"stage":"loadCodeAssist","status":403,"root":"unparseable","outcome":"http-refusal"');
+    expect(message).toContain('"stage":"onboardUser","status":200,"root":"other","outcome":"invalid-root"');
+  });
+
   for (const key of ["cloudaicompanionProject", "projectId", "project"]) {
     for (const value of ["accepted-project", { id: "accepted-project" }]) {
       test(`accepted ${key} ${typeof value} still discovers without onboarding`, async () => {

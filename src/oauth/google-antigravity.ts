@@ -165,6 +165,9 @@ async function onboardProject(accessToken: string, signal?: AbortSignal, tierId 
     const data = (await response.json().catch(() => { unparseable = true; return {}; })) as Record<string, unknown>;
     // Keep only the last poll, and only sanitized text. Parsing/admission below is unchanged.
     diagnostics?.observe("onboardUser", response.status, unparseable ? undefined : data);
+    // A JSON `null` used to end polling with a TypeError on `data.done`; end it explicitly instead,
+    // keeping the one-poll budget, so the caller still raises the recorded discovery error.
+    if (data === null) return undefined;
     if (data.done === true) {
       return extractProjectId(data.response as Record<string, unknown> | undefined);
     }
