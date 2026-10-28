@@ -425,7 +425,7 @@ function prepareCatalog(
       : null,
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels, config);
-  advanceNativeInheritanceTemplate(catalog, mergedModels);
+  advanceNativeInheritanceTemplate(catalog, mergedModels, shouldUpgradeToUpstreamEntry);
   // The second writer of this file. A dashboard model toggle, a combo edit, or a Codex account
   // login reaches `convergeCodexCatalog` and commits through `fixedCommit`, never through
   // `writeRetainedCatalogSync`, so the #4730 uniqueness guard has to stand here too or the same

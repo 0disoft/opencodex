@@ -3,7 +3,6 @@ import { isPlainObject } from "../../lib/plain-data";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
 import { hasOcxRoutedAuthorship } from "./ownership";
-import { shouldUpgradeToUpstreamEntry } from "./metadata";
 import type { RawCatalog, RawEntry } from "./parsing";
 
 /** Internal source evidence, outside the emitted model collection. */
@@ -46,10 +45,14 @@ export function captureNativeInheritanceTemplate(catalog: RawCatalog, enabled: b
 /**
  * Replace upgradeable source evidence with the writer's fully normalized native result.
  * Non-upgraded source evidence stays pristine, preserving existing byte-idempotent builds.
+ * The writer passes its upgrade rule in: importing it from `metadata.ts` here would close a
+ * load-time cycle through `bundled.ts`, which reads this module's retained template.
  */
-export function advanceNativeInheritanceTemplate(catalog: RawCatalog, entries: readonly RawEntry[]): void {
+export function advanceNativeInheritanceTemplate(
+  catalog: RawCatalog, entries: readonly RawEntry[], shouldUpgrade: (entry: RawEntry) => boolean,
+): void {
   const retained = retainedNativeInheritanceTemplate(catalog);
-  if (!retained || !shouldUpgradeToUpstreamEntry(retained)) return;
+  if (!retained || !shouldUpgrade(retained)) return;
   const upgraded = entries.find(row => row.slug === retained.slug && isSupportedNativeTemplate(row));
   if (upgraded) catalog[NATIVE_INHERITANCE_TEMPLATE_FIELD] = structuredClone(upgraded);
 }

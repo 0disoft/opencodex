@@ -558,7 +558,7 @@ function writeRetainedCatalogSync({
   applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
-  advanceNativeInheritanceTemplate(catalog, catalog.models);
+  advanceNativeInheritanceTemplate(catalog, catalog.models, shouldUpgradeToUpstreamEntry);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering
   // against the effort clamp is load-bearing rather than cosmetic.
   catalog.models = enforceCatalogSlugUniqueness(omitDisabledNativeCatalogEntries(catalog.models, config), true);
