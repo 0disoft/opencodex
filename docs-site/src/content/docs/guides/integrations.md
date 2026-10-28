@@ -912,6 +912,8 @@ ocx agent roles suggest
 ocx agent roles suggest --model xai/grok-4.5 --apply
 ```
 
+Under the table, **Change history** lists the newest changes a save, an auto-assign apply or `ocx agent roles set` wrote, newest first, in whole batches and never more than 50, so an Apply all is listed with every role it wrote or not at all, with each role's model and effort before and after. One Apply all is one entry. **Restore** writes the earlier values back through the same save, so a restore is listed too. A save never removes a model pin, so a role that had none keeps its current model and gets only its effort back. The history lives in `integrations/codex-agent-roles.jsonl` under the opencodex config directory, which retains at most 256 KiB and 1000 rows by dropping its oldest whole batches. Compaction targets 128 KiB and preserves a Restore together with its complete source batch when they fit both limits, making room by dropping unrelated older batches; history can still expire as later writes arrive. The writer captures the bounded history before appending so a Restore does not evict its own source at the retention boundary; the omo card's Restore center above tracks only `~/.omo/agent/models.json`. Each change records the Codex home it was made in, and only the current home's changes are listed or restored, so after pointing `CODEX_HOME` elsewhere the list starts empty and a Restore from another home's history is refused. If the history file cannot be read, the section says so in place of the list, and the role table keeps working.
+
 ## Kilo
 
 Kilo CLI, VS Code, and JetBrains share one global config. This integration writes
@@ -924,6 +926,9 @@ Kilo merges all of these global files. If another candidate also defines
 remove `provider.opencodex` from those files before enabling the integration. An unreadable or unsafe
 candidate also blocks the write. Disable can still remove a block owned in the recorded file
 while another candidate conflicts or cannot be parsed; the other candidate is left untouched.
+
+OpenCodex reads these candidate files as JSONC. A `//` line comment ends at a CR, LF, or CRLF
+line ending, so a file saved with any of these line endings keeps the settings that follow a comment.
 
 The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
 `models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
@@ -939,6 +944,9 @@ commas in other keys are not preserved. Kilo is on the implicit catalog fan-out:
 sync`, `POST /api/sync`, and visibility, provider, or preset changes refresh an owned Kilo
 block under the same safe owned-only rules as every other client, and a new Kilo session
 loads the updated file.
+
+When reading these candidate files, OpenCodex accepts a trailing comma after an array element or
+object property. Write an empty array or object as `[]` or `{}`; `[,]` and `{,}` are refused as malformed.
 
 ```bash
 ocx integration client enable --client kilo

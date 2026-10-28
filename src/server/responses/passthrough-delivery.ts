@@ -1,4 +1,5 @@
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
@@ -471,8 +472,8 @@ export async function deliverPassthroughResponse(
   if (isUsageDebugEnabled() && originalContentType) logCtx.usageDebugContentType = originalContentType;
   if (responseEffects.plaintextV2AgentMessageToolNames.size > 0
     && upstreamResponse.ok && upstreamResponse.body && (parsed.stream || canonicalBufferedJson)
-    && !originalContentType?.toLowerCase().includes("text/event-stream")
-    && !originalContentType?.toLowerCase().includes("application/json")
+    && !hasResponseMediaType(upstreamResponse.headers, "text/event-stream")
+    && !hasResponseMediaType(upstreamResponse.headers, "application/json")
     && !isCodexWsUpstreamResponse(upstreamResponse)
     && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
     upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse, {
@@ -490,8 +491,8 @@ export async function deliverPassthroughResponse(
     }
     // ChatGPT may omit Content-Type on SSE responses. Plaintext V2 responses
     // reach this fallback only after their first Responses event is confirmed.
-    const passthroughCt = headers.get("content-type")?.toLowerCase();
-    const isEventStream = passthroughCt?.includes("text/event-stream")
+    const passthroughCt = headers.get("content-type");
+    const isEventStream = hasResponseMediaType(headers, "text/event-stream")
       || (responseEffects.plaintextV2AgentMessageToolNames.size === 0
         && upstreamResponse.ok
         && !!upstreamResponse.body
@@ -1338,7 +1339,7 @@ export async function deliverPassthroughResponse(
         headers,
       }));
     }
-    if (headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    if (hasResponseMediaType(headers, "application/json")) {
       // Bounded whole-body read: a non-streaming upstream JSON body is fully materialized
       // here (and again by the request-log finalizer and the WebSocket bridge's reframing),
       // so an unbounded .text() would let a hostile or stuck upstream grow proxy memory

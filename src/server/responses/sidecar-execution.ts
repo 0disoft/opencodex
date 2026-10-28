@@ -74,6 +74,7 @@ export async function executeResponsesSidecars(
     | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
+    | "admissionScope"
   >,
   transportState: Pick<
     ResponsesTransport,
@@ -126,6 +127,7 @@ export async function executeResponsesSidecars(
     translatorBudget,
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
+    admissionScope,
   } = requestState;
   const { routedCompaction, openAiSidecar } = sidecarState;
   const { reserveCredentialHop } = sendBudgetState;
@@ -192,6 +194,7 @@ export async function executeResponsesSidecars(
       config,
       workerIdentity: `${route.modelId} (provider ${route.providerName})`,
       workerModelId: route.modelId,
+      admissionScope,
       abortSignal: options.abortSignal,
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,

@@ -18,6 +18,9 @@ Judgment precedes local hosted-image display projection, which replaces image ca
 canonical SSE buffered for JSON callers is judged after restoration and before that projection too.
 Accepted bodies retain response tool ownership and preinspection identity, with stale representation
 headers removed after decoding. Existing non-replayable responses bypass inspection.
+The guard uses the [exact internal media-type match](inventory.md#internal-response-media-types)
+for JSON too: mixed-case JSON is inspected, while unrelated types and JSON names inside parameters
+remain unread. Native delivery applies the same rule before choosing its SSE or JSON decoder.
 Translated Chat, runTurn and native Chat terminal owners stay outside this buffered guard.
 The streaming sibling below uses the existing inspector and rewrite readers; it never replays output.
 `src/lib/errors.ts` declares the code and `src/bridge/errors.ts` preserves it through combo error
@@ -71,6 +74,10 @@ Coverage: `tests/server/server-combo-stream-required-tool.test.ts`,
 An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
 downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts`, which owns one
 reader and buffers only until one of these boundaries:
+
+SSE selection uses the [exact internal media-type match](inventory.md#internal-response-media-types).
+Explicit non-SSE types pass through unread, including parameters or longer subtypes containing the
+event-stream token. A caller can still opt into inspecting a response without a content type.
 
 Native post-header reset recovery shares that boundary, because it is asking the same question
 about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —

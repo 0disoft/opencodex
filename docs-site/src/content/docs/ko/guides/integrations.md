@@ -249,9 +249,13 @@ Kilo CLI, VS Code, JetBrains는 전역 설정을 공유합니다. 이 연동은 
 
 Kilo는 이 전역 파일을 모두 병합합니다. 다른 후보 파일에도 `provider.opencodex`가 있으면 상태에 충돌 파일을 표시하고 적용과 교체를 거부합니다. 연동을 켜기 전에 해당 파일에서 `provider.opencodex`를 제거하세요. 이미 소유한 파일의 블록은 충돌 중에도 비활성화할 수 있습니다. 읽을 수 없거나 안전하지 않은 후보 파일도 쓰기를 막습니다.
 
+OpenCodex는 이 후보 파일을 JSONC로 읽습니다. `//` 한 줄 주석은 CR, LF, CRLF 줄바꿈에서 끝나므로, 어떤 줄바꿈으로 저장한 파일이든 주석 뒤의 설정을 그대로 읽습니다.
+
 관리하는 부분은 OpenCode V1 형식의 `provider.opencodex`(`npm`, `options`, `models`)뿐입니다. OpenCode V2의 `providers` 키는 내보내지 않습니다. 대신 모델별 추론 선택지는 프로바이더 블록 안의 변형 맵으로, OpenCode 내보내기와 같은 유효 정규 메타데이터에서 기록됩니다. `$schema`, `model`, `enabled_providers`, MCP 등의 키는 사용자가 관리합니다. 적용한 뒤 Kilo에서 `opencodex/<provider/model>`을 선택하세요.
 
 루프백에서는 `options.apiKey`로 `{env:OPENCODEX_KILO_API_KEY}`를 사용합니다. 루프백이 아닌 바인드에서는 인증을 `options.headers["x-opencodex-api-key"]`로 옮기며 실제 키를 저장하지 않습니다. 적용 시 전역 파일 전체를 보기 좋은 JSON으로 다시 쓰므로 다른 키의 주석과 후행 쉼표는 보존되지 않습니다. Kilo는 자동 카탈로그 갱신 대상입니다. `ocx sync`, `POST /api/sync`, 표시 여부·프로바이더·프리셋 변경은 다른 클라이언트와 같은 소유 블록만 갱신하는 안전한 규칙으로 소유한 Kilo 블록을 갱신하며, 새 Kilo 세션이 갱신된 파일을 읽습니다.
+
+후보 파일을 읽을 때 배열 요소나 객체 속성 뒤의 후행 쉼표는 허용합니다. 빈 배열과 객체는 `[]`, `{}`로 작성하세요. `[,]`, `{,}`는 잘못된 형식으로 거부합니다.
 
 ```bash
 ocx integration client enable --client kilo

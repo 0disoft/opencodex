@@ -270,6 +270,7 @@
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-plan-slot.ts",
+        "src/server/advisor-admission-scope.ts",
         "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"
       ]
@@ -533,6 +534,7 @@
         "src/adapters/",
         "src/chat/",
         "src/combos/",
+        "src/lib/tool-argument-integers.ts",
         "src/oauth/",
         "src/providers/",
         "src/responses/",

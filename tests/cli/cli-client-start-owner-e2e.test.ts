@@ -128,12 +128,10 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = watchdogMs(10_000);
   try {
-    // A port nothing listens on, so the start path's liveness probe reads absent.
-    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
-    const freePort = probe.port;
-    probe.stop(true);
+    // The child preload refuses the configured-port probe deterministically;
+    // the ownership fence must still prevent all runtime publication.
     writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
-      port: freePort,
+      port: 42101,
       hostname: "127.0.0.1",
       codexAutoStart: false,
       syncResumeHistory: false,
@@ -156,6 +154,8 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
     }));
     child = Bun.spawn([
       process.execPath,
+      "--preload",
+      repoPath("tests/fixtures/refused-local-probe-preload.ts"),
       "--preload",
       repoPath("tests/fixtures/client-runtime-claim-preload.ts"),
       repoPath("src/cli/index.ts"),
@@ -182,6 +182,7 @@ test.skipIf(process.platform === "win32")("a desktop claim committed as the clie
       }),
     ]);
     const output = result[2] || result[1];
+    expect(result[2], output).toContain("[refused-probe] ECONNREFUSED");
     // The claim landed on the connected-client branch, after the recovery fence passed.
     expect(result[2], output).toContain("[claim-preload] desktop claim committed at client runtime load");
     expect(result[0], output).toBe(0);
