@@ -1273,7 +1273,7 @@
   "start-ownership-publication.test.ts": "cli", "startup-action-control-elevation.test.ts": "server",
   "startup-action-control.test.ts": "server", "login-shell-path.test.ts": "server", "startup-health-ui.test.ts": "gui",
   "startup-prompt.test.ts": "server", "state-store-sweeper.test.ts": "oauth",
-  "stepfun-provider.test.ts": "providers", "stop-deferred-teardown.test.ts": "service",
+  "stepfun-provider.test.ts": "providers", "stop-deferred-teardown.test.ts": "service", "connected-stop-capability-auth.test.ts": "service",
   "stop-direct-fetch.test.ts": "service",
   "storage-cleanup.test.ts": "storage", "storage-mutation-race.test.ts": "storage",
   "storage-policy-config-race.test.ts": "storage", "storage-policy-job-responsive.test.ts": "storage",

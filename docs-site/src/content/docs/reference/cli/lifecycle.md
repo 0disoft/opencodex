@@ -88,9 +88,10 @@ On a connected client (a Remote Link Child or a hub client), `ocx stop` leaves C
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
 client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
-A connected stop verifies the local runtime before changing its service: a client-role listener
-with the matching PID is supported, while an ordinary proxy must explicitly advertise preservation
-across API, signal and service shutdown. Older or unverified ordinary runtimes are refused before
+A connected stop verifies the listener against the protected local runtime record before changing
+its service. Both client-role listeners and ordinary proxies must prove that identity; an ordinary
+proxy must also advertise preservation across API, signal and service shutdown in an authenticated
+read. Older or unverified runtimes are refused before
 stop actions. Update/restart that runtime through its supervisor and retry; use `ocx disconnect`
 only when you intend to release the connection-owned integrations.
 Repeated stops of an already-stopped client confirm service-manager inactivity and absence at the
