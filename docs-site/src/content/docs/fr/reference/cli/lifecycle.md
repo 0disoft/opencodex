@@ -171,6 +171,8 @@ Si des processus Codex `app-server` de longue durée sont encore actifs, `ocx sy
 
 Lorsque la commande s’exécute depuis l’application Codex, le redémarrage est confié à un assistant détaché et cette session se termine avec l’application.
 
+**Synchronisation épinglée.** `ocx sync --expect-link <linkId>` (enfant Remote Link) et `ocx sync --expect-hub-key <apiKeyId>` (client hub) ne synchronisent que si cette machine est toujours connectée à ce lien ou avec cette clé. Sinon, rien n'est modifié, les fournisseurs locaux ne sont pas synchronisés, la commande quitte avec le code 5 et la dernière ligne de stderr est `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`. Un drapeau mal formé ou répété quitte avec le code 2. Détails : [référence anglaise](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key).
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Invalide le cache local du sélecteur de modèles de Codex afin qu’il soit reconstruit à partir du catalogue opencodex actif. Le même avertissement concernant un `app-server` obsolète et les mêmes options de redémarrage que pour `ocx sync` s’appliquent.
@@ -353,7 +355,7 @@ Lorsqu'une version plus récente du paquet est connue, la zone de notification a
 
 ### `ocx gui`
 
-Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://localhost:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
+Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http://127.0.0.1:<port>` — ou `http://127.0.0.1:<port de gestion>` lorsque l’ingress de gestion du hub est activé — et démarre automatiquement le proxy s’il n’est pas actif.
 
 ## Mise à jour
 

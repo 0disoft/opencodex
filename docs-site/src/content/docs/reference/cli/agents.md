@@ -963,6 +963,39 @@ native-mode flags are rejected; failed runtime save has no local fallback. Apply
 is a separate existing Desktop action on its machine, so verify host/context
 before choosing it. Rendered models are not proof of native application.
 
+### `ocx codex [codex args...]`
+
+The key is supplied only when the configuration and its namespaces are protected from other principals; the current user and privileged OS authorities are trusted. Same-user processes are trusted: an actor with your write access can already read your OpenCodex key file. Same-user configuration replacement between verification and native startup is outside this threat model; the launcher does not freeze configuration at handoff.
+
+On a normal Windows installation, default ProgramData permissions allow other users to create directories. Automatic credentials are therefore withheld even when `ProgramData\OpenAI\Codex` is absent. The system Codex configuration folder under ProgramData must exist and be writable only by Administrators/SYSTEM, and its ancestors must prevent replacement by other users. Ask an administrator to review the directory policy. opencodex never changes ACLs itself and provides no provisioning command.
+
+Alternatively, supply the key yourself, for example by exporting `OPENCODEX_API_AUTH_TOKEN`; `ocx codex` leaves it untouched. Existing system configuration files still withhold automatic credentials and require separate review. Each withholding reason produces one short, specific stderr diagnostic without key values, key-file contents or key-file paths.
+
+Use `--` before a single-word prompt so it cannot select an unknown Codex subcommand.
+
+The machine configuration namespace must also prevent other users from creating missing system files. An unprotected Windows ProgramData/OpenAI/Codex namespace withholds automatic credentials; the launcher does not create it. macOS accepts deny-only and read-only allow ACLs, but refuses any allow entry granting write, append, delete, attribute/security changes or ownership changes, even after a deny entry. Unknown tags and inspection errors refuse.
+
+A fresh service token is loaded only when argv is within the allowlist below, the environment has no nonempty HTTP(S)/ALL proxy or `CODEX_*`/`OPENAI_*`/`AZURE_OPENAI_*` overrides (canonical `CODEX_HOME` is allowed), and the home/config/system namespaces pass ownership checks. The configuration must contain only audited keys and the exact managed loopback provider, with no additional credential consumers or configuration layers. Every unsupported argument, including `-c`/`--config`, `-p`/`--profile`, unknown flags and `resume`/`fork`, withholds the token with a value-free diagnostic; explicit user credentials and original arguments are preserved.
+
+The canonical home directory and `config.toml` must belong to the current user. POSIX denies group/other writes; Windows checks owner SID and rejects DACL write grants outside the current user, SYSTEM and Administrators. Ancestor replacement permissions are checked too. macOS additionally requires no forced Codex configuration preferences. These checks exclude other-user writers; they do not isolate a malicious process running as the same user or an administrator.
+
+| Allowlist | Flags |
+| --- | --- |
+| Switches | `--no-daemon`, `--json`, `--ephemeral`, `--skip-git-repo-check`, `--no-alt-screen`, `--full-auto`, `--dangerously-bypass-approvals-and-sandbox`, `--search` |
+| One value | `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`, `--image`/`-i` |
+
+
+
+Automatic credential delivery resolves `CODEX_HOME` as a literal path (including `~` and whitespace), verifies that home, and passes its canonical absolute path to the child. An unreadable home skips loading. Any nonempty `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` variable, in any letter case, also skips loading regardless of `NO_PROXY`; denied launches and user-exported credentials remain unchanged. With a newly loaded token, both child `NO_PROXY` and `no_proxy` include `127.0.0.1` and `::1`, preserving existing bypass entries. Enabling `features.respect_system_proxy` or forwarding `--enable`/`--disable` skips automatic loading.
+
+Ensure the proxy is running, then launch Codex with the original arguments. Routing remains in Codex configuration; the launcher never rewrites it. Native and foreign routes skip startup. Unknown routing warns and attempts startup; a failed startup warns and continues. Help/version and internal commands such as `login`, `doctor`, and `help` skip startup and automatic token loading.
+
+A missing `OPENCODEX_API_AUTH_TOKEN` is read from this installation's `service-api-token` only when the selected provider's complete transport configuration matches the managed block for the configured loopback listener or persisted local client connection. Names and injection comments alone grant no credential access. Unknown or remote destinations, default profiles, project configuration, `OPENAI_BASE_URL`, and forwarded `-c`/`--config`, `-p`/`--profile`, `-C`/`--cd`, or `--remote` options skip automatic loading. User-exported credentials and arguments are preserved; token-file overrides cannot select a different credential, and management-token collisions are refused.
+
+Only a matched autostart wrapper launches its backing Codex directly. Unknown state, including an inspection exception, requires a verified bypass; Windows CMD managed wrappers must match the complete current generated template before the selected absolute command runs with `OCX_SHIM_BYPASS=1`. Ordinary npm launchers remain supported. Unverifiable or obsolete wrappers refuse with exit 1 and start no Codex; run `ocx codex-shim install` to refresh them. This launch does not repair shims. The content check does not establish Windows backing-file provenance or prevent concurrent pathname replacement.
+
+Use `ocx help codex` for launcher help and `ocx codex --help` for Codex help. Launching plain `codex` later retains its existing behavior.
+
 ### `ocx opencode [opencode args...]`
 
 Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
@@ -1166,7 +1199,8 @@ a direct Bun/source launch has no such proof, ignores ambient and persisted cand
 `candidate_unavailable` on POSIX. On Windows x64, a proof-captured absolute standard npm `codex.cmd`
 can be managed when held local handles bind its package, a held-bound Node/npm toolchain — prefix-local
 when present, otherwise the captured-PATH pair anchored to the launcher architecture — and the first
-in-prefix platform backing. Other Windows layouts remain deferred or unmanaged. A `managed` Windows result classifies
+in-prefix platform backing. Plan paths and configured version-manager roots must use their canonical long DOS names;
+aliases, unavailable roots and reparse points leave the installation unmanaged. Other Windows layouts remain deferred or unmanaged. A `managed` Windows result classifies
 the observed installation layout only: the bound Node/npm is the updater's read-only metadata toolchain, never a claim
 about which interpreter a later `codex.cmd` invocation resolves, and planning stays read-only with apply disabled.
 Windows never consults persisted state, so a run
@@ -1190,16 +1224,17 @@ The plan requires an attested npm-global installation and a linked package manif
 Windows supports only an explicit absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain —
 prefix-local when present, otherwise the captured-PATH pair anchored to the launcher architecture;
 PATH-only selection, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
-It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
+On POSIX, it queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
 using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
 
 An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
 installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
-process observation. Supported Windows metadata queries use the observed Node/npm under matching
-held handles. A completed Windows read-only plan reports a deterministic ID, `applicable: false`
-and `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier. Unsupported
+process observation. On Windows, held Node/npm entrypoints do not establish trust in npm's module closure
+or Node's executable dependencies. The default plan runs no metadata child and reports `target_unresolved`
+until that closure is verified write-private and held; separate PATH selection grants no execution authority.
+Windows apply remains disabled; observing an installation does not authorize toolchain execution. Unsupported
 Windows layouts return `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
 command installs nothing, changes no application state and never signals a session. Windows apply
@@ -1216,6 +1251,23 @@ Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macO
 approved plan under an installation lease, verifies the exact main/platform archives, installs them
 offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
 Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
+Installation directories and staging require trusted POSIX ownership and permissions throughout their
+ancestry. Unsafe installation paths report `installation_prefix_unsupported` or
+`installation_paths_untrusted`; unsafe temporary roots report `staging_path_untrusted`. Use a private
+temporary directory below trusted ancestors (root-owned sticky temporary roots are supported).
+Owned session starts, desktop restarts and runtime/shim selection changes report busy while installation
+and readback run. An unconfirmed installer or verification child keeps admission closed. Admission
+recovers when the owned process group is proven gone, including a verification child that closes after
+its reap deadline. Worker loss before commit also restores admission; worker close after commit alone
+does not. Durable recovery records preserve this exclusion across proxy restarts. Missing child identity,
+partial records or inaccessible liveness evidence require inspection. A complete terminal write left
+before its publication rename can restore admission after restart when its exact owner and current
+parent/group absence are verified; incomplete or armed pending writes still require inspection.
+Recovery does not change an
+ambiguous job result, retry installation or reclaim an abandoned installation lease.
+Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary
+operations. With history, admission reads the protected canonical home target; unsafe recovery
+paths still report busy. This does not relax the updater's installation or config-path eligibility.
 Windows apply, shim repair, native apps and other installation managers remain unsupported.
 
 Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs

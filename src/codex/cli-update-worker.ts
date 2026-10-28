@@ -26,6 +26,7 @@ import {
   type CodexCliUpdateInspectionSnapshot,
 } from "./cli-update-inspection-context";
 import { codexCliUpdateIsCancelled, createWorkerCommitWindow } from "./cli-update-selection-gate";
+import { createCodexCliUpdateRecovery } from "./cli-update-recovery";
 
 export interface CodexCliUpdateWorkerRunMessage {
   readonly type: "run";
@@ -40,6 +41,7 @@ export interface CodexCliUpdateWorkerRunMessage {
   readonly gate: SharedArrayBuffer;
   /** Per-job cancel/commit fence cell. */
   readonly fence: SharedArrayBuffer;
+  readonly owner?: number;
   /** Env snapshot: a Worker may not observe parent mutations on every platform. */
   readonly env?: { readonly CODEX_HOME?: string; readonly OPENCODEX_HOME?: string };
 }
@@ -76,7 +78,9 @@ function isRunMessage(data: unknown): data is CodexCliUpdateWorkerRunMessage {
     && (o.channel === undefined || o.channel === "latest")
     && (o.snapshot === null || (typeof o.snapshot === "object" && !Array.isArray(o.snapshot)))
     && isSharedBuffer(o.gate)
-    && isSharedBuffer(o.fence);
+    && o.gate.byteLength >= Int32Array.BYTES_PER_ELEMENT * 2
+    && isSharedBuffer(o.fence) && o.fence.byteLength >= Int32Array.BYTES_PER_ELEMENT * 3
+    && (o.owner === undefined || (Number.isSafeInteger(o.owner) && (o.owner as number) >= 2));
 }
 
 declare const self: Worker;
@@ -121,7 +125,8 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
           inspectionDeps,
           signal: applyAbort.signal,
           isCancelled: codexCliUpdateIsCancelled(message.fence),
-          commitWindow: createWorkerCommitWindow({ gate: message.gate, fence: message.fence }),
+          commitWindow: createWorkerCommitWindow({ gate: message.gate, fence: message.fence, owner: message.owner,
+            recovery: process.platform === "win32" ? undefined : createCodexCliUpdateRecovery(message.requestId) }),
         });
         self.postMessage({
           type: "done", requestId: message.requestId, jobId: message.jobId,

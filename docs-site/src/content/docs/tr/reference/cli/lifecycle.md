@@ -276,6 +276,8 @@ alınamaz, eski bir seçici ise alınabilir.
 Komut Codex uygulamasının içinden çalıştırıldığında yeniden başlatma ayrılmış
 bir yardımcıya devredilir ve bu oturum uygulamayla birlikte sona erer.
 
+**Sabitlenmiş eşitleme.** `ocx sync --expect-link <linkId>` (Remote Link Child) ve `ocx sync --expect-hub-key <apiKeyId>` (hub istemcisi), yalnızca bu makine hâlâ o bağlantıya veya o anahtarla bağlıysa eşitler. Aksi halde hiçbir şey değişmez, yerel sağlayıcılar eşitlenmez, komut 5 koduyla çıkar ve stderr'in son satırı `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}` olur. Hatalı veya tekrarlanan bir bayrak 2 koduyla çıkar. Ayrıntılar: [İngilizce başvuru](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key).
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex'in yerel model seçici önbelleğini geçersiz kılın, böylece aktif opencodex
@@ -513,7 +515,7 @@ Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimd�
 
 ### `ocx gui`
 
-Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
+Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://127.0.0.1:<port>`
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme

@@ -53,6 +53,8 @@ export type ExemptionReason =
   | "dead"
   /** Desktop shell internal display-state POST; the CLI has no app updater state to publish. */
   | "desktop-internal"
+  /** Dashboard-only discovery for an interaction the CLI does not expose. */
+  | "gui-only"
   /**
    * A verb is owed but belongs to a later work-phase. BOUNDED: requires `owner` and
    * `ownerDoc`, and the parity test asserts that tracked doc exists and names the route.
@@ -171,11 +173,11 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
   { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
   { method: "GET", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Certificate status is available over authenticated HTTP while the desktop compatibility runtime/CLI status contract is integrated." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires a confirmed local dashboard session; raw admin tokens cannot enroll or remove OS trust." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires an operator-paired local dashboard session; raw admin tokens and automatic loopback sessions cannot enroll or remove OS trust." } },
   { method: "GET", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Experimental runtime status is authenticated HTTP while the native compatibility UI and CLI contract are integrated." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Native app launch and account-wide UI trial require explicit local dashboard confirmation." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Native app launch and account-wide UI trial require explicit confirmation from an operator-paired local dashboard session." } },
   { method: "GET", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "The persisted startup preference is currently owned by the local desktop compatibility panel." } },
-  { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an explicit local GUI action and fresh field revision." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an operator-paired local GUI action and fresh field revision." } },
   // server/management/codex-cli-update-routes
   { method: "GET", path: "/api/codex/cli-update/plan", module: "server/management/codex-cli-update-routes", mutates: false, exempt: { reason: "local-transport", why: "The CLI runs the same proof-bound plan builder locally; the authenticated route also supplies the dashboard plan." } },
   { method: "POST", path: "/api/codex/cli-update/apply", module: "server/management/codex-cli-update-routes", mutates: true, exempt: { reason: "session-only", why: "HTTP apply requires a confirmed trusted loopback GUI session; the CLI invokes the same durable job owner locally." } },
@@ -449,6 +451,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/system/codex-app-server", module: "server/management/system-routes", mutates: false, mechanism: "path-constant" },
   { method: "POST", path: "/api/system/codex-restart", module: "server/management/system-routes", mutates: true, mechanism: "path-constant" },
   { method: "POST", path: "/api/providers/reload", module: "server/management/provider-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "capability-principal", why: "Gated on the local-provider-reload-capability principal (provider-routes.ts:467), not an operator action." } },
+  { method: "GET", path: "/api/client-integrations/hermes/profiles", module: "server/management/hermes-profile-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "gui-only", why: "The dashboard discovers selectable Hermes profiles; the CLI intentionally has no Hermes profile selector." } },
   { method: "GET", path: "/api/client-integrations/{clientId}", module: "server/management/integration-routes", mutates: false, mechanism: "prefix-decode" },
   { method: "PUT", path: "/api/client-integrations/{clientId}", module: "server/management/integration-routes", mutates: true, mechanism: "prefix-decode" },
   { method: "GET", path: "/api/request-history/{id}", module: "server/management/request-history-routes", mutates: false, mechanism: "slice" },

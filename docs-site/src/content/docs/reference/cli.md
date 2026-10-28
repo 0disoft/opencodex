@@ -166,8 +166,10 @@ Codex or npm, control a running process, or write configuration/cache state.
 npm-global installation. It resolves `latest` through the official npm registry, validates the
 exact version and SHA-512 integrity, and refuses active sessions or incomplete process observation.
 Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
-No software is installed and no process is signalled. A supported Windows installation can produce a
-deterministic read-only plan with `applicable: false` and `refusal: windows_apply_disabled`.
+No software is installed and no process is signalled. Windows inspection can bind a supported installation,
+but the default plan runs no npm metadata child and reports `target_unresolved` until npm's module closure
+and Node's executable dependencies are verified write-private and held. Binding a separate PATH toolchain
+does not grant that execution authority. Windows apply remains disabled.
 PATH-only selection and OpenCodex autostart wrappers remain deferred.
 See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 

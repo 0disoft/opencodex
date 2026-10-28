@@ -469,13 +469,14 @@ function configuredVersionManagerRoots(
   const roots: string[] = [];
   for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) {
     const raw = platform === "win32" ? caseInsensitiveEnv(env, name) : env[name];
-    if (!raw || !isLocalAbsoluteInspectionPath(raw, platform)) continue;
-    // Windows roots are advisory lexical labels only in this first slice. Do
-    // not resolve or open them until the handle-bound Windows layer exists.
+    if (!raw) continue;
+    // Preserve Windows root spellings for lexical exclusions; the managed-plan
+    // layer refuses roots that cannot be verified as canonical through handles.
     if (platform === "win32") {
       roots.push(normalizePath(win32.normalize(raw), platform));
       continue;
     }
+    if (!isLocalAbsoluteInspectionPath(raw, platform)) continue;
     const canonical = isSafeLocalInspectionPath(raw, deps) ? canonicalize(raw, deps) : null;
     if (canonical) roots.push(normalizePath(canonical, platform));
   }
@@ -1113,7 +1114,7 @@ export async function inspectCodexCliInstall(
    });
    return (await import("./cli-windows-plan-provenance")).inspectWindowsCodexCliPlanInstall(deps, deferred,
      path => isAppBundledCodexPath(path, platform) || isCodexCliUpdateVersionManagerPath(path, platform)
-       || isWithinConfiguredVersionManagerRoot(path, managerRoots, platform));
+       || isWithinConfiguredVersionManagerRoot(path, managerRoots, platform), managerRoots);
  }
   const configDir = deps.configDir ?? getConfigDir();
   if (!isSafeLocalInspectionPath(configDir, deps)) {

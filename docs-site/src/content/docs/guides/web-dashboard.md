@@ -13,9 +13,11 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
-management ingress is enabled — auto-starting the proxy first if needed. In
-development you can run the GUI dev server separately against a running proxy:
+This opens the running proxy's address in your browser: `http://127.0.0.1:<port>` by default,
+or `http://[::1]:<port>` for a literal IPv6 loopback bind. These literal addresses preserve the
+configured origin required for local browser pairing. With hub management ingress enabled, it opens
+`http://127.0.0.1:<management port>`. The proxy starts automatically first if needed. In development
+you can run the GUI dev server separately against a running proxy:
 
 ```bash
 ocx start
@@ -114,7 +116,7 @@ is visible) and never forces an upstream refresh.
 | **Native reasoning retention** | Independently opt into reasoning ciphertext forwarding on native model or account changes. Both default off; account retention is experimental. See [the configuration scope](/reference/configuration/server/#native-reasoning-retention). |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
-| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
+| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. With restart on, Codex routing and its model catalog stay in place while the package is replaced, so a Codex app that loads them during the update still sees your routed models; the restarted proxy takes them over, and `ocx stop` restores native Codex if it never comes back. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |

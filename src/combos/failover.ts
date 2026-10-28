@@ -13,6 +13,7 @@ import {
 
 interface TargetCooldown {
   cooldownUntil: number;
+  revision: number;
   status?: number;
 }
 
@@ -44,6 +45,8 @@ const HTTP_MONTH_INDEX: Record<string, number> = {
 
 /** Map<`${comboId}\0${provider/model}`, TargetCooldown> */
 const targetCooldowns = new Map<string, TargetCooldown>();
+// Never reset: an in-flight reservation may still refer to an entry cleared from the map.
+let nextCooldownRevision = 0;
 let lastReconciledGeneration = 0;
 let liveComboTargets = new Set<string>();
 
@@ -163,6 +166,42 @@ export function isComboTargetInCooldown(
   return true;
 }
 
+/** The live cooldown expiry for one target, or undefined once it is absent or elapsed. */
+export function comboTargetCooldownExpiry(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  now = Date.now(),
+): number | undefined {
+  const key = cooldownMapKey(comboId, target);
+  const entry = targetCooldowns.get(key);
+  if (!entry) return undefined;
+  if (entry.cooldownUntil <= now) {
+    targetCooldowns.delete(key);
+    return undefined;
+  }
+  return entry.cooldownUntil;
+}
+
+/** Identity of the current live write, independent of its possibly repeated expiry. */
+export function comboTargetCooldownRevision(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  now = Date.now(),
+): number | undefined {
+  return isComboTargetInCooldown(comboId, target, now)
+    ? targetCooldowns.get(cooldownMapKey(comboId, target))?.revision : undefined;
+}
+
+/** Lift only the reserved write; a replacement with even the same expiry survives. */
+export function clearComboTargetCooldownIfUnchanged(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  expectedRevision: number,
+): void {
+  const key = cooldownMapKey(comboId, target);
+  if (targetCooldowns.get(key)?.revision === expectedRevision) targetCooldowns.delete(key);
+}
+
 export function isTransientRequestRateLimit(input: {
   status?: number;
   code?: string | null;
@@ -262,6 +301,7 @@ export function coolComboTarget(
         message: options?.message,
       }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
+    revision: ++nextCooldownRevision,
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
     status: options?.status,
@@ -313,7 +353,8 @@ export function sweepExpiredComboTargetCooldowns(now = Date.now()): number {
   return removed;
 }
 
-export function clearComboTargetCooldowns(comboId?: string): void {
+/** Clear all cooldowns, one combo, or only the supplied target keys within that combo. */
+export function clearComboTargetCooldowns(comboId?: string, targetKeys?: Iterable<string>): void {
   if (comboId === undefined) {
     targetCooldowns.clear();
     liveComboTargets.clear();
@@ -321,6 +362,10 @@ export function clearComboTargetCooldowns(comboId?: string): void {
     return;
   }
   const prefix = `${comboId}\0`;
+  if (targetKeys !== undefined) {
+    for (const key of targetKeys) targetCooldowns.delete(`${prefix}${key}`);
+    return;
+  }
   for (const key of targetCooldowns.keys()) {
     if (key.startsWith(prefix)) targetCooldowns.delete(key);
   }
@@ -773,7 +818,13 @@ export function codexAccountModelRefusal(
 export function comboFailureDecision(
   status: number,
   message: string,
-  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal; failedAdapter?: string },
+  options?: {
+    code?: string | null;
+    codexModelRefusal?: CodexAccountModelRefusal;
+    failedAdapter?: string;
+    /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
+    verifiedPlanRefusal?: boolean;
+  },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
@@ -846,6 +897,10 @@ export function comboFailureDecision(
   if (["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"].includes(failureCode)) {
     return "hop";
   }
+  // So is a plan refusal (#7684): this account's plan excludes THIS model, and it cools only the
+  // refused target because `comboFailureCooldownScope` reads a 400 as target-scoped. Unlike the
+  // codes above it is honoured only with caller-supplied provenance, never from the code alone.
+  if (failureCode === "model_not_in_plan" && options?.verifiedPlanRefusal === true) return "hop";
   if (modelRefusal === "refusal") return "hop";
   // `free_rate_limited` no longer routes through `isProviderScopedQuotaCap` (it is a
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.

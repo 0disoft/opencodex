@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync,
   realpathSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
 
 export type CodexCliApplyLeaseResult = { readonly kind: "acquired"; release(): boolean }
   | { readonly kind: "busy" | "prefix_unsupported" | "unavailable" };
@@ -39,6 +40,8 @@ export function acquireCodexCliApplyLease(prefix: string): CodexCliApplyLeaseRes
     return released;
   };
   try {
+    try { assertTrustedCodexCliAncestry(prefix); }
+    catch { return { kind: "prefix_unsupported" }; }
     const root = lstatSync(prefix);
     if (!root.isDirectory() || root.isSymbolicLink() || realpathSync.native(prefix) !== prefix
       || (root.mode & 0o022) !== 0 || root.uid !== process.geteuid?.()) return { kind: "prefix_unsupported" };

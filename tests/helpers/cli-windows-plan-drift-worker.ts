@@ -25,6 +25,12 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false) {
             `require('node:fs').writeFileSync(${JSON.stringify(join(snapshot.home!, "metadata-ran"))}, 'unexpected'); process.exit(97);`);
           return report;
         },
+        // The normal closure refusal alone cannot prove drift revalidation. This
+        // injected resolver must remain unreachable after the observed bytes change.
+        resolveTarget: () => {
+          writeFileSync(join(snapshot.home!, "metadata-ran"), "unexpected-resolver");
+          throw new Error("fixture_changed_toolchain_reached_resolver");
+        },
       });
       self.postMessage({ type: "done", requestId: data.requestId, jobId: data.jobId, operation: "plan", plan });
     } catch {

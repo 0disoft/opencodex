@@ -45,7 +45,7 @@ multi-call pairing, overlap and lifecycle release.
 - Translated (non-passthrough, non-run-turn) fetch path: full support — synthetic tool injection,
   guard interception of `advisor` tool calls, advice reinjection as a paired
   assistant-toolCall/toolResult message pair, and worker re-dispatch through the same
-  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Consultations are
+  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Explicitly unfinished tool ends cannot trigger consultation or continuation. Consultations are
   bounded at three per request including automatic calls, with at most four Advisor-owned worker continuations. The tool
   is removed when consultations are exhausted. A repeated call gets one final paired limit result;
   a further call ends with typed 502 `advisor_continuation_limit`, without another worker send.
@@ -84,7 +84,11 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials.
+provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
+immutable provider/model admission scope over the loopback hop as capability-authenticated
+metadata and remains authoritative for every final
+physical Advisor destination, including alias, policy, combo, and retry resolution; the local
+transport credential cannot widen it.
 
 ## Context and safety boundaries
 
