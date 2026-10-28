@@ -1,4 +1,5 @@
 {
+  "codex-cli-windows-plan.test.ts": "codex-integration",
   "codex-launcher-diagnostics.test.ts": "codex-integration",
   "codex-launcher-darwin-acl.test.ts": "codex-integration",
   "codex-launcher-darwin-identity.test.ts": "codex-integration",

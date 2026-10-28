@@ -207,7 +207,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
   const cancelled = (): boolean => deps.signal?.aborted === true || deps.isCancelled?.() === true;
   try {
     if (!/^[0-9a-f]{32}$/.test(planId)) return result("refused", "invalid_plan_id");
-    if ((deps.platform ?? process.platform) === "win32") return result("refused", "windows_inspection_deferred");
+    if ((deps.platform ?? process.platform) === "win32") return result("refused", "windows_apply_disabled");
     if (cancelled()) return result("refused", "cancelled");
     const inspect = deps.inspect ?? inspectCodexCliInstall;
     const first = await inspect(freshInspection(deps));
