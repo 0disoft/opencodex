@@ -1,0 +1,3 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`default output matches the pre-option snapshot; explicit false is byte-identical 1`] = `"b978228381d45d8c962551c4d563babf0503d7095a70aface28a8b2f4c0267b8"`;
