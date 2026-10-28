@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { isComboTargetInCooldown } from "../../src/combos";
+import { isDefiniteContextOverflow } from "../../src/combos/failover";
 
 interface ComboHarness<Server> {
   serve(handler: () => Response | Promise<Response>): Server;
@@ -32,6 +33,8 @@ export function registerComboContextOverflowCases<Server>({
     "prompt is too long: 210000 tokens > 200000 maximum",
     "input is too long for requested model",
     "This model's maximum context length is 8192 tokens; you're over it. Please reduce the length of the messages.",
+    // A relay that serializes a Python SDK exception quotes the provider verdict inside a dict repr.
+    "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}",
     JSON.stringify({ error: { message: "Please reduce the length of the messages or completion." } }),
   ]) {
     test(`context-length 400 advances once without cooling: ${message}`, async () => {
@@ -87,6 +90,10 @@ export function registerComboContextOverflowCases<Server>({
     JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
       message: "Invalid 'tools[0].function.name': 'prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
     JSON.stringify({ error: { message: 'Invalid value for "user": "maximum context length" is not allowed.' } }),
+    JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_value", param: "tools[0].function.name",
+      message: "Invalid 'tools[0].function.name': 'customer's prompt is too long'. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'." } }),
+    JSON.stringify({ error: { param: "tools[0].function.name", message: "customer's prompt is too long" } }),
+    "Invalid 'tools[0].function.name': 'customer\\'s prompt is too long'.",
   ]) {
     test(`ordinary or malformed 400 stays fatal: ${body}`, async () => {
       let backupHits = 0;
@@ -103,6 +110,19 @@ export function registerComboContextOverflowCases<Server>({
       expect(backupHits).toBe(0);
     });
   }
+
+  test("the shared detector accepts SDK-wrapped verdicts and refuses parameter validation", () => {
+    // Sidecar loops classify their own provider failures through this same detector.
+    expect(isDefiniteContextOverflow(400, "Error code: 400 - {'error': {'message': \"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages.\", 'type': 'invalid_request_error', 'param': 'messages', 'code': 'context_length_exceeded'}}")).toBe(true);
+    expect(isDefiniteContextOverflow(400, JSON.stringify({ error: { param: "messages", code: "context_length_exceeded",
+      message: "This model's maximum context length is 8192 tokens." } }))).toBe(true);
+    for (const echo of [
+      JSON.stringify({ error: { code: "invalid_value", message: "customer's prompt is too long" } }),
+      JSON.stringify({ error: { param: "tools[0].function.name", message: "prompt is too long" } }),
+      "Invalid 'tools[0].function.name': 'customer's prompt is too long'.",
+      'Invalid value for "user": "maximum context length" is not allowed.',
+    ]) expect(isDefiniteContextOverflow(400, echo)).toBe(false);
+  });
 
   test("context overflow advances while exhausted retryable targets return the sanitized last status", async () => {
     let backupHits = 0;

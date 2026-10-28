@@ -729,14 +729,23 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
 
 /**
- * Quoted spans echo caller input (a tool name, a parameter value), never the provider's verdict:
- * "Invalid 'tools[0].function.name': 'prompt is too long'" is a validation error. A quote opens
- * only after a boundary, so the apostrophe in "model's maximum context length" is kept.
+ * Parameter validation echoes the caller's own value, so its prose is not a context verdict even
+ * when the value reads like one: "Invalid 'tools[0].function.name': 'prompt is too long'". The
+ * prefix is recognized as syntax; quoted text elsewhere (an SDK error wrapper) stays evidence.
  */
-const QUOTED_CALLER_SPAN = /(^|[\s([{:=,])(?:'[^'\n]*'|"[^"\n]*"|`[^`\n]*`)(?=$|[\s)\]}.,:;!?])/g;
+const PARAMETER_VALIDATION_PREFIX = /^invalid\s+(?:value\s+for\s+)?['"`]/i;
+const PARAMETER_VALIDATION_CODES: ReadonlySet<string> = new Set(["invalid_value", "invalid_type"]);
+/** A `param` naming the conversation is consistent with an overflow; any other names one field. */
+const CONTEXT_PARAM = /^(?:messages|input|prompt|contents?)(?:$|[.[])/i;
+
+function isParameterValidationRecord(record: Record<string, unknown>): boolean {
+  if (typeof record.code === "string" && PARAMETER_VALIDATION_CODES.has(record.code.toLowerCase())) return true;
+  return typeof record.param === "string" && record.param.length > 0 && !CONTEXT_PARAM.test(record.param);
+}
 
 function isDefiniteContextOverflowMessage(text: string): boolean {
-  const normalized = text.toLowerCase().replace(QUOTED_CALLER_SPAN, "$1 ");
+  if (PARAMETER_VALIDATION_PREFIX.test(text.trim())) return false;
+  const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase));
 }
@@ -777,7 +786,7 @@ export function isDefiniteContextOverflow(status: number, message: string): bool
       .find((candidate): candidate is Record<string, unknown> =>
         !!candidate && typeof candidate === "object" && !Array.isArray(candidate)
         && typeof (candidate as Record<string, unknown>).message === "string");
-    if (!source) return false;
+    if (!source || isParameterValidationRecord(source)) return false;
     text = (source.message as string).trim();
   }
   return false;
