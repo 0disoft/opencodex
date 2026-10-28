@@ -55,6 +55,11 @@ async function startAttempt(options: RemoteForwardOptions, reservation: RemotePo
   budget: MessageBudget, capacity: RemoteCapacity, ownerSignal: AbortSignal, deps: RemoteTunnelDeps): Promise<RemoteTunnelPair> {
   const localPort = reservation.port, helpers: RemoteHelper[] = [], exits: Promise<void>[] = [];
   let lostPort = false;
+  let awaitingReceipts = false;
+  const setupFailure = (fallback: unknown) => {
+    const failures = helpers.flatMap(helper => helper.setupFailure ? [helper.setupFailure] : []);
+    return failures.find(error => (error as { code?: string }).code !== "forward_port_lost") ?? failures[0] ?? fallback;
+  };
   let cancelReadiness!: (reason: unknown) => void;
   const cancelled = new Promise<never>((_, reject) => { cancelReadiness = reject; });
   void cancelled.catch(() => {});
@@ -62,6 +67,7 @@ async function startAttempt(options: RemoteForwardOptions, reservation: RemotePo
   const close = (): Promise<void> => closing ??= (async () => {
     alive = false; ownerSignal.removeEventListener("abort", abort);
     const results = await Promise.allSettled(helpers.map(helper => helper.close()));
+    await Promise.allSettled(helpers.map(helper => helper.output));
     reservation.release();
     const failure = results.find(result => result.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
@@ -89,11 +95,13 @@ async function startAttempt(options: RemoteForwardOptions, reservation: RemotePo
       exits.push(exit); void exit.catch(() => {});
     }
     // A competing loopback listener can exist before SSH even starts. Its socket is not a bind receipt.
+    awaitingReceipts = true;
     await Promise.race([Promise.all(helpers.map(helper => helper.forwardReady)), cancelled]);
+    awaitingReceipts = false;
     const checkAlive = async () => {
       if (alive) return;
       await Promise.all(exits);
-      throw remoteError(lostPort ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward setup failed.");
+      throw setupFailure(remoteError(lostPort ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward setup failed."));
     };
     let ready = false;
     while (!ready) {
@@ -115,7 +123,8 @@ async function startAttempt(options: RemoteForwardOptions, reservation: RemotePo
   } catch (error) {
     await close(); budget.throwIfEnded();
     if (ownerSignal.aborted) throw remoteError("cancelled", "Messaging tunnel setup was cancelled.");
-    throw error;
+    // Sibling shutdown can reject first; classify only after every helper's diagnostics and cleanup settle.
+    throw awaitingReceipts ? setupFailure(error) : error;
   }
   finally { budget.signal.removeEventListener("abort", cancelSetup); }
 }

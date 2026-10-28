@@ -8,6 +8,8 @@ export interface RemoteHelper {
   readonly pid: number; readonly exited: Promise<number>; readonly output: Promise<string>;
   readonly forwardReady: Promise<void>;
   readonly forwardFailed?: boolean;
+  /** After cleanup: intrinsic I/O or pre-cleanup exit failure, excluding cleanup-induced exits. */
+  readonly setupFailure?: Error;
   close(): Promise<void>;
 }
 /** Narrow subprocess seam for offline lifecycle tests; production always uses owned Bun children. */
@@ -41,6 +43,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   const readers = [child.stdout.getReader(), child.stderr.getReader()];
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
+  let interrupted = false;
   const cancelledPipes = [false, false];
   const pipeEnds: (() => void)[] = [];
   const naturalPipes = readers.map(() => new Promise<void>(resolve => { pipeEnds.push(resolve); }));
@@ -55,6 +58,7 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
   };
   const close = (): Promise<void> => closing ??= (async () => {
     signal?.removeEventListener("abort", abort);
+    interrupted = child.exitCode === null;
     signalGroup("SIGTERM");
     const force = setTimeout(() => signalGroup("SIGKILL"), 500);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -124,7 +128,13 @@ export function spawnRemoteHelper(argv: readonly string[], capacity: RemoteCapac
     if (!forwardFailure.ready) notReady(remoteError(code !== 0 && forwardFailure.failed ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward was not confirmed."));
   }, notReady).catch(notReady);
   void child.exited.then(() => { signal?.removeEventListener("abort", abort); }).catch(() => {});
-  return { pid: child.pid, exited: child.exited, output, forwardReady, get forwardFailed() { return forwardFailure.failed; }, close };
+  return { pid: child.pid, exited: child.exited, output, forwardReady, get forwardFailed() { return forwardFailure.failed; },
+    get setupFailure() {
+      if (failure) return failure;
+      if (!interrupted && child.exitCode !== null && (child.exitCode !== 0 || !forwardFailure.ready)) {
+        return remoteError(child.exitCode !== 0 && forwardFailure.failed ? "forward_port_lost" : "ssh_failed", "Messaging SSH forward setup failed.");
+      }
+    }, close };
 }
 
 /** One bounded batch covers helper startup, stdin, exit and output; errors never include raw output. */

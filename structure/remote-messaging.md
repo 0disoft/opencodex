@@ -162,7 +162,11 @@ pre-bind listening announcement is not a receipt; local session entry and the ex
 forward success are. Only explicit unsuccessful forward binds reselect both candidates,
 at most three attempts within the original setup deadline, after joined pair cleanup.
 Repeated lost candidates are excluded. Authentication, inspection and cleanup failures
-are not retried. Authenticated peer/native readiness remains required in the owner.
+are not retried. Helpers preserve intrinsic I/O and pre-cleanup exit failures through
+diagnostic settlement; pair classification after joined cleanup ignores sibling exits
+caused by shutdown, so an initiating bind failure survives a sibling readiness rejection.
+Independent failures, cancellation and incomplete cleanup remain terminal.
+Authenticated peer/native readiness remains required in the owner.
 Linux inspection requires the IPv4 listener table; only an absent IPv6 table is treated as
 empty. Permission, read and other inspection failures remain fail-closed.
 
