@@ -12,7 +12,7 @@ other providers whose models happen to share a name fragment.
 ## Chronological in-conversation instructions
 
 `src/adapters/openai-chat/messages.ts` keeps text-only timeline developer messages in their
-original slots on every Chat destination and model. A later reminder does not rewrite the
+original slots unless the [LM Studio instruction policy](lm-studio-chat.md) applies. A later reminder does not rewrite the
 leading system prompt or move ahead of earlier turns; pending tool results still precede
 deferred reminders. This behavior previously covered only OpenCode Go and
 `deepseek-v4.1-flash`. The base system prompt, vision conversion, native OpenAI developer

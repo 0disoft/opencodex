@@ -1,6 +1,7 @@
 import { isMistralChatTarget, isNativeOpenAIChatTarget, stripBracketedModelSuffix } from "./wire";
 import { reasoningDetailSegmentForWire } from "./response-events";
 import { translatedChatDeveloperWireRole } from "./developer-role";
+import { singleLeadingSystemMessages } from "./single-system";
 import { isVolcengineArkPaygChatTarget } from "./tool-schema";
 import { contentPartsToText } from "../image";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
@@ -172,7 +173,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   // Gateways serve them under namespaced ids (LiteLLM's openai/Qwen3.8-27B, #6674), so any
   // number of leading path segments is accepted; the final segment names the checkpoint.
   // Orca's GGUF marker must precede any colon quant tag; other Orca variants are unchanged.
-  const leadingSystemTemplate = !nativeOpenAI && /^(?:[^/]+\/)*(?:flash-next|Qwen3\.8-Flash-Next|Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?|OrcaSAQ-2-Cyber-27B(?=[^:/\s]*GGUF)[^:/\s]*(?::[\w-]+)?)$/i.test(parsed.modelId);
+  const leadingSystemTemplate = provider.singleLeadingSystemMessage !== true && !nativeOpenAI && /^(?:[^/]+\/)*(?:flash-next|Qwen3\.8-Flash-Next|Qwen3\.8-27B|qwen3-8-27b(?:-(?:fp8|lora))?|OrcaSAQ-2-Cyber-27B(?=[^:/\s]*GGUF)[^:/\s]*(?::[\w-]+)?)$/i.test(parsed.modelId);
   // Which role a developer message carries, and why the unrecorded state folds, is stated once
   // in ./developer-role.ts and read from there by the native passthrough as well. Either way the
   // message keeps the slot it arrived in — only the role changes, never the position.
@@ -429,7 +430,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
 
   flushPendingToolCalls();
   releaseDeferredBarriers();
-  return out;
+  return singleLeadingSystemMessages(out, provider) as unknown[];
 }
 
 export function safeToolName(name: string | undefined): string {
