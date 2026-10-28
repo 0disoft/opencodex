@@ -23,6 +23,7 @@ import {
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope } from "./advisor-admission-scope";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -70,6 +71,7 @@ import type { AdmissionLease } from "../lib/admission";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
+  MODEL_NOT_ALLOWED_FOR_KEY,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
 } from "./admission-model-scope";
@@ -152,6 +154,15 @@ async function handleChatCompletionsWithBudget(
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
+  const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
+  const inheritedAdmissionScope = advisorInternal
+    ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
+    : undefined;
+  if (advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !inheritedAdmissionScope) {
+    // Refused requests still own a final log row like every other early rejection.
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
+    return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
+  }
   let chatBody: Rec;
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
@@ -209,7 +220,7 @@ async function handleChatCompletionsWithBudget(
     );
     // Native Chat must check its own destination; translated xAI OAuth turns
     // preview the billed Fast lane before their final Responses scope check.
-    assertRouteAllowedByScope(resolveAdmissionModelScope(config, logIds?.admission), requestedModel, {
+    assertRouteAllowedByScope(inheritedAdmissionScope ?? resolveAdmissionModelScope(config, logIds?.admission), requestedModel, {
       providerName: route.providerName,
       modelId: previewXaiOauthWireModel({ options: {
         serviceTier: typeof chatBody.service_tier === "string" ? chatBody.service_tier : undefined,
@@ -432,7 +443,6 @@ async function handleChatCompletionsWithBudget(
   // authority comes from a process-owned capability minted at random per process and compared in
   // constant time, so a forged header — or a token captured from an older process — is treated
   // as an ordinary external request.
-  const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   // Concrete helper targets must fail before optional stored-main credential enrichment.
   // Unresolved combos are checked after their concrete child route is selected in Responses.
   if (settledRoute && !settledRoute.combo && isCanonicalOpenAiForwardProvider(settledRoute.provider)
@@ -543,6 +553,7 @@ async function handleChatCompletionsWithBudget(
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
     ...(advisorInternal ? { advisorInternal: true } : {}),
+    ...(inheritedAdmissionScope ? { admissionScope: inheritedAdmissionScope } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
