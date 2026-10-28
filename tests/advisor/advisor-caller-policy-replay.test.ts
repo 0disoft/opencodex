@@ -84,8 +84,8 @@ for (const ingress of ["wrapper", "websocket"] as const) test(`policy replay kee
         expect(ws.data.cancel).toBeUndefined();
         expect(secondSends).toBe(2);
         expect(sent.some(f => f.type === "response.completed")).toBe(true);
-        expect(policies.map(policy => policy.paid)).toEqual([false, false]);
         expect(calls).not.toContain("paid/m");
+        expect(policies.map(policy => policy.paid)).toEqual([false, false]);
       } finally { ws.close(); }
       return;
     }
@@ -98,7 +98,7 @@ for (const ingress of ["wrapper", "websocket"] as const) test(`policy replay kee
     await response.text();
     expect(response.status).toBe(200);
     expect(secondSends).toBe(2);
-    expect(policies.map(policy => policy.paid)).toEqual([false, false]);
     expect(calls).not.toContain("paid/m");
+    expect(policies.map(policy => policy.paid)).toEqual([false, false]);
   } finally { globalThis.fetch = oldFetch; closeRequestHistoryIndex(); runOptionalShutdownHooks(); release(); clearComboSelectionState(); clearComboTargetCooldowns(); }
 });

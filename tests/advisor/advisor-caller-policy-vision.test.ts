@@ -10,7 +10,7 @@ import { createAdvisorRuntimePlan } from "../../src/advisor/runtime";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 
-for (const kind of ["metered", "fallback"] as const) test(`routed vision Advisor must retain caller ${kind} refusal`, async () => {
+for (const refusing of ["caller", "host"] as const) for (const kind of ["metered", "fallback"] as const) test(`routed vision Advisor must retain ${refusing} ${kind} refusal`, async () => {
   const release = acquireOwnedSpendHome();
   const oldFetch = globalThis.fetch;
   resetVisionDescriptionCache();
@@ -25,6 +25,9 @@ for (const kind of ["metered", "fallback"] as const) test(`routed vision Advisor
     ...(name === "worker" ? { noVisionModels: ["m"] } : {}),
     ...(name === "helper" ? { modelCapabilities: { m: { inputModalities: ["text", "image"] } } } : {}),
     fetch: (async (_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.has("x-opencodex-sidecar-internal")).toBe(false);
+      expect(headers.has("x-opencodex-sidecar-admission-policy")).toBe(false);
       calls.push(`${name}/m`);
       const body = JSON.parse(String(init?.body));
       if (kind === "fallback" && name === "paid") return Response.json({ error: { code: "model_not_found", message: "fixture missing model" } }, { status: 404 });
@@ -57,10 +60,10 @@ for (const kind of ["metered", "fallback"] as const) test(`routed vision Advisor
     port: 10100, defaultProvider: "worker",
     providers: { worker: provider("worker"), helper: provider("helper"), paid: provider("paid"), backup: provider("backup") },
     apiKeys: [
-      { id: "host", name: "host", key: "ocx_data_" + "h".repeat(40), createdAt: "2026-01-01", allowMeteredComboTargets: true },
-      { id: "laptop", name: "laptop", key: "ocx_data_" + "c".repeat(40), createdAt: "2026-01-01", allowMeteredComboTargets: false },
+      { id: "host", name: "host", key: "ocx_data_" + "h".repeat(40), createdAt: "2026-01-01", allowMeteredComboTargets: refusing !== "host" },
+      { id: "laptop", name: "laptop", key: "ocx_data_" + "c".repeat(40), createdAt: "2026-01-01", allowMeteredComboTargets: refusing !== "caller" },
     ],
-    fallback: { devices: { laptop: { provider: false } } },
+    fallback: { devices: { [refusing === "caller" ? "laptop" : "host"]: { provider: false } } },
     combos: { inner: { targets: kind === "metered" ? [{ provider: "paid", model: "m", metered: true }] : [{ provider: "paid", model: "m" }, { provider: "backup", model: "m" }] } },
     visionSidecar: { enabled: true, backend: "routed", model: "helper/m" },
     advisor: { enabled: true, model: "combo/inner", policy: "manual", effort: "high", contextSharingConsent: "v1" },
@@ -84,8 +87,8 @@ for (const kind of ["metered", "fallback"] as const) test(`routed vision Advisor
     await response.text();
     expect(response.status).toBe(200);
     expect(helperSends).toBe(2);
+    expect(calls).not.toContain(kind === "metered" ? "paid/m" : "backup/m");
     expect(policies[0]?.paid).toBe(false);
     expect(policies[0]?.devices?.flat()).toEqual(expect.arrayContaining(["host", "laptop"]));
-    expect(calls).not.toContain(kind === "metered" ? "paid/m" : "backup/m");
   } finally { globalThis.fetch = oldFetch; resetVisionDescriptionCache(); release(); clearComboSelectionState(); clearComboTargetCooldowns(); }
 });

@@ -1,5 +1,6 @@
 {
   "advisor-caller-policy.test.ts": "advisor",
+  "advisor-caller-policy-sidecar-authority.test.ts": "advisor",
   "advisor-caller-policy-vision.test.ts": "advisor",
   "advisor-caller-policy-replay.test.ts": "advisor",
   "advisor-caller-policy-compact.test.ts": "advisor",

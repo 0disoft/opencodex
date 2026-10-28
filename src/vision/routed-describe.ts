@@ -94,35 +94,35 @@ export async function describeImageRouted(
 
   const registration = advisorAdmissionPolicy ? registerAdvisorAdmissionPolicy(advisorAdmissionPolicy, abortSignal) : undefined;
   try {
-  return await postLocalChatCompletion({
-    config,
-    label: "routed describe",
-    logTag: "vision",
-    timeoutMs: settings.timeoutMs,
-    maxResponseBytes: MAX_ROUTED_RESPONSE_BYTES,
-    headers: {
-      [VISION_DESCRIBE_TERMINAL_HEADER]: "1",
-      ...(registration ? {
-        [SIDECAR_ADMISSION_POLICY_HEADER]: registration.token,
-        [SIDECAR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
-      } : {}),
-    },
-    abortSignal,
-    baseUrlOverride,
-    body: {
-      model: routedModel,
-      messages: [
-        { role: "system", content: DESCRIBE_INSTRUCTION },
-        {
-          role: "user",
-          content: [
-            ...(contextText ? [{ type: "text", text: `User's request context: ${contextText}` }] : []),
-            { type: "image_url", image_url: { url: imageUrl } },
-          ],
-        },
-      ],
-    },
-  });
+    return await postLocalChatCompletion({
+      config,
+      label: "routed describe",
+      logTag: "vision",
+      timeoutMs: settings.timeoutMs,
+      maxResponseBytes: MAX_ROUTED_RESPONSE_BYTES,
+      headers: {
+        [VISION_DESCRIBE_TERMINAL_HEADER]: "1",
+        ...(registration ? {
+          [SIDECAR_ADMISSION_POLICY_HEADER]: registration.token,
+          [SIDECAR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
+        } : {}),
+      },
+      abortSignal,
+      baseUrlOverride,
+      body: {
+        model: routedModel,
+        messages: [
+          { role: "system", content: DESCRIBE_INSTRUCTION },
+          {
+            role: "user",
+            content: [
+              ...(contextText ? [{ type: "text", text: `User's request context: ${contextText}` }] : []),
+              { type: "image_url", image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+      },
+    });
   } finally {
     registration?.release();
   }

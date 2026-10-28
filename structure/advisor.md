@@ -113,6 +113,9 @@ or removal of the caller's key or fallback settings cannot broaden the frozen de
 `tests/advisor/advisor-caller-policy-routing.test.ts` covers laptop provider-fallback refusals,
 native combo dispatch, early capture, external forgeries and worker-unavailable delivery.
 `advisor-caller-policy-ingress.test.ts` and `advisor-caller-policy-http.test.ts` widen live config during body reads and capacity waits.
+`advisor-caller-policy-vision.test.ts`, `advisor-caller-policy-replay.test.ts` and
+`advisor-caller-policy-compact.test.ts` cover routed helpers, policy candidates and compact JEV turns;
+`advisor-caller-policy-sidecar-authority.test.ts` covers sidecar capability admission and registration lifetime.
 
 ## Context and safety boundaries
 

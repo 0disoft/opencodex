@@ -36,7 +36,7 @@ function config(raised: boolean): OcxConfig {
   };
 }
 
-for (const wire of ["responses", "chat/completions", "messages"] as const) {
+for (const wire of ["responses", "chat/completions", "messages", "responses/compact"] as const) {
   for (const raised of [false, true]) {
     test(`HTTP ${wire} keeps the admitted caller policy across the capacity wait (raised limit: ${raised})`, async () => {
       const release = acquireOwnedSpendHome();

@@ -76,8 +76,8 @@ for (const kind of ["metered", "fallback"] as const) for (const widen of [false,
     await response.text();
     expect(response.status).toBe(200);
     expect(decisionSends).toBe(2);
+    expect(calls).not.toContain(kind === "metered" ? "paid/m" : "backup/m");
     expect(policies.length).toBeGreaterThan(0);
     for (const policy of policies) expect(policy).toEqual({ paid: false, fallback: false });
-    expect(calls).not.toContain(kind === "metered" ? "paid/m" : "backup/m");
   } finally { globalThis.fetch = oldFetch; release(); clearComboSelectionState(); clearComboTargetCooldowns(); }
 });

@@ -262,6 +262,10 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
+Compact HTTP ingress captures the originating caller policy before capacity/body waits. Native
+retries and routed Responses/JEV handoffs retain that snapshot under the
+[Advisor admission contract](../advisor.md#cross-provider-consultation).
+
 For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
 preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
 Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,

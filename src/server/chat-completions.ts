@@ -176,10 +176,10 @@ async function handleChatCompletionsWithBudget(
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
   }
-  const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, callerPolicy) : logIds?.admission;
   // The host snapshot was captured at authentication; internal hops add their frozen registration.
   const hostPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
   const advisorAdmissionPolicy = callerPolicy ? intersectAdmissionPolicies(hostPolicy, callerPolicy) : hostPolicy;
+  const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, advisorAdmissionPolicy) : logIds?.admission;
   const inheritedAdmissionScope = callerPolicy ? advisorAdmissionPolicy.modelScope : undefined;
   let chatBody: Rec;
   try {
