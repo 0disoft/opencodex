@@ -1324,10 +1324,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
+              advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
           } catch (error) {

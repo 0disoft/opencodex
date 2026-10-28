@@ -1,7 +1,7 @@
 import type { OcxConfig } from "../types";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import type { DataPlaneAdmission } from "./auth-cors";
-import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, type AdmissionModelScope } from "./admission-model-scope";
+import { admissionMayUseMeteredComboTargets, intersectAdmissionModelScopes, resolveAdmissionModelScope } from "./admission-model-scope";
 import { fallbackDeviceIds } from "../routing/fallback-policy";
 
 function freeze<T>(value: T): T {
@@ -14,6 +14,16 @@ function freeze<T>(value: T): T {
 
 export function immutableAdmissionPolicy(policy: CapturedAdmissionPolicy): CapturedAdmissionPolicy {
   return freeze(structuredClone(policy));
+}
+
+/** Combine already captured inputs without reading mutable caller or host configuration. */
+export function intersectAdmissionPolicies(host: CapturedAdmissionPolicy, caller: CapturedAdmissionPolicy): CapturedAdmissionPolicy {
+  return immutableAdmissionPolicy({
+    modelScope: intersectAdmissionModelScopes(host.modelScope, caller.modelScope)!,
+    allowMeteredComboTargets: host.allowMeteredComboTargets && caller.allowMeteredComboTargets,
+    meteredRequiresComboOptIn: host.meteredRequiresComboOptIn || caller.meteredRequiresComboOptIn,
+    fallbackPolicies: [...host.fallbackPolicies, ...caller.fallbackPolicies],
+  });
 }
 
 export function captureAdmissionPolicy(

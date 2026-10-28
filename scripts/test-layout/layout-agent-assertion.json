@@ -1,5 +1,8 @@
 {
   "advisor-caller-policy.test.ts": "advisor",
+  "advisor-caller-policy-vision.test.ts": "advisor",
+  "advisor-caller-policy-replay.test.ts": "advisor",
+  "advisor-caller-policy-compact.test.ts": "advisor",
   "advisor-caller-policy-ingress.test.ts": "advisor",
   "advisor-caller-policy-http.test.ts": "advisor",
   "advisor-caller-policy-jev.test.ts": "advisor",

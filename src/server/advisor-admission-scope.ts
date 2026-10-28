@@ -4,6 +4,9 @@ import { internalCallCapability, isInternalCallCapability } from "../lib/local-i
 import { immutableAdmissionPolicy } from "./capture-admission-policy";
 
 export const ADVISOR_ADMISSION_POLICY_HEADER = "x-opencodex-advisor-admission-policy";
+/** Routed helpers inherit policy without acquiring the Advisor recursion-suppression flag. */
+export const SIDECAR_ADMISSION_POLICY_HEADER = "x-opencodex-sidecar-admission-policy";
+export const SIDECAR_INTERNAL_CAPABILITY_HEADER = "x-opencodex-sidecar-internal";
 const policies = new Map<string, { capability: string; policy: CapturedAdmissionPolicy }>();
 
 /** A consult owns its registry entry until completion, failure or cancellation. */

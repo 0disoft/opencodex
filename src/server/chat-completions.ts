@@ -24,8 +24,8 @@ import {
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
-import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy } from "./advisor-admission-scope";
-import { captureAdmissionPolicy, inheritAdmissionPolicy } from "./capture-admission-policy";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "./advisor-admission-scope";
+import { captureAdmissionPolicy, inheritAdmissionPolicy, intersectAdmissionPolicies } from "./capture-admission-policy";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -163,22 +163,24 @@ async function handleChatCompletionsWithBudget(
   },
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
-  const callerPolicy = readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
+  const sidecarInternal = isInternalCallCapability(req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
+  const callerPolicy = advisorInternal
+    ? readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))
+    : readAdvisorAdmissionPolicy(req.headers.get(SIDECAR_ADMISSION_POLICY_HEADER), req.headers.get(SIDECAR_INTERNAL_CAPABILITY_HEADER));
   const decodedScope = advisorInternal
     ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
     : undefined;
-  if (advisorInternal && (!callerPolicy
-    || req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)) {
+  if ((advisorInternal || sidecarInternal) && (!callerPolicy
+    || advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope)) {
     // Refused requests still own a final log row like every other early rejection.
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
   }
   const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, callerPolicy) : logIds?.admission;
-  const inheritedAdmissionScope = advisorInternal ? resolveAdmissionModelScope(config, admission) : undefined;
-  // An external caller's policy was captured at authentication; an internal hop inherits its registration.
-  const advisorAdmissionPolicy = !advisorInternal && logIds?.advisorAdmissionPolicy
-    ? logIds.advisorAdmissionPolicy
-    : captureAdmissionPolicy(config, admission, inheritedAdmissionScope);
+  // The host snapshot was captured at authentication; internal hops add their frozen registration.
+  const hostPolicy = logIds?.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, logIds?.admission);
+  const advisorAdmissionPolicy = callerPolicy ? intersectAdmissionPolicies(hostPolicy, callerPolicy) : hostPolicy;
+  const inheritedAdmissionScope = callerPolicy ? advisorAdmissionPolicy.modelScope : undefined;
   let chatBody: Rec;
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));

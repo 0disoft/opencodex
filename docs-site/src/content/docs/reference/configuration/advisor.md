@@ -128,6 +128,8 @@ metered combo targets through Advisor, and `fallback.devices.laptop.provider: fa
 also blocks Advisor's provider fallback hops. An unkeyed loopback caller still needs
 the combo's `allowMeteredTargets: true` opt-in. The server captures caller policy when it
 authenticates the request, before waiting for body capacity or reading the body; later key or fallback edits cannot broaden that consultation.
+This also covers routed vision helpers, compact requests and their decision models, and every
+candidate retry within a WebSocket turn. Each new WebSocket turn captures its own policy.
 
 OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend-only
 config secrets, process environment, or hidden chain-of-thought into that prompt. It does not

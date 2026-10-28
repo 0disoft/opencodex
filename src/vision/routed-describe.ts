@@ -27,6 +27,9 @@ import type { OcxConfig } from "../types";
 import { localAdmissionToken } from "../lib/local-destinations";
 import { localChatCompletionBaseUrl, postLocalChatCompletion } from "../lib/local-chat-completion";
 import type { DescribeOutcome, VisionSettings } from "./describe";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
+import { registerAdvisorAdmissionPolicy, SIDECAR_ADMISSION_POLICY_HEADER, SIDECAR_INTERNAL_CAPABILITY_HEADER } from "../server/advisor-admission-scope";
+import { internalCallCapability } from "../lib/local-internal-call-capability";
 
 export const VISION_DESCRIBE_TERMINAL_HEADER = "x-opencodex-vision-describe";
 
@@ -84,17 +87,26 @@ export async function describeImageRouted(
   settings: VisionSettings,
   abortSignal?: AbortSignal,
   baseUrlOverride?: string,
+  advisorAdmissionPolicy?: CapturedAdmissionPolicy,
 ): Promise<DescribeOutcome> {
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
 
-  return postLocalChatCompletion({
+  const registration = advisorAdmissionPolicy ? registerAdvisorAdmissionPolicy(advisorAdmissionPolicy, abortSignal) : undefined;
+  try {
+  return await postLocalChatCompletion({
     config,
     label: "routed describe",
     logTag: "vision",
     timeoutMs: settings.timeoutMs,
     maxResponseBytes: MAX_ROUTED_RESPONSE_BYTES,
-    headers: { [VISION_DESCRIBE_TERMINAL_HEADER]: "1" },
+    headers: {
+      [VISION_DESCRIBE_TERMINAL_HEADER]: "1",
+      ...(registration ? {
+        [SIDECAR_ADMISSION_POLICY_HEADER]: registration.token,
+        [SIDECAR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
+      } : {}),
+    },
     abortSignal,
     baseUrlOverride,
     body: {
@@ -111,4 +123,7 @@ export async function describeImageRouted(
       ],
     },
   });
+  } finally {
+    registration?.release();
+  }
 }

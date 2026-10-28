@@ -88,12 +88,20 @@ account-qualified native model. The advisor never builds its own router and neve
 provider credentials. `src/server/capture-admission-policy.ts` freezes a credential-free copy of
 the caller's model scope, metered consent class, fallback policy and resolved device ids at HTTP
 authentication, before any inbound-body capacity wait or body parsing; `src/server/index/serve-options.ts`
-hands that snapshot to the Responses, Chat and Messages handlers. `src/types/admission-policy.ts` defines these decision inputs.
+hands that snapshot to the Responses, Chat, Messages and compact handlers. WebSocket turns capture
+before dispatch; policy-profile retries retain the outer owner's snapshot. Compact retains it through
+native retries and routed Responses/JEV handoffs. `src/types/admission-policy.ts` defines these decision inputs.
 `src/server/advisor-admission-scope.ts` holds them in a process-local registry for one consultation.
 Its random 256-bit handle is honored only beside the current process-owned capability; unknown
 or missing handles are refused. Consultation completion or failure releases the entry; abort
 revokes it immediately, even while transport work is still settling. Registration owns a frozen copy.
 The bounded scope envelope remains validated separately. Neither handle nor capability is sent upstream.
+
+Routed vision carries the same frozen policy through its plan and a scoped registry entry. Its
+separate sidecar capability header authenticates inheritance without suppressing Advisor on the helper.
+Chat intersects that registration with the host snapshot captured at authentication; missing or
+expired registrations presented with a valid capability are refused. Completion, failure and abort
+release the entry. Ordinary client headers cannot grant inherited policy authority.
 
 The host keeps its admission identity and adds the captured caller constraints. Shared scope,
 metered-consent and fallback guards require the intersection of caller and host policy for every
