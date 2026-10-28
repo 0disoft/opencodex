@@ -724,14 +724,26 @@ const DEFINITE_CONTEXT_OVERFLOW_PHRASES = [
 
 /**
  * Short provider verdicts that a validation error could otherwise echo as the caller's own value
- * (#7443). Each is accepted only where the provider puts it: at the start of the leaf message, or
- * right after the `message` key of an SDK error wrapper, and Anthropic's only with its token counts.
+ * (#7443). Each is accepted only where the provider puts it: at the start of the leaf message, or at
+ * the start of the first `message` value of a recognized SDK error wrapper, and Anthropic's only with
+ * its token counts. A `message` key nested anywhere else is caller data and never counts.
  */
 const ANCHORED_CONTEXT_OVERFLOW_VERDICTS: readonly RegExp[] = [
-  /(?:^|['"]message['"]\s*:\s*['"])prompt is too long: \d+ tokens > \d+ maximum/i,
-  /(?:^|['"]message['"]\s*:\s*['"])input is too long for requested model\b/i,
-  /(?:^|['"]message['"]\s*:\s*['"])please reduce the length of the messages or completion\b/i,
+  /^prompt is too long: \d+ tokens > \d+ maximum/i,
+  /^input is too long for requested model\b/i,
+  /^please reduce the length of the messages or completion\b/i,
 ];
+/** A Python SDK exception serialized by a relay: `Error code: 400 - {'error': {'message': ...}}`. */
+const SDK_ERROR_WRAPPER = /^error code: \d{3} - \{/i;
+const FIRST_MESSAGE_VALUE = /['"]message['"]\s*:\s*['"]/;
+
+/** The text a provider verdict must open: the leaf itself, or a wrapper's first message value. */
+function verdictLead(text: string): string {
+  const trimmed = text.trim();
+  if (!SDK_ERROR_WRAPPER.test(trimmed)) return trimmed;
+  const key = FIRST_MESSAGE_VALUE.exec(trimmed);
+  return key ? trimmed.slice(key.index + key[0].length) : "";
+}
 
 /** Wrapper envelopes unwrapped before the leaf message is read. */
 const MAX_CONTEXT_OVERFLOW_ENVELOPES = 4;
@@ -765,7 +777,7 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
   const normalized = text.toLowerCase();
   return normalized === "context_length_exceeded"
     || DEFINITE_CONTEXT_OVERFLOW_PHRASES.some(phrase => normalized.includes(phrase))
-    || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(text.trim()));
+    || ANCHORED_CONTEXT_OVERFLOW_VERDICTS.some(verdict => verdict.test(verdictLead(text)));
 }
 
 /**
