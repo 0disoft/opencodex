@@ -16,7 +16,8 @@ export const native = process.platform === "win32" && process.arch === "x64" ? t
 export const WINDOWS_APPLY_BUDGET_MS = 4 * SPAWN_BUDGET_MS;
 export const WINDOWS_APPLY_CHILD_BUDGET_MS = 2 * SPAWN_BUDGET_MS;
 export type WorkerFixtureReply = { type: string; requestId?: string; cleanupConfirmed?: boolean; result?: import("../../src/codex/cli-update-apply").CodexCliApplyResult };
-export function fixtureCleanupProven(messages: readonly unknown[], requestId: string, closed: boolean, errored: boolean): boolean {
+export function fixtureCleanupProven(messages: readonly unknown[], requestId: string, closed: boolean, errored: boolean,
+  expectedErrors: readonly string[] = []): boolean {
   if (!closed || errored) return false;
   const replies: WorkerFixtureReply[] = [];
   for (const value of messages) {
@@ -42,12 +43,13 @@ export function fixtureCleanupProven(messages: readonly unknown[], requestId: st
   const results = replies.filter(message => message.type === "result");
   return results.length === 1
     && results[0]!.cleanupConfirmed === true && results[0]!.result?.leaseRetained === false
-    && Array.isArray(results[0]!.result?.cleanupErrors) && results[0]!.result!.cleanupErrors.length === 0;
+    && Array.isArray(results[0]!.result?.cleanupErrors)
+    && JSON.stringify(results[0]!.result!.cleanupErrors) === JSON.stringify(expectedErrors);
 }
 export const mainRoot = "node_modules/@openai/codex", backingRoot = "node_modules/@openai/codex-win32-x64";
 export const nativePath = "vendor/x86_64-pc-windows-msvc/bin/codex.exe";
 export const write = (path: string, bytes: string | Buffer) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
-function artifacts(version: string, executable?: Buffer) {
+export function artifacts(version: string, executable?: Buffer) {
   const pe = Buffer.alloc(512); pe.write("MZ"); pe.writeUInt32LE(64, 60); pe.write("PE\0\0", 64);
   pe.writeUInt16LE(0x8664, 68); pe.writeUInt16LE(1, 70); pe.writeUInt16LE(240, 84); pe.writeUInt16LE(2, 86); pe.writeUInt16LE(0x20b, 88);
   // Synthetic PE only. The real Node verification child executes this fixture's JS;
