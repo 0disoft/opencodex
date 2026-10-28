@@ -13,6 +13,10 @@ attempt also times out, further writes to that destination are refused until
 five minutes after the recovery attempt started. The next write can then try
 hardening again; recovery happens when a write is requested, without a timer.
 
+If an earlier permission-hardening process is still running, writes to the same
+destination are refused until it exits, including after the five-minute window.
+These refusals return promptly and preserve the next recovery attempt.
+
 Every recovery attempt must complete permission hardening before publishing the
 file. Permission-denied errors remain failures and do not trigger an automatic
 retry. Cleanup of a failed write does not consume the next write's recovery

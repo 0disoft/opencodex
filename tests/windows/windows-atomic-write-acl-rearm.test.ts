@@ -4,14 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   forgetHardenedSecretPath,
+  flushWindowsSecretAclReapsBeforeRemoval,
   hardenSecretPath,
   resetHardenedStateForTests,
   setAsyncIcaclsRunnerForTests,
+  setAsyncIcaclsBeltSchedulerForTests,
   setIcaclsRunnerForTests,
   setNowForTests,
   setPlatformForTests,
   TIMEOUT_MEMO_REARM_MS,
   timedOutSecretPathCountForTests,
+  windowsSecretAclReapPendingForPath,
   type IcaclsResult,
 } from "../../src/lib/windows-secret-acl";
 import {
@@ -83,6 +86,8 @@ afterEach(() => {
   setAsyncIcaclsRunnerForTests(null);
   setNowForTests(null);
   setPlatformForTests(null);
+  setWindowsPrincipalRunnerForTests(null);
+  setAsyncWindowsPrincipalRunnerForTests(null);
   resetWindowsPrincipalForTests();
   resetHardenedStateForTests();
   if (previousTimeout === undefined) delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
@@ -209,3 +214,85 @@ for (const kind of ["sync", "async"] as const) {
     expect(native.readFileSync(destination, "utf8")).toBe("previous");
   });
 }
+
+test("one destination retains at most one ACL child across repeated re-arm windows", async () => {
+  const destination = join(root, "secret.json");
+  const held: { path: string; release: (result: IcaclsResult) => void }[] = [];
+  setAsyncIcaclsRunnerForTests(args => {
+    if (!args[0]!.startsWith(`${destination}.ocx.`)) return Promise.resolve(runAcl(args));
+    return new Promise(resolve => { held.push({ path: args[0]!, release: resolve }); });
+  });
+  setAsyncIcaclsBeltSchedulerForTests(callback => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) { now += 1_001; callback(); } });
+    return () => { cancelled = true; };
+  });
+  try {
+    const retained: number[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt === 2) now += TIMEOUT_MEMO_REARM_MS;
+      await expect(atomicWriteFileAsync(destination, "unpublished")).rejects.toThrow();
+      retained.push(held.filter(entry => windowsSecretAclReapPendingForPath(entry.path)).length);
+    }
+    expect(retained).toEqual([1, 1, 1]);
+    expect(held).toHaveLength(1);
+    for (const write of [writers.sync, writers.streamed, writers.async]) {
+      now += TIMEOUT_MEMO_REARM_MS;
+      await expect(write(destination, "unpublished")).rejects.toMatchObject({ code: "ETIMEDOUT" });
+      expect(held).toHaveLength(1);
+      expect(grants).toEqual([]);
+      expect(native.readFileSync(destination, "utf8")).toBe("previous");
+      expect(native.readFileSync(held[0]!.path, "utf8")).toBe("");
+    }
+    // A different destination is independent, even while this child is retained.
+    setAsyncIcaclsBeltSchedulerForTests(null);
+    await atomicWriteFileAsync(join(root, "other.json"), "other");
+    expect(native.readFileSync(join(root, "other.json"), "utf8")).toBe("other");
+    held[0]!.release({ ...OK, success: false, timedOut: true, exitCode: null });
+    await flushWindowsSecretAclReapsBeforeRemoval(root);
+    setAsyncIcaclsRunnerForTests(async args => runAcl(args));
+    // Refusals while held must not consume recovery; actual reap admits it immediately.
+    await atomicWriteFileAsync(destination, "recovered");
+    expect(native.readFileSync(destination, "utf8")).toBe("recovered");
+    expect(timedOutSecretPathCountForTests()).toBe(0);
+  } finally {
+    for (const entry of held) entry.release({ ...OK, success: false, timedOut: true, exitCode: null });
+    await flushWindowsSecretAclReapsBeforeRemoval(root);
+    setAsyncIcaclsBeltSchedulerForTests(null);
+  }
+});
+
+test("active ACL work excludes mixed writers before its timeout belt fires", async () => {
+  const destination = join(root, "secret.json");
+  const held: ((result: IcaclsResult) => void)[] = [];
+  const belts: (() => void)[] = [];
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  setAsyncIcaclsRunnerForTests(() => new Promise(resolve => { held.push(resolve); entered(); }));
+  setAsyncIcaclsBeltSchedulerForTests(callback => { belts.push(callback); return () => {}; });
+  const result = (work: Promise<void>) => work.then(() => "published", error => error.code ?? error.name);
+  const first = result(atomicWriteFileAsync(destination, "first"));
+  try {
+    await started;
+    const sync = await result(writers.sync(destination, "sync"));
+    const streamed = await result(writers.streamed(destination, "streamed"));
+    const second = result(atomicWriteFileAsync(destination, "second"));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    now += 1_001;
+    for (const belt of belts) belt();
+    expect(await first).toBe("AtomicWriteResidualTempError");
+    expect(await second).toBe("ETIMEDOUT");
+    expect(sync).toBe("ETIMEDOUT");
+    expect(streamed).toBe("ETIMEDOUT");
+    expect(held).toHaveLength(1);
+    expect(grants).toEqual([]);
+    expect(native.readFileSync(destination, "utf8")).toBe("previous");
+  } finally {
+    now += 1_001;
+    for (const belt of belts) belt();
+    for (const release of held) release({ ...OK, success: false, timedOut: true, exitCode: null });
+    await first;
+    await flushWindowsSecretAclReapsBeforeRemoval(root);
+    setAsyncIcaclsBeltSchedulerForTests(null);
+  }
+});

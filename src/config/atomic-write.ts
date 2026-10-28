@@ -18,10 +18,12 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealCodexHomeUnderTest, assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import {
   forgetEphemeralSecretPath,
+  flushWindowsSecretAclReapsBeforeRemoval,
   hardenSecretPath,
   hardenSecretPathAsync,
   reattributeHardenedSecretPath,
   windowsSecretAclReapPendingForPath,
+  WindowsSecretAclSettleTimeoutError,
 } from "../lib/windows-secret-acl";
 import {
   renameAtomicFile,
@@ -30,6 +32,22 @@ import {
 import { getConfigDir } from "./paths";
 
 let atomicSequence = 0;
+const aclDestinations = new Set<string>();
+
+/** Own a destination through the write and any child retained after its timeout belt. */
+function admitAtomicAclWork(target: string, temp: string, enabled: boolean): (() => void) | undefined {
+  if (!enabled || !windowsHardeningApplies()) return undefined;
+  const destination = join(realpathSync(dirname(target)), basename(target));
+  const key = process.platform === "win32" ? destination.toLowerCase() : destination;
+  if (aclDestinations.has(key)) throw new WindowsSecretAclSettleTimeoutError();
+  aclDestinations.add(key);
+  return () => {
+    if (windowsSecretAclReapPendingForPath(temp)) {
+      // Caller settlement is bounded; admission resumes only after actual handle release.
+      void flushWindowsSecretAclReapsBeforeRemoval(temp).then(() => { aclDestinations.delete(key); });
+    } else aclDestinations.delete(key);
+  };
+}
 
 /**
  * Whether this writer's Windows ACL branch applies.
@@ -297,6 +315,7 @@ function atomicWriteFileToTarget(
   if (recordOwnership) recordOwnedConfigPath(getConfigDir(), path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
+  const releaseAcl = admitAtomicAclWork(target, tmp, io === undefined);
   let hardened = false;
   let ownsTemp = false;
   // Cleanup must not consume the destination's recovery attempt for a later write.
@@ -406,7 +425,7 @@ function atomicWriteFileToTarget(
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
-  }
+  } finally { releaseAcl?.(); }
 }
 
 export function atomicWriteFile(
@@ -511,6 +530,7 @@ export async function atomicWriteFileAsync(
   const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
+  const releaseAcl = admitAtomicAclWork(target, tmp, io === undefined);
   let hardened = false;
   let tempWasHardenedBeforeContent = false;
   try {
@@ -560,5 +580,5 @@ export async function atomicWriteFileAsync(
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
-  }
+  } finally { releaseAcl?.(); }
 }
