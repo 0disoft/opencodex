@@ -24,6 +24,14 @@ import {
 } from "../../src/codex/auth-context";
 import { isCodexAccountCooldownResponse } from "../../src/codex/account-cooldown-response";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
+import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
+
+/** The Responses mapping every combo child's local auth refusal goes through. */
+function localRefusal(error: CodexAccountCooldownError, now: number): Response {
+  const response = mapCodexAuthContextErrorToResponse(error, { now });
+  if (!response) throw new Error("cooldown errors always map to a response");
+  return response;
+}
 
 type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
 const pendingTurns: Response[] = [];
@@ -209,7 +217,7 @@ test(`an upstream 429 with the local refusal's wire shape honors Retry-After ${s
 
 test("local cooldown provenance survives reconstruction but cannot be copied from wire metadata", async () => {
   const now = 1_800_000_000_000;
-  const local = cooldownErrorResponse(new CodexAccountCooldownError("synthetic-local", now + 84_692_000), now);
+  const local = localRefusal(new CodexAccountCooldownError("synthetic-local", now + 84_692_000), now);
   local.headers.set("x-codex-primary-reset-at", String((now + 84_692_000) / 1000));
   expect(isCodexAccountCooldownResponse(local)).toBe(true);
   const copy = new Response(await local.clone().text(), { status: local.status, headers: local.headers });
@@ -240,7 +248,7 @@ for (const policy of [
   test(`${policy().constructor.name} keeps its refusal behavior without ordinary cooldown provenance`, async () => {
     const now = 1_800_000_000_000;
     const error = policy();
-    const response = cooldownErrorResponse(error, now);
+    const response = localRefusal(error, now);
     expect(response.status).toBe(429);
     expect(isCodexAccountCooldownResponse(response)).toBe(false);
     const reserve = error instanceof CodexReserveUnavailableError;

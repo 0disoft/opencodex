@@ -2,7 +2,7 @@
 // this distinction private to the process: headers, body copies and HTTP hops cannot mint it.
 const accountCooldownResponses = new WeakSet<Response>();
 
-/** Minted only by cooldownErrorResponse for an ordinary CodexAccountCooldownError. */
+/** Minted only by mapCodexAuthContextErrorToResponse for an ordinary CodexAccountCooldownError. */
 export function markCodexAccountCooldownResponse(response: Response): Response {
   accountCooldownResponses.add(response);
   return response;
