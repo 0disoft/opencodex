@@ -740,6 +740,19 @@ const canSymlink = (() => {
     // And the refusal is not armed-gated: the run that caused the incident armed nothing.
     expect(() => assertRemovalOutsideProtectedTrees(protectedHomeForTests())).toThrow("refusing to remove");
 
+    // #7853: a child whose NAME starts with two dots is still inside the tree. Only a leading
+    // ".." component leaves it. The real home (first entry) is refused by equality only.
+    for (const tree of trees.slice(1)) {
+      expect(protectedRemovalReason(join(tree, "..backup"))).not.toBeNull();
+      expect(protectedRemovalReason(join(tree, "..backup", "config.json"))).not.toBeNull();
+    }
+    // And where the filesystem ignores case, a case variant names the same tree, existing or not.
+    if (process.platform === "win32" || process.platform === "darwin") {
+      const upper = join(dirname(protectedHomeForTests()), ".OPENCODEX");
+      expect(protectedRemovalReason(upper)).not.toBeNull();
+      expect(protectedRemovalReason(join(upper, "config.json"))).not.toBeNull();
+    }
+
     const ordinary = mkdtempSync(join(tmpdir(), "ocx-removal-allowed-"));
     try {
       expect(protectedRemovalReason(ordinary)).toBeNull();
