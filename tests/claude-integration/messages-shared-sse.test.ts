@@ -50,12 +50,16 @@ test("fragmented large Anthropic frames have a linear normalization budget", asy
 });
 
 test("one-byte fragments are coalesced instead of retaining one slot per byte", async () => {
-  const bytes = encoder.encode(`${start}\n\ndata: ${JSON.stringify({ padding: "x".repeat(32 * 1024) })}\n\n${stop}\n\n`);
+  const bytes = encoder.encode(`${start}\n\ndata: ${JSON.stringify({ padding: "x".repeat(128 * 1024) })}\n\n${stop}\n\n`);
   const original = Array.prototype.join;
   let maxParts = 0;
+  let joinedChars = 0;
   const join = spyOn(Array.prototype, "join");
   join.mockImplementation(function (this: unknown[], separator?: string) {
-    if (separator === "") maxParts = Math.max(maxParts, this.length);
+    if (separator === "") {
+      maxParts = Math.max(maxParts, this.length);
+      for (const part of this) if (typeof part === "string") joinedChars += part.length;
+    }
     return Reflect.apply(original, this, [separator]);
   });
   try {
@@ -64,6 +68,8 @@ test("one-byte fragments are coalesced instead of retaining one slot per byte", 
     join.mockRestore();
     expect(output).toEqual(bytes);
     expect(maxParts).toBeLessThanOrEqual(8192);
+    expect(joinedChars).toBeGreaterThanOrEqual(bytes.length);
+    expect(joinedChars).toBeLessThanOrEqual(bytes.length * 4);
   } finally {
     join.mockRestore();
   }
