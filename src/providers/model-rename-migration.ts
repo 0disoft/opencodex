@@ -57,6 +57,12 @@ export interface ModelRename {
   dropNoReasoningModels?: boolean;
   /** Refresh exact registry defaults already saved under the replacement id. */
   targetSeedRefresh?: {
+    /**
+     * Refresh only values carried over from the retired id. Set this when the registry never
+     * seeded the replacement id with the stale values, so anything already saved under it is a
+     * user override even when it happens to equal the old seed.
+     */
+    onlyTransferred?: boolean;
     contextWindow?: { from: number; to: number };
     reasoning?: {
       fromEfforts: readonly string[];
@@ -129,6 +135,7 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
     reason: "Moonshot discontinued K2.5 on 2026-08-31 and recommends K3.1 Pro for API users",
     dropNoReasoningModels: true,
     targetSeedRefresh: {
+      onlyTransferred: true,
       contextWindow: { from: 262_144, to: 1_048_576 },
       reasoning: {
         fromEfforts: [],
@@ -235,18 +242,22 @@ function targetReasoningMatchesStaleSeed(row: Record<string, unknown>, rename: M
 }
 
 /** Refresh only exact defaults emitted by the previous registry; preserve user overrides. */
-function refreshTargetSeed(row: Record<string, unknown>, rename: ModelRename): boolean {
+function refreshTargetSeed(
+  row: Record<string, unknown>, rename: ModelRename, savedBefore: { window: boolean; efforts: boolean },
+): boolean {
   const refresh = rename.targetSeedRefresh;
   if (!refresh) return false;
   let changed = false;
 
   const windows = row.modelContextWindows as Record<string, unknown> | undefined;
-  if (windows && refresh.contextWindow && windows[rename.to] === refresh.contextWindow.from) {
+  if (windows && refresh.contextWindow && windows[rename.to] === refresh.contextWindow.from
+    && !(refresh.onlyTransferred && savedBefore.window)) {
     windows[rename.to] = refresh.contextWindow.to;
     changed = true;
   }
 
   const reasoning = refresh.reasoning;
+  if (refresh.onlyTransferred && savedBefore.efforts) return changed;
   const efforts = row.modelReasoningEfforts as Record<string, unknown> | undefined;
   if (!reasoning || !efforts || !sameStringArray(efforts[rename.to], reasoning.fromEfforts)) return changed;
   efforts[rename.to] = [...reasoning.toEfforts];
@@ -376,6 +387,10 @@ export function projectModelRenames(
     // view rather than casting at each assignment.
     const row = prov as unknown as Record<string, unknown>;
     const seed = registrySeed(rename.provider);
+    const savedBefore = {
+      window: publishes(row.modelContextWindows, rename.to),
+      efforts: publishes(row.modelReasoningEfforts, rename.to),
+    };
     let touched = false;
     for (const field of MODEL_ID_LISTS) {
       if (isRegistryResidue(seed, field, row[field], rename)) continue;
@@ -415,7 +430,7 @@ export function projectModelRenames(
       touched = true;
     }
     if (renameDisabledModels(config, rename)) touched = true;
-    if (touched && refreshTargetSeed(row, rename)) touched = true;
+    if (touched && refreshTargetSeed(row, rename, savedBefore)) touched = true;
 
     if (touched) {
       changed = true;

@@ -216,6 +216,13 @@ describe("registry model rename migration (#1610)", () => {
     expect(row.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": ["low"] });
     expect(row.modelDefaultReasoningEfforts).toEqual({ "kimi-k3.1-pro": "low" });
     expect(row.modelReasoningEffortMap).toEqual({ "kimi-k3.1-pro": { medium: "low" } });
+    // An explicit successor value equal to the legacy K2.5 seed is still the user's choice.
+    const seedEqual = structuredClone(stale);
+    seedEqual.providers.moonshot!.modelContextWindows = { "kimi-k2.5": 262_144, "kimi-k3.1-pro": 262_144 };
+    seedEqual.providers.moonshot!.modelReasoningEfforts = { "kimi-k2.5": [], "kimi-k3.1-pro": [] };
+    const kept = projectModelRenames(seedEqual).config.providers.moonshot!;
+    expect(kept.modelContextWindows).toEqual({ "kimi-k3.1-pro": 262_144 });
+    expect(kept.modelReasoningEfforts).toEqual({ "kimi-k3.1-pro": [] });
   });
 
   test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
