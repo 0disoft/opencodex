@@ -702,7 +702,9 @@ describe("Codex auth context", () => {
     writeFileSync(join(testDir, "auth.json"), JSON.stringify({
       tokens: { access_token: "main-token", account_id: "main-account" },
     }));
-    const resolve = () => resolveCodexAuthContext(new Headers({ "session-id": "affinity-7799" }), cfg, "pool", {
+    // Thread and session ids give the request a bindable conversation identity.
+    const headers = { "thread-id": "affinity-7799", "session-id": "affinity-7799" };
+    const resolve = () => resolveCodexAuthContext(new Headers(headers), cfg, "pool", {
       isMainAccountTokenLive: () => true,
       getMainAccountToken: () => ({ accessToken: "main-token", chatgptAccountId: "main-account" }),
       primeCodexPoolQuotas: async () => {},
@@ -712,6 +714,11 @@ describe("Codex auth context", () => {
       kind: "main-pool",
       accountId: MAIN_CODEX_ACCOUNT_ID,
       affinityDecision: { move: "new_bind", reason: "healthy" },
+    });
+    await expect(resolve()).resolves.toMatchObject({
+      kind: "main-pool",
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      affinityDecision: { move: "reused", reason: "healthy" },
     });
   });
 
