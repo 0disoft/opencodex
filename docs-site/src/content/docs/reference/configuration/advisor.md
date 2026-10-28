@@ -126,8 +126,8 @@ notice to the worker.
 For example, a `laptop` key with `allowMeteredComboTargets: false` cannot spend on
 metered combo targets through Advisor, and `fallback.devices.laptop.provider: false`
 also blocks Advisor's provider fallback hops. An unkeyed loopback caller still needs
-the combo's `allowMeteredTargets: true` opt-in. The server captures caller policy before
-reading the request body; later key or fallback edits cannot broaden that consultation.
+the combo's `allowMeteredTargets: true` opt-in. The server captures caller policy when it
+authenticates the request, before waiting for body capacity or reading the body; later key or fallback edits cannot broaden that consultation.
 
 OpenCodex does not insert provider API keys, authorization headers, OAuth tokens, backend-only
 config secrets, process environment, or hidden chain-of-thought into that prompt. It does not

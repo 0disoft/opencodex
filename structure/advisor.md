@@ -86,8 +86,9 @@ mapping, and usage accounting are the routing authority's job. Any model string 
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
 provider credentials. `src/server/capture-admission-policy.ts` freezes a credential-free copy of
-the caller's model scope, metered consent class, fallback policy and resolved device ids during
-request ingress, before asynchronous body parsing. `src/types/admission-policy.ts` defines these decision inputs.
+the caller's model scope, metered consent class, fallback policy and resolved device ids at HTTP
+authentication, before any inbound-body capacity wait or body parsing; `src/server/index/serve-options.ts`
+hands that snapshot to the Responses, Chat and Messages handlers. `src/types/admission-policy.ts` defines these decision inputs.
 `src/server/advisor-admission-scope.ts` holds them in a process-local registry for one consultation.
 Its random 256-bit handle is honored only beside the current process-owned capability; unknown
 or missing handles are refused. Consultation completion or failure releases the entry; abort
@@ -103,6 +104,7 @@ or removal of the caller's key or fallback settings cannot broaden the frozen de
 `tests/advisor/advisor-caller-policy.test.ts` exercises these constraints through real handlers.
 `tests/advisor/advisor-caller-policy-routing.test.ts` covers laptop provider-fallback refusals,
 native combo dispatch, early capture, external forgeries and worker-unavailable delivery.
+`advisor-caller-policy-ingress.test.ts` and `advisor-caller-policy-http.test.ts` widen live config during body reads and capacity waits.
 
 ## Context and safety boundaries
 

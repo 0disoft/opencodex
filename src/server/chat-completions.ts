@@ -23,6 +23,7 @@ import {
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
+import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy } from "./advisor-admission-scope";
 import { captureAdmissionPolicy, inheritAdmissionPolicy } from "./capture-admission-policy";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
@@ -119,7 +120,10 @@ export async function handleChatCompletions(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+  logIds?: {
+    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
+    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  },
 ): Promise<Response> {
   // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
   // fallback, so a native id resolved later on the Responses bridge still replaces it.
@@ -153,7 +157,10 @@ async function handleChatCompletionsWithBudget(
   config: OcxConfig,
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+  logIds?: {
+    requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission;
+    advisorAdmissionPolicy?: CapturedAdmissionPolicy;
+  },
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   const callerPolicy = readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
@@ -168,7 +175,10 @@ async function handleChatCompletionsWithBudget(
   }
   const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, callerPolicy) : logIds?.admission;
   const inheritedAdmissionScope = advisorInternal ? resolveAdmissionModelScope(config, admission) : undefined;
-  const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission, inheritedAdmissionScope);
+  // An external caller's policy was captured at authentication; an internal hop inherits its registration.
+  const advisorAdmissionPolicy = !advisorInternal && logIds?.advisorAdmissionPolicy
+    ? logIds.advisorAdmissionPolicy
+    : captureAdmissionPolicy(config, admission, inheritedAdmissionScope);
   let chatBody: Rec;
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
