@@ -1,5 +1,6 @@
 {
   "advisor-caller-policy.test.ts": "advisor",
+  "advisor-caller-policy-ingress.test.ts": "advisor",
   "advisor-caller-policy-routing.test.ts": "advisor",
   "windows-native-principal.test.ts": "windows",
   "fixture-windows-runtime-preload.test.ts": "ci-workflows",

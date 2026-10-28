@@ -32,6 +32,7 @@ import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/deskto
 import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
+import { captureAdmissionPolicy } from "./capture-admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { declaredAnthropicServerTools, replayedAnthropicServerBlocks } from "../claude/inbound-content-options";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
@@ -618,6 +619,8 @@ async function handleClaudeMessagesWithBudget(
   // Built only under the reject policy; the legacy default leaves this request untouched.
   let envelope: ProtocolEnvelope | undefined;
   let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
+  // The Advisor caller policy is the admitted snapshot: capture it before the first await (#7859).
+  const advisorAdmissionPolicy = captureAdmissionPolicy(config, logIds?.admission);
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
@@ -1122,6 +1125,7 @@ async function handleClaudeMessagesWithBudget(
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    advisorAdmissionPolicy,
     // The translated request never forwards the caller credential; resolve the principal first.
     replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
