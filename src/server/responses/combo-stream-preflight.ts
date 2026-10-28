@@ -2,6 +2,7 @@ import { codexAccountModelRefusal, codexAccountModelRefusalPayload, hasConflicti
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
@@ -295,8 +296,8 @@ export async function preflightComboStreamResponse(
   retryableTerminal: (payload: unknown) => boolean = retryableZeroOutputTerminal,
   options?: { allowMissingContentType?: boolean; replayReadErrors?: boolean; requiredToolPrelude?: boolean; signal?: AbortSignal },
 ): Promise<ComboStreamPreflightResult> {
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const isEventStream = contentType.includes("text/event-stream")
+  const contentType = response.headers.get("content-type");
+  const isEventStream = hasResponseMediaType(response.headers, "text/event-stream")
     || (!contentType && options?.allowMissingContentType === true);
   if (!response.ok || !response.body || !isEventStream) {
     return { kind: "accepted", response };

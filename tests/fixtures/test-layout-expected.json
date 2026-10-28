@@ -17,6 +17,7 @@
     "claude-config-root-stale-updates.test.ts": "claude-integration",
     "codex-catalog-heal-reanchor.test.ts": "codex-integration",
     "tool-identity-hash.test.ts": "adapters",
+    "passthrough-media-type.test.ts": "responses",
     "zed-openai-contract.test.ts": "providers",
     "zed-failure-relay.test.ts": "providers",
     "zed-argument-consistency.test.ts": "providers",

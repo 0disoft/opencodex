@@ -237,6 +237,9 @@ WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handl
 `config.proxy` or a SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does not exempt
 the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling;
 non-SOCKS `ALL_PROXY` is not a native HTTP fetch route.
+Internal model decisions, compaction responses, combo failover, and native Responses delivery accept valid event-stream media
+types regardless of casing or parameters, including `Text/Event-Stream; charset=UTF-8`. Other explicit
+media types retain their original format even when a parameter mentions `text/event-stream`. Native delivery also identifies JSON by its exact media type; a JSON name inside a parameter does not select the JSON decoder. Its existing missing-header SSE fallback and plaintext V2 event validation still apply.
 
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are

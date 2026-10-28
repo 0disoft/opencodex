@@ -1,4 +1,5 @@
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { hasResponseMediaType } from "../../lib/http-response-semantics";
 import { JevModelInvokeError, type JevModelInvoke, type JevModelInvokeResult } from "../../combos/jev-model-backend";
 import { JEV_MAX_REQUEST_BYTES, JEV_MAX_RESPONSE_BYTES } from "../../combos/jev";
 import { serializeJevModelRequest } from "../../combos/jev-model-request";
@@ -164,7 +165,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
       }
       const bounded = await readBoundedResponseBytes(response, { maxBytes: JEV_MAX_RESPONSE_BYTES, signal });
       if (bounded.oversized) throw new JevModelInvokeError("malformed", "decision response too large");
-      const result = response.headers.get("content-type")?.includes("text/event-stream")
+      const result = hasResponseMediaType(response.headers, "text/event-stream")
         ? decodeSse(bounded.bytes)
         : (() => {
           let parsed: unknown;

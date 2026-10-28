@@ -21,7 +21,7 @@ admitted: the child shares its holder and may select the same account, so replac
 without returning the source lease would block cap-one fallback and leak capacity at higher caps.
 `tests/responses/responses-compaction-recovery-policy.test.ts`,
 `tests/responses/responses-compaction-recovery.test.ts` and
-`tests/providers/kiro/kiro-leased-responses.test.ts` pin these boundaries.
+`tests/providers/kiro/kiro-leased-responses.test.ts` pin these boundaries; routed compact and recovery decoding follow the [internal media-type contract](inventory.md#internal-response-media-types).
 
 Retry, replay, and combo failover on the Responses data plane: upstream reset retry, the
 ambiguous-resend gate and replay boundary, combo quota fallback and commit boundaries, compaction
