@@ -32,20 +32,26 @@ import {
 import { getConfigDir } from "./paths";
 
 let atomicSequence = 0;
-const aclDestinations = new Set<string>();
+const aclDestinations = new Map<string, Set<string>>();
 
-/** Own a destination through the write and any child retained after its timeout belt. */
+/** Track overlapping writes, refusing only children retained past their timeout belt. */
 function admitAtomicAclWork(target: string, temp: string, enabled: boolean): (() => void) | undefined {
   if (!enabled || !windowsHardeningApplies()) return undefined;
   const destination = join(realpathSync(dirname(target)), basename(target));
   const key = process.platform === "win32" ? destination.toLowerCase() : destination;
-  if (aclDestinations.has(key)) throw new WindowsSecretAclSettleTimeoutError();
-  aclDestinations.add(key);
+  const temps = aclDestinations.get(key) ?? new Set<string>();
+  if ([...temps].some(windowsSecretAclReapPendingForPath)) throw new WindowsSecretAclSettleTimeoutError();
+  temps.add(temp);
+  aclDestinations.set(key, temps);
+  const release = (): void => {
+    temps.delete(temp);
+    if (temps.size === 0) aclDestinations.delete(key);
+  };
   return () => {
     if (windowsSecretAclReapPendingForPath(temp)) {
       // Caller settlement is bounded; admission resumes only after actual handle release.
-      void flushWindowsSecretAclReapsBeforeRemoval(temp).then(() => { aclDestinations.delete(key); });
-    } else aclDestinations.delete(key);
+      void flushWindowsSecretAclReapsBeforeRemoval(temp).then(release);
+    } else release();
   };
 }
 
