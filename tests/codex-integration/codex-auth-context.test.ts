@@ -696,6 +696,25 @@ describe("Codex auth context", () => {
     });
   });
 
+  test("main-pool selection carries the same affinity decision as a stored-pool selection (#7799)", async () => {
+    const cfg = config();
+    cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-token", account_id: "main-account" },
+    }));
+    const resolve = () => resolveCodexAuthContext(new Headers({ "session-id": "affinity-7799" }), cfg, "pool", {
+      isMainAccountTokenLive: () => true,
+      getMainAccountToken: () => ({ accessToken: "main-token", chatgptAccountId: "main-account" }),
+      primeCodexPoolQuotas: async () => {},
+    });
+
+    await expect(resolve()).resolves.toMatchObject({
+      kind: "main-pool",
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      affinityDecision: { move: "new_bind", reason: "healthy" },
+    });
+  });
+
   test("account-gated routing distinguishes an unavailable grant from no grant", async () => {
     const cfg = config();
     saveCodexAccountCredential("pool-a", {

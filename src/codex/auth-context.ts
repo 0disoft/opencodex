@@ -344,6 +344,8 @@ export type CodexAuthContext =
       probeQuotaScope?: CodexQuotaScope;
       /** See `pool.transientProbe`. */
       transientProbe?: TransientProbeGrant;
+      /** See `pool.affinityDecision`: the same selection's binding decision, reported only (#7799). */
+      affinityDecision?: CodexAffinityDecision;
     };
 
 /** Probe lease carried by this context, when it holds one. */
@@ -1733,6 +1735,7 @@ async function resolveCodexAuthContextUnannotated(
       ...(quotaScope ? { quotaScope } : {}),
       ...(probeLeaseId ? { probeLeaseId } : {}),
       ...(probeQuotaScope ? { probeQuotaScope } : {}),
+      ...(affinityDecision ? { affinityDecision } : {}),
       ...(transientProbe ? { transientProbe } : {}),
     };
   }

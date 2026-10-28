@@ -1585,9 +1585,13 @@ export async function prepareResponsesRequest(
   // A move is the expensive event: it discards the prefix warmed on the previous account. Record
   // it as an event with its cause, so the operator reads it off one line instead of inferring it
   // from account labels across many (#4546).
-  if (admissionState.authCtx.kind === "pool" && admissionState.authCtx.affinityDecision) {
-    logCtx.affinity = admissionState.authCtx.affinityDecision.move;
-    logCtx.affinityReason = admissionState.authCtx.affinityDecision.reason;
+  // The main login rotating as `main-pool` reports the same selection's decision (#7799).
+  const affinityDecision = admissionState.authCtx.kind === "pool" || admissionState.authCtx.kind === "main-pool"
+    ? admissionState.authCtx.affinityDecision
+    : undefined;
+  if (affinityDecision) {
+    logCtx.affinity = affinityDecision.move;
+    logCtx.affinityReason = affinityDecision.reason;
   }
   {
     const binding = conversationStateBindingFromAuth(admissionState.authCtx, poolAffinityKey);
