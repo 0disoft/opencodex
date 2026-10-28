@@ -25,6 +25,7 @@ import {
 import { isCodexAccountCooldownResponse } from "../../src/codex/account-cooldown-response";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { mapCodexAuthContextErrorToResponse } from "../../src/server/responses/codex-auth-error";
+import { finalizeAccountLease } from "../../src/server/responses/core-lifetime";
 
 /** The Responses mapping every combo child's local auth refusal goes through. */
 function localRefusal(error: CodexAccountCooldownError, now: number): Response {
@@ -234,6 +235,22 @@ test("local cooldown provenance survives reconstruction but cannot be copied fro
   expect(isCodexAccountCooldownResponse(reconstructed.response)).toBe(true);
   await copied.response.text();
   await reconstructed.response.text();
+});
+
+test("a late local refusal keeps its provenance through the retained-compaction lease wrapper", async () => {
+  // Retained compaction v2 delivers every child response through finalizeAccountLease. A refusal
+  // minted after admission (for example during pacing) must still reach combo recording as local.
+  const now = 1_800_000_000_000;
+  let released = 0;
+  const local = localRefusal(new CodexAccountCooldownError("synthetic-late", now + 84_692_000), now);
+  const delivered = finalizeAccountLease(local, () => { released++; });
+  expect(delivered).not.toBe(local);
+  expect(isCodexAccountCooldownResponse(delivered)).toBe(true);
+  const consumed = await consumeComboFailure(delivered, undefined, now);
+  expect(isCodexAccountCooldownResponse(consumed.response)).toBe(true);
+  expect(consumed.retryAfter).toBe("84692");
+  await consumed.response.text();
+  expect(released).toBe(1);
 });
 
 for (const policy of [
