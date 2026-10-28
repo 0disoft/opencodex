@@ -12,9 +12,11 @@ target-local hop before the generic HTTP 400 stop, without recording a cooldown.
 beside unrelated prose, malformed envelopes and arbitrary shorten-parameter requests stay terminal.
 Cancellation, hard policy refusals, non-replayable attempts and the streaming commit boundary still win.
 `src/server/responses/core-combo.ts` retains the first confirmed HTTP 400 context refusal and its child
-diagnostics for exhaustion or a refused later send budget; later fatal errors return immediately.
+diagnostics for exhaustion (including remaining replay-incompatible or unconsented metered targets)
+or a refused later send budget. Later fatal errors and explicit fallback-policy refusals return immediately.
 Every physical attempt retains its own send count and usage. Coverage: `tests/helpers/combo-context-overflow-cases.ts`
-(registered by `tests/server/server-combo-failover-e2e.test.ts`) and `tests/responses/responses-combo-exhausted-error.test.ts`.
+(registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
+and `tests/responses/responses-combo-exhausted-error.test.ts`.
 
 ## Buffered required-tool contract
 

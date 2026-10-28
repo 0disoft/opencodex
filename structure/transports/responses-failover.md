@@ -167,7 +167,7 @@ Identity and consumer aggregation follow the [account attribution contract](../d
 
 When a serving-route change leaves a tool-bearing history whose reasoning has neither plaintext nor
 usable opaque content, a target that requires plaintext reasoning replay is ineligible. Failover
-continues to the next target; exhausting the eligible targets returns `400 target_incompatible`.
+continues to the next target; exhausting the eligible targets returns `400 target_incompatible`, unless an earlier confirmed HTTP 400 context refusal is retained, which returns `context_length_exceeded` with that child's diagnostics. Coverage: `tests/server/server-combo-reasoning-replay-eligibility.test.ts`.
 Foreign opaque reasoning is never forwarded or rewritten into plaintext; a turn with no reasoning item
 gets only the fixed placeholder in [tool-loop continuation](native-reasoning-retention.md#combo-tool-loop-continuation).
 

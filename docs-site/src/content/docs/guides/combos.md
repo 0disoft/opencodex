@@ -763,13 +763,19 @@ cooldown expires; request-local compatibility rejections do not cool the target.
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
 request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,
 and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
-across multiple failover hops. The default is `0`, which fails closed immediately with HTTP 503 when
+across multiple failover hops. Before any target is attempted, the default `0` fails closed immediately with HTTP 503 when
 every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-After` header equal
 to the earliest remaining cooldown, rounded up to whole seconds with a minimum of 1. Waits are not jittered, so
 synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
 `client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
 cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
 used by native account routing.
+
+After a confirmed HTTP 400 context refusal, exhaustion returns the first such refusal as
+`context_length_exceeded`, including when the remaining targets cannot replay reasoning or lack
+metered-spend consent, or the send budget is exhausted. It takes precedence over later retryable
+errors, including quota errors. Cancellation, later fatal refusals and explicit fallback-policy
+refusals still stop immediately; no unconsented metered target is sent the request.
 
 :::note
 Failover is intentionally bounded. It helps with target-specific availability, authentication,

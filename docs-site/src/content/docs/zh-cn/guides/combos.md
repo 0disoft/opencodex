@@ -161,6 +161,8 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 
 当前请求不会再次重试同一个已经尝试过的目标——但有一个例外：设置了 `waitForCooldownMs` 的单目标 combo 由于没有可故障转移的替代目标，可以在同一请求内该目标的冷却结束后重试其唯一目标。请求本地的兼容性拒绝仍然直接返回而不重试。后续请求会跳过它，直到冷却结束。已过去的 HTTP-date `Retry-After` 同样会像 `Retry-After: 0` 一样保留为上游即时指令。设置 `waitForCooldownMs` 后，后续请求可以等待最早恢复资格的目标的冷却，单次选择尝试最多等待该上限，然后重新选择一次。因此，多次故障切换跳转的请求总共最多等待 `hops × waitForCooldownMs`。默认值为 `0`；当所有合格目标都处于冷却中时，请求会立即失败并返回 HTTP 503；该 `combo_unavailable` 503 会带有 `Retry-After` 标头，其值等于剩余冷却时间最短的目标，向上取整为整秒，最小值为 1 秒。等待不加入抖动，因此可能同时唤醒。请求中止会取消这次等待并返回正常的 `client_cancelled` 响应；取消后不会调度备用目标。combo 目标冷却是进程本地、按 combo 区分的状态，与原生账户路由使用的账户级 Codex 配额冷却彼此独立。
 
+上述 HTTP 503 规则适用于尚未尝试任何目标时。确认 HTTP 400 上下文拒绝后，若合格目标或发送预算耗尽，会以 `context_length_exceeded` 返回第一个此类拒绝，优先于后续可重试错误（包括配额错误）。剩余目标无法重放推理或缺少计费使用同意时也适用。取消、后续致命拒绝和明确的回退策略拒绝仍会立即停止；不会向未经同意的计费目标发送请求。
+
 :::note
 故障切换是有边界的。它有助于处理特定目标的可用性、认证、配额和过载失败；它不会掩盖调用方错误或策略拒绝。
 在非 combo 的 Responses 请求上，allowlist 中的 xAI 策略 403 会在 Codex 将其当作传输失败重试之前被改写为 HTTP 200 `incomplete/content_filter`；见 [xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals)。combo 跳转仍把原始 HTTP 403 分类为跳转。

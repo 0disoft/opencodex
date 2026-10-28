@@ -211,8 +211,14 @@ valeur `Retry-After` valide, opencodex l’utilise à la place ; les en-têtes d
 acceptées, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
-le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
+le temps de recharge expire. Si aucune cible n’a été tentée et qu’aucune n’est éligible, le proxy renvoie HTTP 503 avec
 `error.code = "combo_unavailable"`.
+
+Après un refus de contexte HTTP 400 confirmé, l’épuisement des cibles ou du budget d’envoi renvoie
+le premier refus sous `context_length_exceeded`, avant toute erreur ultérieure réessayable, même de quota.
+Cela inclut les cibles restantes incompatibles avec la relecture du raisonnement ou sans consentement
+de dépense. L’annulation, un refus fatal ultérieur ou un refus explicite de la politique de repli reste
+prioritaire ; aucune cible facturée sans consentement ne reçoit la requête.
 
 :::note
 Le basculement est intentionnellement limité. Il facilite la disponibilité, l'authentification et l'authentification spécifiques à la cible.

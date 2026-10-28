@@ -1490,6 +1490,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
+        if (contextFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }

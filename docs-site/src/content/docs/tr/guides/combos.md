@@ -241,8 +241,13 @@ yerine onu kullanır; Codex sıfırlama başlıkları ve yapılandırılmış `c
 açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
 
 Geçerli istek denenen aynı hedefi asla yeniden denemez. Daha sonraki istekler
-soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
+soğuma süresi dolana kadar onu atlar. Henüz hiçbir hedef denenmemişse ve uygun hedef yoksa proxy
 `error.code = "combo_unavailable"` ile HTTP 503 döndürür.
+
+Doğrulanmış bir HTTP 400 bağlam reddinden sonra hedefler veya gönderim bütçesi tükenirse ilk ret
+`context_length_exceeded` olarak döner; kota hataları dahil sonraki yeniden denenebilir hatalardan önceliklidir.
+Kalan hedeflerin akıl yürütmeyi yeniden oynatamaması veya ücretli kullanım onayının bulunmaması da buna dahildir.
+İptal, sonraki ölümcül ret ve açık geri dönüş politikası reddi hemen durdurur; onaysız ücretli hedefe istek gönderilmez.
 
 :::note
 Yük devretme kasıtlı olarak sınırlandırılmıştır. Hedefe özgü kullanılabilirlik,
