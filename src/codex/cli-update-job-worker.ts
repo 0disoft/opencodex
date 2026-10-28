@@ -32,6 +32,7 @@ import type { CodexCliUpdateChannel, CodexCliUpdatePlan } from "./cli-update-pla
 import type { CodexCliUpdateInspectionSnapshot } from "./cli-update-inspection-context";
 import { trustedNodeLauncherContext } from "../cli/launcher-context";
 import { spawnWorker } from "../lib/worker-embed";
+import { recoverClosedCodexCliUpdateWorker } from "./cli-update-worker-recovery";
 import {
   CODEX_CLI_UPDATE_GATE_FREE,
   CODEX_CLI_UPDATE_GATE_PARENT_WRITE,
@@ -39,6 +40,7 @@ import {
   cancelCodexCliUpdateFence,
   codexCliUpdateSelectionGate,
   createCodexCliUpdateFence,
+  allocateCodexCliUpdateGateOwner,
 } from "./cli-update-selection-gate";
 import type { CodexCliUpdateWorkerReply, CodexCliUpdateWorkerRunMessage } from "./cli-update-worker";
 
@@ -81,13 +83,9 @@ export function codexCliUpdateUnjoinedWorkerClosedTotal(): number {
 }
 
 /**
- * Operator-facing snapshot for diagnosing a held selection gate. The gate
- * cell is one Int32 word with no owner field, so this reports CORRELATION
- * evidence only: which update jobs are in flight here and whether each
- * Worker's close was actually observed. A job listed beside a worker_commit
- * gate is a candidate holder, never a proven one; an empty list beside a
- * held gate means the holder is unknown to this process — possibly a dead
- * Worker whose window never released (the gate is never auto-released).
+ * Operator-facing snapshot for diagnosing admission. Worker holder words
+ * carry generations; recovery observers can outlive the dispatch receipt.
+ * The liveJobs list remains dispatch evidence, not a list of OS children.
  */
 export interface CodexCliUpdateWorkerDiagnostics {
   readonly gate: "free" | "parent_write" | "worker_commit" | "unrecognized";
@@ -104,7 +102,7 @@ export function codexCliUpdateWorkerDiagnostics(): CodexCliUpdateWorkerDiagnosti
   const raw = Atomics.load(new Int32Array(codexCliUpdateSelectionGate()), 0);
   const gate = raw === CODEX_CLI_UPDATE_GATE_FREE ? "free"
     : raw === CODEX_CLI_UPDATE_GATE_PARENT_WRITE ? "parent_write"
-    : raw === CODEX_CLI_UPDATE_GATE_WORKER_COMMIT ? "worker_commit"
+    : raw >= CODEX_CLI_UPDATE_GATE_WORKER_COMMIT ? "worker_commit"
     : "unrecognized";
   return {
     gate,
@@ -177,17 +175,16 @@ function trackUnjoined(worker: Worker, alreadyClosed: boolean): void {
 }
 
 /**
- * A Worker that dies while holding the commit gate leaves the cell at
- * worker_commit forever — there is no auto-release by design. Report the
- * correlation honestly: an observed close does not prove that Worker held it.
+ * A closed worker can still have a live installer group. Owner-scoped
+ * recovery releases admission only after matching terminal proof.
  */
 function warnIfCommitGateHeld(): void {
   if (Atomics.load(new Int32Array(codexCliUpdateSelectionGate()), 0)
-    !== CODEX_CLI_UPDATE_GATE_WORKER_COMMIT) return;
+    < CODEX_CLI_UPDATE_GATE_WORKER_COMMIT) return;
   console.warn(
     "[opencodex] a Codex CLI update worker closed while the shared selection gate still reads"
-    + " worker_commit; the holder is unknown and the gate is never auto-released — inspect"
-    + " codexCliUpdateWorkerDiagnostics() before treating a persist/shim/restart busy as stuck",
+    + " worker_commit; admission awaits owner-scoped terminal evidence — inspect"
+    + " codexCliUpdateWorkerDiagnostics() before retrying a busy operation",
   );
 }
 
@@ -248,6 +245,8 @@ function dispatchWorker(
     worker.addEventListener("messageerror", () => unsettled());
     worker.addEventListener("close", () => {
       state.closed = true;
+      recoverClosedCodexCliUpdateWorker(message.gate, message.fence, message.owner!, message.requestId,
+        message.env?.OPENCODEX_HOME);
       if (grace) clearTimeout(grace);
       // One close handler decides everything: a stored valid reply wins, any
       // other close — before a reply, or after only implausible traffic — is
@@ -291,6 +290,7 @@ async function runInWorker(
   const jobId = options.jobId ?? randomUUID();
   const requestId = randomUUID();
   const fence = createCodexCliUpdateFence();
+  const owner = allocateCodexCliUpdateGateOwner(codexCliUpdateSelectionGate());
   const snapshot = options.snapshot !== undefined
     ? options.snapshot
     : trustedNodeLauncherContext()?.codexCliInspectionEnv ?? null;
@@ -336,6 +336,7 @@ async function runInWorker(
       snapshot,
       gate: codexCliUpdateSelectionGate(),
       fence,
+      owner,
       ...(options.env ? { env: options.env } : {}),
     };
     return await dispatchWorker(worker, message, options, state);

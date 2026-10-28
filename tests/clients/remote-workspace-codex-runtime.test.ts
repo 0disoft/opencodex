@@ -3,7 +3,7 @@ import { expect, spyOn, test } from "bun:test";
 import {
   codexCliUpdateSelectionGate,
   beginCodexCliSelectionParentWrite,
-  createWorkerCommitWindow,
+  createWorkerCommitWindow, createCodexCliUpdateFence,
 } from "../../src/codex/cli-update-selection-gate";
 import { resolve } from "node:path";
 import {
@@ -151,7 +151,7 @@ test("CLI commit window blocks Remote Workspace native spawn and release restore
   const options = launchGateStartOptions();
   const window = createWorkerCommitWindow({
     gate: codexCliUpdateSelectionGate(),
-    fence: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    fence: createCodexCliUpdateFence(),
   });
   let held = false;
   const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
@@ -202,7 +202,7 @@ test("an existing Remote Workspace turn can interrupt and close while the worker
   }));
   const window = createWorkerCommitWindow({
     gate: codexCliUpdateSelectionGate(),
-    fence: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    fence: createCodexCliUpdateFence(),
   });
   let held = false;
   let stopped = false;

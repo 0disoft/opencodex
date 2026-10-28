@@ -32,7 +32,7 @@ ocx start --socks5-off
 
 对于已连接的 hub 客户端或 Remote Link Child，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
 
-若旧版普通代理无法确认支持保留配置，命令会在停止服务或进程前拒绝操作。请通过管理该运行时的应用或服务更新并重启它，然后重试。
+停止已连接的客户端时，命令会依据受保护的本地运行时记录验证监听器的身份证明。客户端监听器和普通代理都必须通过此验证；普通代理还必须通过经过身份验证的读取确认配置保留能力。对于旧版或无法验证的运行时，命令会在停止服务或进程前拒绝操作。请通过管理该运行时的应用或服务更新并重启它，然后重试。
 
 对于已停止的客户端，命令会确认服务管理器未活动且已知本地端点没有运行时，然后返回正常的“未运行”结果。
 
@@ -172,6 +172,8 @@ ocx status --json
 
 当命令在 Codex 应用内部运行时，重启会交给分离的 helper，当前会话会随应用一起结束。
 
+**指定来源的同步。** `ocx sync --expect-link <linkId>`（Remote Link Child）和 `ocx sync --expect-hub-key <apiKeyId>`（hub 客户端）只有在本机仍连接到该链接或使用该密钥时才会同步。否则不做任何更改，也不同步本地提供方，命令以退出码 5 结束，stderr 最后一行为 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`。格式错误或重复的标志以退出码 2 结束。详情见[英文参考](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)。
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 使 Codex 的本地模型选择器缓存失效，让它根据当前激活的 opencodex 目录重新生成。与 `ocx sync` 相同的陈旧 `app-server` 警告和可选重启标志同样适用。
@@ -296,7 +298,7 @@ Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的�
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
+在 `http://127.0.0.1:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
 
 ## 更新
 

@@ -78,15 +78,15 @@ the package manifest/bin, npm manifest/bin, Node and the first in-prefix platfor
 package plus native backing are observed together. Backing lookup follows the
 nearest-first Node lanes and is repeated while the files and ancestors remain held.
 Native handles refuse reparse points, writers and rename/delete sharing; initial
-manifest and Node identities must match the final observation. Text stays bounded
-to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
+manifest and Node identities must match the final observation. Plan paths and configured manager roots must match their held handles' normalized long DOS names; unresolvable or aliased roots refuse management.
+Manager roots remain held through inspection and metadata queries. Text stays bounded to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
 `MAX_NATIVE_BACKING_BYTES` as POSIX, defined in `src/codex/cli-installation-limits.ts`.
 The native reader bounds aggregate requests to that backing plus 128 MiB Node
 and twelve 1 MiB text requests; hash-only bytes are never buffered whole.
 Only the opt-in content observation streams the entrypoint, npm CLI, Node and native bytes. The
 plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare check holds the
-same files — Node and native included — open and identity-checked metadata-only, with zero content
-bytes read and a null `installContentDigest`.
+same files open and identity-checked, reading only bounded manifests, shim bytes and the Node PE header;
+entrypoint, npm CLI, native and full Node digest streams stay unread, with a null `installContentDigest`.
 
 PATH-only or separate-prefix Node selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
@@ -145,8 +145,15 @@ cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pac
 The version verification child inherits the owned Node compile-cache path, which is removed with
 terminal apply staging; an uncertain live child retains that staging and its lease. A verifier setup
 failure before any child exists is terminal evidence instead, so the lease is released and later applies are not blocked.
-The owned staging directory is canonicalized immediately after creation, so symlinked temporary roots
-and macOS's /var alias are supported without accepting a linked archive file.
+`src/codex/cli-update-paths.ts` supplies the shared POSIX ancestry policy for the lease,
+mutation paths and job store. Canonical ancestors must be root/current-user owned and lack group/other
+write permission; root-owned sticky ancestors are allowed. Every existing directory under the npm
+prefix must additionally lack shared write permission, including executable, scope and package parents.
+Their identities and permissions are revalidated before spawn. Directory links and unbounded trees refuse.
+Staging is a private 0700 same-owner child of a canonical trusted temporary root; unsafe TMPDIR refuses
+with `staging_path_untrusted`. Canonical temporary aliases (including macOS /var) remain supported.
+Staging identity/ancestry is rechecked before install; npm temp and compile-cache writes stay inside it.
+The policy excludes other-user namespace replacement, not concurrent changes by the same user or root.
 `src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
 256 MiB compressed, 512 MiB total unpacked, 384 MiB member and 4,096 member bounds. Only small
 manifest/entrypoint bytes are retained; native and auxiliary members retain size/mode/hash metadata.
@@ -175,7 +182,9 @@ Required launcher/native paths must also pass the current user's X_OK check; ano
 After file/selection readback, the selected launcher runs with `--version` in an owned home/temp sandbox,
 with 16 KiB output and an eight-second deadline. Normal exit and the exact target version are required.
 Only this verification's new POSIX process group may be terminated on a deadline; an unconfirmed close/group
-exit retains lease/staging and reports its PID with an ambiguous result. Existing sessions are never signalled.
+exit retains lease/staging and reports its PID with an ambiguous result. Its observer survives the bounded
+reap result: late close plus group absence, or a group probe returning ESRCH, releases that owner's
+admission and cleans up its lease/staging without rewriting the ambiguous receipt. Existing sessions are never signalled.
 Verified target readback and execution are `applied` even after nonzero installer exit; unchanged full original evidence
 is `not_applied` even after exit zero. Partial, unreadable or uncertain results are `ambiguous`.
 Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A failed or thrown
@@ -238,10 +247,48 @@ cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation remo
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
 its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
-window spans only the worker's final process scan through its installer-spawn call, and a synchronous
+window spans the worker's final process scan through installer termination and post-install readback. A synchronous
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
-the same target must not split the exclusion; a writer on a different configDir can see a brief busy.
+the same target must not split the exclusion; a writer on a different configDir can also see busy.
+The gate's holder word carries a unique generation; release compares that exact owner, so an obsolete
+observer cannot clear a later window. An installer/verifier with unconfirmed terminal state retains the
+gate as well as lease/staging. `src/codex/cli-update-worker-recovery.ts` observes worker close: a fence
+that never committed is atomically cancelled before releasing that worker's owner, preventing a late
+commit after Bun's close notification. A committed fence is sealed against a subsequent verifier spawn. After commit,
+worker close alone does not release admission: the published detached POSIX process group must be absent,
+or the worker must have published terminal cleanup. Missing child publication stays uncertain. Recovery
+continues probing a known group after dispatch settlement. Preparation refusal and terminal readback release it.
+Cancellation precedes the holder check, including a close before gate acquisition. Verifier arming
+failure before invocation preserves no-child proof; terminal durable writes retry while admission
+stays closed. Publication uses a bounded pair of owner-specific temporary names, so transient storage
+failures cannot consume admission capacity with one new partial file per retry.
+
+`src/codex/cli-update-recovery.ts` persists a private, token-scoped recovery record under the config root
+before commit/spawn, publishes each child group after spawn, and records terminal cleanup before gate
+release. Starting the verifier first resets the child publication and durable record to armed, so an old
+installer group's exit cannot clear a new verifier. Parent admission checks these records after restart:
+terminal records permit admission; child records require both parent-process absence and whole-group
+absence. Parent recovery creates a missing store under the same trusted ancestry/private-permission
+policy and durably publishes its exact token's terminal marker before releasing admission, including
+the config parent's new directory entry. A late arm for a token with a verified marker is a no-op;
+markers also shadow an already interrupted publication and resolve that owner's partial precommit record.
+After restart, a complete terminal pending write from either publication path is recognized without
+renaming or changing the job receipt. It must pass the same private/no-follow file checks, name the exact
+token, carry a null child group, and match the published record's parent identity when present. Fresh
+parent absence and any published child's whole-group absence are required. Every unshadowed pending
+file must independently satisfy these checks; malformed, armed, foreign or unsafe evidence stays fenced.
+Admission re-probes non-terminal lifetime evidence on every attempt, so later group exit is observed
+without retaining a pre-restart observer or caching a stale refusal.
+Absent recovery history admits ordinary callers, including a symlinked config home or ancestor.
+Existing evidence is read through the canonical home target with its trusted ancestry; a linked recovery
+store, unsafe target, or evidence that becomes unreadable stays fenced. Updater mutation eligibility
+retains its stricter canonical/no-alias policy. EPERM, unrelated malformed/partial records,
+and an armed record with no published child stay closed for
+operator inspection. PID reuse can delay recovery but cannot prove absence. The protected durable job
+ledger keeps its existing ambiguous result; fence recovery neither retries installation nor converts it
+to success. Abandoned installation-prefix leases and staging after process death are not reclaimed by
+this admission recovery. Old jobs lacking recovery records retain their existing unknown-state projection.
 Ordinary config writes, account operations, model requests, existing session interrupt/close and
 arbitrary subprocesses are not gated. The gate claims nothing about processes the parent does not own:
 an external installer, a handoff helper's delayed descendants, or an OS-level snapshot race stays the

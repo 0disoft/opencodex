@@ -2043,7 +2043,7 @@ describe("provider discovered model display names", () => {
       maxOutputTokens: 500_000,
       // Classified by the 2026-09-13 OAuth-lane probe: grok-4.6 is Fast-eligible on
       // either xAI transport, so the hint fills the capability and its description.
-      supportsServiceTier: true, supportsUltraFastTier: false,
+      supportsServiceTier: true, supportsUltraFastTier: false, supportsFlexTier: false,
       fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
@@ -4232,8 +4232,8 @@ describe("Codex catalog routed normalization", () => {
         { effort: "low", description: "l" }, { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
       ],
     };
-    // Genuine: real display name — must be preserved untouched (installed codex is SoT once
-    // it catches up), marker field proves no replacement happened.
+    // Genuine metadata is preserved; priority is resolved separately from source provenance.
+    // The marker proves no metadata replacement happened.
     const genuineSol = {
       ...nativeTemplate(),
       slug: "gpt-5.6-sol",
@@ -4251,7 +4251,7 @@ describe("Codex catalog routed normalization", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(luna?.priority).toBe(8); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
-    expect(sol?.priority).toBe(1);
+    expect(sol?.priority).toBe(4); // no baseline/source field: use snapshot, never published rank
   });
 
   test("fallback-quality upgrades restore snapshot metadata without losing pristine priority", () => {
@@ -6266,7 +6266,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-flash": true,
+      "deepseek-flash": true, "deepseek-v4-pro": true,
     });
   });
 
@@ -6839,7 +6839,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
-    "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna",
   ];
 
   test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {

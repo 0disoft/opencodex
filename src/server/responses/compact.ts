@@ -25,7 +25,7 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
-import { stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
+import { repairUrlCitationAnnotations, stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
@@ -80,6 +80,7 @@ import {
 } from "../../codex/auth-context";
 import {
   forceRefreshMainAccountToken,
+  mainAccountTokenQuotaWriter,
   type NativeMainRefreshDependencies,
 } from "../../codex/main-account";
 import {
@@ -371,6 +372,7 @@ async function refreshNativeMainCompactContext(args: {
       ...authCtx,
       accessToken: refreshed.accessToken,
       chatgptAccountId: refreshed.chatgptAccountId,
+      mainQuotaWriter: mainAccountTokenQuotaWriter(refreshed) ?? authCtx.mainQuotaWriter,
     };
     const refreshedProvider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(provider),
@@ -949,7 +951,7 @@ export async function handleResponsesCompact(
     // #5095: the compact endpoint forwards `raw` directly, so it needs the same legacy dotted
     // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
     // which is the request a long task depends on to keep going.
-    // This branch is OpenAI-only and bypasses the adapter's Google replay projection (#7111).
+    // Direct compact bypasses the adapter's Google replay projection (#7111).
     const compactBody = repairLegacyDottedToolCallNames(
       stripProviderInputItemMetadata(sanitizeReasoningInputContent(compactBodyRaw, {
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
@@ -1160,8 +1162,9 @@ export async function handleResponsesCompact(
         if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.preserveResponsesMessageMetadata !== true) {
           replayBody = stripInternalChatMessageMetadataPassthrough(replayBody) as typeof replayBody;
         }
+        // A queued key selection can refresh the destination; project only for this send.
         return isOpenAiOperatedResponsesDestination(sendProvider)
-          ? replayBody : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
+          ? repairUrlCitationAnnotations(replayBody) : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
       };
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,

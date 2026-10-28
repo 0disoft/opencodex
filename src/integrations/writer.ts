@@ -28,7 +28,6 @@ import {
   type OwnershipRecord,
 } from "./ownership";
 import {
-  isHermesAffinityUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
@@ -48,6 +47,7 @@ import { buildIntegrationContribution, exportContextOf, qoderLegacyCatalogConfli
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
+import { hermesRefreshRefusal } from "./hermes-refresh";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -369,14 +369,8 @@ function applyOrRefreshIntegration(
   if (classified.state === "current") {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
   }
-  // Catalog refresh must not opt an existing Hermes integration into affinity.
-  // Explicit Apply (or Replace) records the new contract before refresh resumes.
-  if (!allowAbsent && record && isHermesAffinityUpgrade(parsed, record, contribution)) {
-    return {
-      ok: true, changed: false, state: "stale", clientId,
-      message: "Hermes session affinity requires Apply in Integrations; refresh left the configuration unchanged",
-    };
-  }
+  const hermesRefusal = hermesRefreshRefusal(pre, allowAbsent);
+  if (hermesRefusal) return hermesRefusal;
 
   // A stale refresh drops what the PREVIOUS record owned before merging: a
   // model that left the catalog would otherwise stay behind as an orphan the
@@ -829,6 +823,12 @@ export interface CoordinatedIntegrationOptions {
    * `revalidate` and any lock acquisition). A non-null result refuses without writing.
    */
   guard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
+  /**
+   * Restore's own synchronous last word, evaluated immediately before the restore transaction
+   * with no await in between. Restore deliberately ignores `guard` (the background-refresh
+   * admission hook), so a caller that must re-prove a boundary at restore time uses this one.
+   */
+  restoreGuard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
 }
 
 /** Freeze all mutable resolution seams before the first lock await. */
@@ -1026,7 +1026,9 @@ export async function restoreIntegrationCoordinated(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
-  const run = () => restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
+  // Nothing awaits between restoreGuard and the restore transaction.
+  const run = () => options?.restoreGuard?.(frozen)
+    ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
     return refused ?? run();

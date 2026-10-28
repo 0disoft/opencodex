@@ -8,6 +8,7 @@
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import {
   assertChatCompletionsRoutingBody,
+  chatRawReasoningVisible,
   ChatCompletionsRequestError,
 } from "../chat/inbound";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
@@ -177,6 +178,8 @@ async function handleChatCompletionsWithBudget(
   const droidDefaultEffort = effortRow
     ? undefined
     : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER), chatBody);
+  // Read the caller's delivery choice before any generation default (Droid effort) is written.
+  const rawReasoningVisible = chatRawReasoningVisible(chatBody);
   if (effortRow) chatBody.model = effortRow.baseId;
   if (fastRow) {
     chatBody.model = fastRow.baseId;
@@ -350,6 +353,13 @@ async function handleChatCompletionsWithBudget(
     // and sends the core only the request settings.
     if (directRoute) {
       directConversation = chatConversationToIr(chatBody, chatBody.model as string);
+      // Unlike the bridge body below, the settings-only projection does not contain the
+      // conversation. Account for the retained IR itself before an adapter materializes it
+      // again; reasoning placeholders can be larger than the source Chat message.
+      translatorBudget.chargeRetained(
+        Buffer.byteLength(JSON.stringify(directConversation), "utf8"),
+        { kind: "request_copies" },
+      );
       internalBody = chatSettingsBody(chatBody);
     } else {
       internalBody = chatToResponsesBody(chatBody, {
@@ -511,6 +521,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the
     // undeclared-tool guard can still enforce it; absent/partial catalogs stay deferred.
