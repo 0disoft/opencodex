@@ -248,7 +248,7 @@ attempt is traced with `markAttemptProtocolPath`: the request path is still the 
 side still decodes through the Responses projection, and the response path is
 `[upstream, "ir", inbound]`. When the encoder option carries `requestLane: "direct"` (the
 Antigravity direct lane) the request path is `[inbound, "ir", upstream]` and the mode
-`translated`.
+`translated`. Both paths separate Chat raw delivery from upstream thinking options under [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary); web-search and image/video sidecar turns retain `responses-internal` delivery with that same preference even when direct encoders are enabled.
 
 ## Antigravity direct lane
 
