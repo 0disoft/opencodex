@@ -218,6 +218,13 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+If Antigravity login cannot discover a Cloud Code Assist project, the failure includes a sanitized
+summary for `loadCodeAssist` and the last `onboardUser` response: HTTP status, response category,
+completion/error presence and known project-field types. It distinguishes HTTP refusal, unusable
+JSON, invalid roots, unfinished onboarding and completion with an error or without a project.
+The summary omits upstream values, arbitrary key names and account/project identifiers. Login
+still requires a discovered project and saves no account when discovery fails.
+
 The Antigravity Accounts tab shows an observed membership tier as a badge beside the account
 label, using the upstream tier ID (for example `free-tier` or `gemini-pro`). No badge appears
 when the plan is unknown; it does not affect routing or quota.
