@@ -1324,6 +1324,8 @@ export const en = {
   "logs.detail.outcome.incomplete": "Incomplete",
   "logs.detail.outcome.aborted": "Aborted",
   "logs.detail.sends.label": "Upstream sends",
+  "logs.detail.sends.unavailable": "Unavailable",
+  "logs.detail.retries.label": "Retries",
   "logs.detail.sends.unresolved": "unresolved",
   "logs.detail.attempt.recovery.unknown": "Unknown recovery reason",
   "logs.detail.cause.label": "Failure cause",
