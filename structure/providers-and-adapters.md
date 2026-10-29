@@ -91,7 +91,7 @@ Kimi Coding's Chat, API-key, and optional Responses presets consume the same mod
 `src/providers/registry/model-seeds.ts`, including native `k3-256k` and thinking-only 1M `k3.1-pro[-highspeed]`. The Responses preset
 shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
 enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from
-the registry; sharing authentication does not implicitly share a usage-price namespace.
+the registry; sharing authentication does not implicitly share a usage-price namespace. The separate `moonshot` API preset defaults to `kimi-k3.1-pro`; `src/providers/model-rename-migration.ts` moves discontinued K2.5 selections on official destinations to it, drops stale no-reasoning classification, and refreshes exact old 256K/empty reasoning seeds to 1M and `low`/`high`/`max` with the API `none` omission map. Explicit successor metadata and Custom destinations keep precedence. Roster repair accepts the literal pre-K3.1 seed and its post-rename form, with metadata additions measured against the original seed. K2.6 and K2.7 Code/highspeed stay seeded for existing API users.
 
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
