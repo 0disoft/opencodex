@@ -1,4 +1,5 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { isCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { comboCooldownRetryAfterSeconds, type CodexAccountModelRefusal } from "../../combos/failover";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
@@ -1415,9 +1416,10 @@ export async function executeComboResponses(
     const poolLocalRefusal = isAnthropicPoolLocalRefusal(
       config, pick.target.provider, failure.response.status, failedAccount, failureNow,
     );
+    const codexLocalRefusal = isCodexAccountCooldownResponse(failure.response);
     const nextPick = advanceComboAfterFailure(config, pick, {
-      retryAfter: poolLocalRefusal ? undefined : failure.retryAfter,
-      resetAt: failure.resetAt,
+      retryAfter: poolLocalRefusal || codexLocalRefusal ? undefined : failure.retryAfter,
+      resetAt: codexLocalRefusal ? undefined : failure.resetAt,
       cooldownMs: combo.cooldownMs,
       now: failureNow,
       cooldownScope: failureCooldownScope,
