@@ -278,7 +278,7 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
 | `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
 | `GET /api/update/check` | Asynchronously check the `latest` or `preview` package channel and refresh the package cache on success | 400 invalid tag |
-| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
+| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; 409 `update_restart_unsupervised` when the proxy runs inside a systemd unit other than OpenCodex's own user service, or the worker cannot leave the service cgroup (with or without restart, since the update stops the proxy first); job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings, including `sourceModels`; GET also returns the runtime-owned `sourceModelOptions` inventory | 400 invalid shape or value, including an empty, duplicate, whitespace-bearing, or provider-qualified source prefix, or more than 32 prefixes / 128 characters per prefix; source-list failures carry `code: shadow_call_source_invalid`, target conflicts `code: shadow_call_target_invalid` |

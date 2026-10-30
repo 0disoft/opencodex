@@ -59,6 +59,8 @@ export interface ManagementApiDeps {
   /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
   requestMetrics?: RequestMetricsSnapshotter;
   checkPackageUpdate?: (channel: Channel) => Promise<UpdateCheckResult>;
+  /** Test seam for the dashboard restart supervisor check (src/update/worker-launch.ts). */
+  dashboardRestartRefusal?: typeof import("../../update/worker-launch").dashboardRestartRefusal;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */
