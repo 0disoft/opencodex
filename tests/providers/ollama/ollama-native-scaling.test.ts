@@ -78,6 +78,46 @@ for (const ending of ["\n", "\r\n", ""] as const) {
   });
 }
 
+for (const deficit of [0, 1]) {
+  test(`fragmented Unicode residual ${deficit ? "rejects one byte below" : "admits at"} its UTF-8 byte limit`, async () => {
+    const content = "é한😀";
+    const text = record(content);
+    const bytes = encoder.encode(text);
+    expect(bytes.length).toBeGreaterThan(text.length);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: bytes.length - deficit });
+    let offset = 0;
+    let cancelled = false;
+    let beforeEof: ReturnType<typeof budget.snapshot> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset < bytes.length) {
+          controller.enqueue(bytes.subarray(offset, ++offset));
+          return;
+        }
+        // With no read-ahead, every fragment has been ingested; no delimiter or EOF yet.
+        beforeEof = budget.snapshot();
+        controller.close();
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter().parseStream(new Response(body), budget)) events.push(event);
+    if (deficit === 0) {
+      expect(beforeEof).toMatchObject({ currentBytes: bytes.length, highWaterBytes: bytes.length, overflows: 0 });
+      expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(content);
+      expect(events.at(-1)?.type).toBe("done");
+      expect(budget.snapshot().highWaterBytes).toBe(bytes.length);
+    } else {
+      expect(beforeEof).toBeUndefined(); // Refusal must happen while the record is still buffered.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+      expect(budget.snapshot().overflows).toBe(1);
+      expect(cancelled).toBe(true);
+    }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+}
+
 test("invalid UTF-8 after a retained partial record releases its budget and cancels", async () => {
   const prefix = encoder.encode('{"message":{"content":"partial ');
   const bytes = new Uint8Array(prefix.length + 1);
