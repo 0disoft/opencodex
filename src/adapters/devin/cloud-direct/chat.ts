@@ -1446,7 +1446,10 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         remaining = 0;
       }
     }
-    if (consumed > 0) chunkQueue.splice(0, consumed);
+    if (consumed > 0) {
+      chunkQueue.copyWithin(0, consumed);
+      chunkQueue.length -= consumed;
+    }
   }
 
   // Track the idle timer at outer scope so the finally block can clear it

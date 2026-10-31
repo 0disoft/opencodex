@@ -37,20 +37,29 @@ test("Devin fragmented frame drains use bounded queue-prefix removals", async ()
   const wire = Buffer.concat([frameConnectStream(encodeString(3, text), false), trailer()]);
   const shift = Array.prototype.shift;
   const splice = Array.prototype.splice;
+  const copyWithin = Array.prototype.copyWithin;
   let removals = 0;
+  let discardedChunkSlots = 0;
   const shifting = spyOn(Array.prototype, "shift").mockImplementation(function () {
     if (Buffer.isBuffer(this[0])) removals++;
     return Reflect.apply(shift, this, []);
   });
   const splicing = spyOn(Array.prototype, "splice").mockImplementation(function (...args: Parameters<typeof splice>) {
-    if (args[0] === 0 && args[1] && Buffer.isBuffer(this[0])) removals++;
-    return Reflect.apply(splice, this, args);
+    const prefix = args[0] === 0 && args[1] && Buffer.isBuffer(this[0]);
+    const removed = Reflect.apply(splice, this, args);
+    if (prefix) { removals++; discardedChunkSlots += removed.length; }
+    return removed;
+  });
+  const copying = spyOn(Array.prototype, "copyWithin").mockImplementation(function (...args: Parameters<typeof copyWithin>) {
+    if (args[0] === 0 && args[1] > 0 && Buffer.isBuffer(this[0])) removals++;
+    return Reflect.apply(copyWithin, this, args);
   });
   let events: CloudChatEvent[];
   try { events = await collect(wire, 4); }
-  finally { shifting.mockRestore(); splicing.mockRestore(); }
+  finally { shifting.mockRestore(); splicing.mockRestore(); copying.mockRestore(); }
   expect(events.filter(event => event.kind === "text").map(event => event.text)).toEqual([text]);
   expect(removals).toBeLessThanOrEqual(8);
+  expect(discardedChunkSlots).toBe(0);
 });
 
 for (const chunkBytes of [1, 3, 5, 7, 17, 65536]) {
