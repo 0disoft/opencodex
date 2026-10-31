@@ -8,11 +8,12 @@ const content = "é한😀".repeat(32);
 const line = JSON.stringify({ type: "text-delta", text: content });
 const encoder = new TextEncoder();
 
-function input(bytes: Uint8Array, chunkSize: number) {
+function input(bytes: Uint8Array, chunkSize: number, beforeRead?: (offset: number) => void) {
   let offset = 0;
   let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
+      beforeRead?.(offset);
       if (offset === bytes.length) { controller.close(); return; }
       const end = Math.min(bytes.length, offset + chunkSize);
       controller.enqueue(bytes.subarray(offset, end));
@@ -56,14 +57,44 @@ for (const fragmented of [false, true]) {
   });
 }
 
-test("Command Code buffer replacement preserves another owner's retained bytes", async () => {
-  const bytes = encoder.encode(line);
-  const budget = createTestTranslatorBudget({ maxTurnBytes: bytes.length + 64 });
-  budget.chargeRetained(64, { kind: "retained_collectors" });
-  for await (const _event of adapter().parseStream(input(bytes, 1).response, budget)) { /* drain */ }
-  expect(budget.snapshot()).toMatchObject({ currentBytes: 64, highWaterBytes: bytes.length + 64, overflows: 0 });
-  budget.releaseRetained(64, { kind: "retained_collectors" });
-  expect(budget.snapshot().currentBytes).toBe(0);
+for (const deficit of [0, 1]) {
+  test(`Command Code preserves another live_transient owner's bytes on ${deficit ? "refused" : "successful"} growth`, async () => {
+    const bytes = encoder.encode(line);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: bytes.length + 64 - deficit });
+    budget.chargeRetained(64, { kind: "live_transient" });
+    const source = input(bytes, 1);
+    const events: AdapterEvent[] = [];
+    const consume = async () => {
+      for await (const event of adapter().parseStream(source.response, budget)) events.push(event);
+    };
+    if (deficit) {
+      await expect(consume()).rejects.toMatchObject({ code: "translation_buffer_limit" });
+      expect(events).toHaveLength(0);
+      expect(source.cancelled()).toBe(true);
+    } else {
+      await consume();
+      expect(events.at(-1)?.type).toBe("done");
+    }
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 64, highWaterBytes: bytes.length + 64 - deficit, overflows: deficit });
+    budget.releaseRetained(64, { kind: "live_transient" });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+}
+
+test("Command Code releases drained bytes before reading the next fragment", async () => {
+  const carryBytes = 16; // The second record's ASCII JSON prefix, before any text content.
+  const firstReadBytes = encoder.encode(line + "\n").length + carryBytes;
+  const budget = createTestTranslatorBudget({ maxTurnBytes: firstReadBytes });
+  const retainedBeforeSecondRead: number[] = [];
+  const source = input(encoder.encode(line + "\n" + line), firstReadBytes, offset => {
+    if (offset === firstReadBytes) retainedBeforeSecondRead.push(budget.snapshot().currentBytes);
+  });
+  const events: AdapterEvent[] = [];
+  for await (const event of adapter().parseStream(source.response, budget)) events.push(event);
+  expect(retainedBeforeSecondRead).toEqual([carryBytes]);
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text)).toEqual([content, content]);
+  expect(events.at(-1)?.type).toBe("done");
+  expect(budget.snapshot()).toMatchObject({ currentBytes: 0, highWaterBytes: firstReadBytes, overflows: 0 });
 });
 
 test("Command Code consumer return releases its retained record and cancels upstream", async () => {
